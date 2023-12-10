@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::logic::logic_channel;
 use crate::signalling::SignallingControl;
 use crate::PeerId;
 
@@ -83,79 +84,7 @@ pub(crate) async fn peer(
         Box::pin(async {})
     }));
 
-    // Register data channel creation handling
-    peer_connection
-        .on_data_channel(Box::new(move |d: Arc<RTCDataChannel>| {
-            let d_label = d.label().to_owned();
-            let d_id = d.id();
-            log::debug!("New DataChannel {d_label} {d_id}");
-
-            // Register channel opening handling
-            Box::pin(async move {
-                let d2 = Arc::clone(&d);
-                let d_label2 = d_label.clone();
-                let d_id2 = d_id;
-                d.on_close(Box::new(move || {
-                    log::debug!("Data channel closed");
-                    Box::pin(async {})
-                }));
-
-                d.on_open(Box::new(move || {
-                    log::debug!("Data channel '{d_label2}'-'{d_id2}' open. Random messages will now be sent to any connected DataChannels every 5 seconds");
-
-                    Box::pin(async move {
-                        let mut result = Result::<usize>::Ok(0);
-                        while result.is_ok() {
-                            let timeout = tokio::time::sleep(std::time::Duration::from_secs(5));
-                            tokio::pin!(timeout);
-
-                            tokio::select! {
-                                _ = timeout.as_mut() =>{
-                                    let message = format!("{:?}", std::time::Instant::now());
-                                    log::debug!("Sending '{message}'");
-                                    result = d2.send_text(message).await.map_err(Into::into);
-                                }
-                            };
-                        }
-                    })
-                }));
-
-                // Register text message handling
-                d.on_message(Box::new(move |msg: DataChannelMessage| {
-                    let msg_str = String::from_utf8(msg.data.to_vec()).unwrap();
-                    log::debug!("Message from DataChannel '{d_label}': '{msg_str}'");
-                    Box::pin(async {})
-                }));
-            })
-        }));
-
-    if controlling {
-        // Create a datachannel with label 'data'
-        let data_channel = peer_connection.create_data_channel("data", None).await?;
-
-        // Register channel opening handling
-        let d1 = Arc::clone(&data_channel);
-        data_channel.on_open(Box::new(move || {
-            println!("Data channel '{}'-'{}' open. Random messages will now be sent to any connected DataChannels every 5 seconds", d1.label(), d1.id());
-
-            let d2 = Arc::clone(&d1);
-            Box::pin(async move {
-                let mut result = Result::<usize>::Ok(0);
-                while result.is_ok() {
-                    let timeout = tokio::time::sleep(std::time::Duration::from_secs(5));
-                    tokio::pin!(timeout);
-
-                    tokio::select! {
-                        _ = timeout.as_mut() =>{
-                                    let message = format!("{:?}", std::time::Instant::now());
-                            println!("Sending '{message}'");
-                            result = d2.send_text(message).await.map_err(Into::into);
-                        }
-                    };
-                }
-            })
-        }));
-    }
+    logic_channel(peer_connection.clone(), controlling).await?;
 
     peer_connection.on_ice_candidate({
         let signalling_control = signalling_control.clone();

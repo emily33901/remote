@@ -1,3 +1,5 @@
+mod channel;
+mod logic;
 mod peer;
 mod signalling;
 
@@ -61,7 +63,6 @@ impl FromStr for Command {
 struct Args {
     #[arg(short, long)]
     address: String,
-
     command: String,
 }
 
