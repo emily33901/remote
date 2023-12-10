@@ -19,6 +19,7 @@ pub enum ChannelEvent {
 
 pub enum ChannelControl {
     SendText(String),
+    Send(Vec<u8>),
     Close,
 }
 
@@ -77,6 +78,9 @@ async fn on_open(
                                 ChannelControl::SendText(text) => {
                                     channel.send_text(text).await.unwrap();
                                 }
+                                ChannelControl::Send(data) => {
+                                    channel.send(&bytes::Bytes::from(data)).await.unwrap();
+                                }
                                 ChannelControl::Close => {
                                     channel.close().await.unwrap();
                                     *control_rx_holder.lock().await = Some(control_rx);
@@ -94,7 +98,7 @@ async fn on_open(
         let channel = channel.clone();
         let event_tx = event_tx.clone();
         Box::new(move |msg: DataChannelMessage| {
-            log::debug!("channel {our_label} message {msg:?}");
+            log::trace!("channel {our_label} message {msg:?}");
             let channel = channel.clone();
             let event_tx = event_tx.clone();
             Box::pin(async move {

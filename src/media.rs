@@ -1,6 +1,9 @@
 use tokio::sync::mpsc;
 use windows::Win32::{
-    Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D},
+    Graphics::Direct3D11::{
+        ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_MAPPED_SUBRESOURCE,
+        D3D11_MAP_READ,
+    },
     System::Com::{CoInitializeEx, COINIT_DISABLE_OLE1DDE},
 };
 
@@ -681,6 +684,36 @@ pub(crate) async fn produce(
                         if produced_video {
                             // Make video into buffer
                             log::debug!("produced video");
+                            let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
+                            unsafe {
+                                context.Map(
+                                    &texture,
+                                    0,
+                                    D3D11_MAP_READ,
+                                    0,
+                                    Some(&mut mapped_resource as *mut _),
+                                )
+                            }?;
+
+                            let mut buffer = vec![];
+                            buffer.resize((width * height * 4) as usize, 0_u8);
+
+                            unsafe {
+                                std::ptr::copy(
+                                    mapped_resource.pData as *mut u8,
+                                    buffer.as_mut_ptr(),
+                                    buffer.len(),
+                                );
+                            }
+
+                            unsafe { context.Unmap(&texture, 0) };
+
+                            tokio::spawn({
+                                let event_tx = event_tx.clone();
+                                async move {
+                                    event_tx.send(MediaEvent::Video(buffer)).await.unwrap()
+                                }
+                            });
                         }
 
                         if audio_buffer.len() > 0 {

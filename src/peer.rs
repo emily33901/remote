@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::audio::audio_channel;
 use crate::logic::logic_channel;
 use crate::signalling::SignallingControl;
 use crate::PeerId;
@@ -25,6 +26,15 @@ pub(crate) enum PeerControl {
     Offer(String),
     Answer(String),
     IceCandidate(String),
+
+    Audio(Vec<u8>),
+    Video(Vec<u8>),
+}
+
+#[derive(Debug)]
+pub(crate) enum PeerEvent {
+    Audio(Vec<u8>),
+    Video(Vec<u8>),
 }
 
 pub(crate) async fn peer(
@@ -32,7 +42,7 @@ pub(crate) async fn peer(
     their_peer_id: PeerId,
     signalling_control: mpsc::Sender<SignallingControl>,
     controlling: bool,
-) -> Result<mpsc::Sender<PeerControl>> {
+) -> Result<(mpsc::Sender<PeerControl>, mpsc::Receiver<PeerEvent>)> {
     // Create a MediaEngine object to configure the supported codec
     let mut m = MediaEngine::default();
 
@@ -84,8 +94,6 @@ pub(crate) async fn peer(
         Box::pin(async {})
     }));
 
-    logic_channel(peer_connection.clone(), controlling).await?;
-
     peer_connection.on_ice_candidate({
         let signalling_control = signalling_control.clone();
         let their_peer_id = their_peer_id;
@@ -105,7 +113,11 @@ pub(crate) async fn peer(
         })
     });
 
-    let (tx, mut rx) = mpsc::channel(10);
+    let (control_tx, mut control_rx) = mpsc::channel(10);
+    let (event_tx, event_rx) = mpsc::channel(10);
+
+    logic_channel(peer_connection.clone(), controlling).await?;
+    let (audio_tx, mut audio_rx) = audio_channel(peer_connection.clone(), controlling).await?;
 
     tokio::spawn({
         let peer_connection = peer_connection.clone();
@@ -113,8 +125,8 @@ pub(crate) async fn peer(
         async move {
             let (pending_candidates_tx, mut pending_candidates_rx) = mpsc::channel(10);
 
-            while let Some(control) = rx.recv().await {
-                log::debug!("peer control {control:?}");
+            while let Some(control) = control_rx.recv().await {
+                // log::debug!("peer control {control:?}");
                 match control {
                     PeerControl::Offer(offer) => {
                         peer_connection
@@ -173,9 +185,32 @@ pub(crate) async fn peer(
                             pending_candidates_tx.send(ice_candidate).await.unwrap();
                         }
                     }
+                    PeerControl::Audio(audio) => {
+                        audio_tx
+                            .send(crate::audio::AudioControl::Audio(audio))
+                            .await
+                            .unwrap();
+                    }
+                    PeerControl::Video(video) => {
+                        todo!()
+                    }
                 }
             }
             log::debug!("peer control going down");
+        }
+    });
+
+    tokio::spawn({
+        let event_tx = event_tx.clone();
+        async move {
+            while let Some(event) = audio_rx.recv().await {
+                match event {
+                    crate::audio::AudioEvent::Audio(audio) => {
+                        log::debug!("audio event {}", audio.len());
+                        event_tx.send(PeerEvent::Audio(audio)).await.unwrap();
+                    }
+                }
+            }
         }
     });
 
@@ -191,5 +226,5 @@ pub(crate) async fn peer(
         peer_connection.set_local_description(offer).await?;
     }
 
-    Ok(tx)
+    Ok((control_tx, event_rx))
 }

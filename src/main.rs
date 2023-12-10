@@ -1,7 +1,9 @@
+mod audio;
 mod channel;
 mod logic;
 mod media;
 mod peer;
+mod player;
 mod signalling;
 
 use std::str::FromStr;
@@ -11,6 +13,7 @@ use std::{collections::HashMap, fmt::Display};
 use clap::{Arg, Parser};
 use eyre::Result;
 use peer::PeerControl;
+use signalling::SignallingControl;
 use tokio::sync::{mpsc, Mutex};
 use uuid::Uuid;
 
@@ -104,6 +107,55 @@ async fn main() -> Result<()> {
     }
 }
 
+async fn peer_inner(
+    our_peer_id: Uuid,
+    their_peer_id: Uuid,
+    tx: mpsc::Sender<SignallingControl>,
+    peer_controls: Arc<Mutex<HashMap<PeerId, mpsc::Sender<PeerControl>>>>,
+    controlling: bool,
+) -> Result<()> {
+    let mut peer_controls = peer_controls.lock().await;
+
+    let (control, mut event) = peer::peer(our_peer_id, their_peer_id, tx.clone(), controlling)
+        .await
+        .unwrap();
+
+    peer_controls.insert(their_peer_id, control);
+
+    let player = player::Player::new();
+    let (sink_tx, sink_rx) = player::sink()?;
+
+    player
+        .control_tx
+        .send(player::PlayerControl::Volume(0.1))
+        .await
+        .unwrap();
+
+    player
+        .control_tx
+        .send(player::PlayerControl::Sink(sink_rx))
+        .await
+        .unwrap();
+
+    tokio::spawn({
+        async move {
+            // NOTE(emily): Make sure to keep player alive
+            let player = player;
+            while let Some(event) = event.recv().await {
+                match event {
+                    peer::PeerEvent::Audio(audio) => {
+                        log::debug!("peer event audio {}", audio.len());
+                        sink_tx.send(audio).await.unwrap();
+                    }
+                    peer::PeerEvent::Video(video) => todo!(),
+                }
+            }
+        }
+    });
+
+    Ok(())
+}
+
 async fn peer(address: &str) -> Result<()> {
     let (tx, mut rx) = signalling::client(address).await?;
 
@@ -178,25 +230,16 @@ async fn peer(address: &str) -> Result<()> {
                         // NOTE(emily): We sent the request so we are controlling
                         log::info!("connection accepted p:{peer_id} c:{connection_id}");
 
+                        let our_peer_id = our_peer_id.lock().await.as_ref().unwrap().clone();
+
+                        assert!(peer_id != our_peer_id);
+
                         tokio::spawn({
-                            let our_peer_id = our_peer_id.clone();
+                            let our_peer_id = our_peer_id;
                             let tx = tx.clone();
                             let peer_controls = peer_controls.clone();
 
-                            async move {
-                                let mut peer_controls = peer_controls.lock().await;
-
-                                let control = peer::peer(
-                                    our_peer_id.lock().await.unwrap(),
-                                    peer_id,
-                                    tx.clone(),
-                                    true,
-                                )
-                                .await
-                                .unwrap();
-
-                                peer_controls.insert(peer_id, control);
-                            }
+                            peer_inner(our_peer_id, peer_id, tx.clone(), peer_controls, true)
                         });
                     }
                 }
@@ -211,17 +254,24 @@ async fn peer(address: &str) -> Result<()> {
         let our_peer_id = our_peer_id.clone();
         let last_connection_request = last_connection_request.clone();
         let peer_controls = peer_controls.clone();
-        async {
+        async move {
             let (tx, mut rx) =
                 media::produce("E:/emily/downloads/scdl/badapple1080.mp4", 1920, 1080).await?;
 
             while let Some(event) = rx.recv().await {
                 match event {
                     media::MediaEvent::Audio(audio) => {
-                        log::debug!("audio event");
+                        log::debug!("audio event {}", audio.len());
+                        let peer_controls = peer_controls.lock().await;
+                        for (_, control) in peer_controls.iter() {
+                            control
+                                .send(PeerControl::Audio(audio.clone()))
+                                .await
+                                .unwrap();
+                        }
                     }
                     media::MediaEvent::Video(video) => {
-                        log::debug!("video event");
+                        log::debug!("video event {}", video.len());
                     }
                 }
             }
@@ -273,17 +323,14 @@ async fn peer(address: &str) -> Result<()> {
                                     if let Some(peer_id) =
                                         connection_peer_id.lock().await.remove(&connection_id)
                                     {
-                                        let mut peer_controls = peer_controls.lock().await;
-                                        let control = peer::peer(
-                                            our_peer_id.lock().await.unwrap(),
-                                            peer_id,
-                                            tx.clone(),
-                                            false,
-                                        )
-                                        .await
-                                        .unwrap();
+                                        let our_peer_id =
+                                            our_peer_id.lock().await.as_ref().unwrap().clone();
 
-                                        peer_controls.insert(peer_id, control);
+                                        assert!(peer_id != our_peer_id);
+
+                                        peer_inner(our_peer_id, peer_id, tx, peer_controls, false)
+                                            .await
+                                            .unwrap();
                                     } else {
                                         log::debug!("Unknown connection id {connection_id}");
                                     }
