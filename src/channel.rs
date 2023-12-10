@@ -27,6 +27,7 @@ async fn on_open(
     our_label: String,
     event_tx: mpsc::Sender<ChannelEvent>,
     control_rx: Arc<Mutex<Option<mpsc::Receiver<ChannelControl>>>>,
+    control_tx: mpsc::Sender<ChannelControl>,
 ) -> Result<()> {
     if channel.label() != our_label {
         return Ok(());
@@ -35,9 +36,18 @@ async fn on_open(
     let id: u16 = channel.id();
     channel.on_close({
         let our_label = our_label.clone();
+        let channel = channel.clone();
+        let event_tx = event_tx.clone();
+        let control_tx = control_tx.clone();
         Box::new(move || {
             log::debug!("channel {our_label} closed");
-            Box::pin(async {})
+            let channel = channel.clone();
+            let event_tx = event_tx.clone();
+            let control_tx = control_tx.clone();
+            Box::pin(async move {
+                event_tx.send(ChannelEvent::Close(channel)).await.unwrap();
+                control_tx.send(ChannelControl::Close).await.unwrap();
+            })
         })
     });
 
@@ -68,6 +78,7 @@ async fn on_open(
                                     channel.send_text(text).await.unwrap();
                                 }
                                 ChannelControl::Close => {
+                                    channel.close().await.unwrap();
                                     *control_rx_holder.lock().await = Some(control_rx);
                                     break;
                                 }
@@ -115,6 +126,7 @@ pub(crate) async fn channel(
         let our_label = our_label.clone();
         let event_tx = event_tx.clone();
         let control_rx = control_rx.clone();
+        let control_tx = control_tx.clone();
         Box::new(move |d: Arc<RTCDataChannel>| {
             let channel_label = d.label().to_owned();
             let id = d.id();
@@ -125,8 +137,11 @@ pub(crate) async fn channel(
                 let our_label = our_label.clone();
                 let event_tx = event_tx.clone();
                 let control_rx = control_rx.clone();
+                let control_tx = control_tx.clone();
                 Box::pin(async move {
-                    on_open(d, our_label, event_tx, control_rx).await.unwrap();
+                    on_open(d, our_label, event_tx, control_rx, control_tx)
+                        .await
+                        .unwrap();
                 })
             } else {
                 Box::pin(async {})
@@ -139,7 +154,14 @@ pub(crate) async fn channel(
         let data_channel = peer_connection
             .create_data_channel(&our_label, channel_options)
             .await?;
-        on_open(data_channel, our_label, event_tx.clone(), control_rx).await?;
+        on_open(
+            data_channel,
+            our_label,
+            event_tx.clone(),
+            control_rx,
+            control_tx.clone(),
+        )
+        .await?;
     }
 
     Ok((control_tx, event_rx))

@@ -1,5 +1,6 @@
 mod channel;
 mod logic;
+mod media;
 mod peer;
 mod signalling;
 
@@ -202,6 +203,30 @@ async fn peer(address: &str) -> Result<()> {
             }
 
             log::debug!("client going down");
+        }
+    });
+
+    tokio::task::spawn({
+        let tx = tx.clone();
+        let our_peer_id = our_peer_id.clone();
+        let last_connection_request = last_connection_request.clone();
+        let peer_controls = peer_controls.clone();
+        async {
+            let (tx, mut rx) =
+                media::produce("E:/emily/downloads/scdl/badapple1080.mp4", 1920, 1080).await?;
+
+            while let Some(event) = rx.recv().await {
+                match event {
+                    media::MediaEvent::Audio(audio) => {
+                        log::debug!("audio event");
+                    }
+                    media::MediaEvent::Video(video) => {
+                        log::debug!("video event");
+                    }
+                }
+            }
+
+            eyre::Ok(())
         }
     });
 
