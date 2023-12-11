@@ -7,6 +7,8 @@ pub(crate) async fn send<T: Send + Sync + 'static>(
     sender: &mpsc::Sender<T>,
     item: T,
 ) -> Result<()> {
+    let water_mark = sender.capacity();
+    log::debug!("send {water_mark} {who}");
     let permit = sender.try_reserve();
     match permit {
         Ok(permit) => Ok(permit.send(item)),

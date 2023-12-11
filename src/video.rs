@@ -35,7 +35,6 @@ pub(crate) async fn video_channel(
         Some(
             webrtc::data_channel::data_channel_init::RTCDataChannelInit {
                 ordered: Some(false),
-                max_packet_life_time: Some(0),
                 max_retransmits: Some(0),
                 ..Default::default()
             },

@@ -42,6 +42,10 @@ pub(crate) async fn chunk<T: Serialize + for<'de> Deserialize<'de> + Send + 'sta
     let (control_tx, mut control_rx) = mpsc::channel(10);
     let (event_tx, event_rx) = mpsc::channel(10);
 
+    // TODO(emily):
+    // there is a questionable contention here between outwards chunking and inwards reassembly
+    // and this can cause deadlocks.
+
     tokio::spawn({
         let event_tx = event_tx.clone();
         async move {
@@ -54,29 +58,34 @@ pub(crate) async fn chunk<T: Serialize + for<'de> Deserialize<'de> + Send + 'sta
                         let chunk_id: u32 = next_chunk_id;
                         next_chunk_id += 1;
 
-                        let encoded: Vec<u8> = match bincode::serialize(&v) {
-                            Ok(v) => v,
-                            Err(err) => {
-                                log::error!("!! failed to serialize v {err} {err:?}");
-                                panic!()
+                        tokio::spawn({
+                            let event_tx = event_tx.clone();
+                            async move {
+                                let encoded: Vec<u8> = match bincode::serialize(&v) {
+                                    Ok(v) => v,
+                                    Err(err) => {
+                                        log::error!("!! failed to serialize v {err} {err:?}");
+                                        panic!()
+                                    }
+                                };
+
+                                log::debug!("!! chunking {chunk_id}");
+                                let chunks = encoded.chunks(chunk_size);
+                                let (total, _) = chunks.size_hint();
+
+                                for (i, chunk) in chunks.enumerate() {
+                                    let chunk = Chunk {
+                                        // TODO(emily): SAD VEC COPY
+                                        data: chunk.to_vec(),
+                                        id: chunk_id,
+                                        part: i as u32,
+                                        total: total as u32,
+                                    };
+                                    log::debug!("!! chunk sending {chunk_id} {i} of {total}");
+                                    event_tx.send(ChunkEvent::Chunk(chunk)).await.unwrap();
+                                }
                             }
-                        };
-
-                        log::debug!("!! chunking {chunk_id}");
-                        let chunks = encoded.chunks(chunk_size);
-                        let (total, _) = chunks.size_hint();
-
-                        for (i, chunk) in chunks.enumerate() {
-                            let chunk = Chunk {
-                                // TODO(emily): SAD VEC COPY
-                                data: chunk.to_vec(),
-                                id: chunk_id,
-                                part: i as u32,
-                                total: total as u32,
-                            };
-                            log::debug!("!! chunk sending {chunk_id} {i} of {total}");
-                            event_tx.send(ChunkEvent::Chunk(chunk)).await.unwrap();
-                        }
+                        });
                     }
                     ChunkControl::Chunk(chunk) => {
                         let total = chunk.total as usize;
@@ -84,11 +93,11 @@ pub(crate) async fn chunk<T: Serialize + for<'de> Deserialize<'de> + Send + 'sta
                         let mut chunk_complete = false;
 
                         if let Some(chunks) = chunk_arrangement.get_mut(&chunk.id) {
-                            log::debug!(
-                                "!! chunk {chunk_id} part {} of {}",
-                                chunk.part,
-                                chunk.total
-                            );
+                            // log::debug!(
+                            //     "!! chunk {chunk_id} part {} of {}",
+                            //     chunk.part,
+                            //     chunk.total
+                            // );
 
                             chunks.insert(chunk);
 
@@ -102,17 +111,22 @@ pub(crate) async fn chunk<T: Serialize + for<'de> Deserialize<'de> + Send + 'sta
 
                         if chunk_complete {
                             if let Some(mut chunks) = chunk_arrangement.remove(&chunk_id) {
-                                log::debug!("!! assembling {chunk_id}");
-                                // got all chunks, build T
-                                let mut data = vec![];
-                                let mut chunks = chunks.drain().collect::<Vec<_>>();
-                                chunks.sort_by_cached_key(|c| c.part);
-                                // data.reserve();
-                                for chunk in chunks {
-                                    data.extend(chunk.data);
-                                }
-                                let v: T = bincode::deserialize(&data).unwrap();
-                                event_tx.send(ChunkEvent::Whole(v)).await.unwrap();
+                                tokio::spawn({
+                                    let event_tx = event_tx.clone();
+                                    async move {
+                                        log::debug!("!! assembling {chunk_id}");
+                                        // got all chunks, build T
+                                        let mut data = vec![];
+                                        let mut chunks = chunks.drain().collect::<Vec<_>>();
+                                        chunks.sort_by_cached_key(|c| c.part);
+                                        // data.reserve();
+                                        for chunk in chunks {
+                                            data.extend(chunk.data);
+                                        }
+                                        let v: T = bincode::deserialize(&data).unwrap();
+                                        event_tx.send(ChunkEvent::Whole(v)).await.unwrap();
+                                    }
+                                });
                             }
                         }
                     }

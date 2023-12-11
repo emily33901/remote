@@ -232,7 +232,7 @@ pub(crate) async fn peer(
             while let Some(event) = audio_rx.recv().await {
                 match event {
                     crate::audio::AudioEvent::Audio(audio) => {
-                        log::debug!("audio event {}", audio.len());
+                        // log::debug!("audio event {}", audio.len());
                         event_tx.send(PeerEvent::Audio(audio)).await.unwrap();
                     }
                 }
@@ -246,7 +246,7 @@ pub(crate) async fn peer(
             while let Some(event) = video_rx.recv().await {
                 match event {
                     crate::video::VideoEvent::Video(video) => {
-                        log::debug!("video event {}", video.len());
+                        // log::debug!("video event {}", video.len());
                         event_tx.send(PeerEvent::Video(video)).await.unwrap();
                     }
                 }

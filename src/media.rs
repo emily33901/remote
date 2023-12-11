@@ -148,6 +148,8 @@ mod mf {
     pub(crate) fn open_media(
         device: &ID3D11Device,
         path: &str,
+        width: u32,
+        height: u32,
     ) -> Result<(
         IMFMediaSource,
         IMFSourceReader,
@@ -222,9 +224,6 @@ mod mf {
                 &MF_MT_SUBTYPE as *const _,
                 &MFVideoFormat_ARGB32 as *const _,
             )?;
-
-            let width = 144;
-            let height = 72;
 
             let width_height = (width as u64) << 32 | (height as u64);
 
@@ -315,9 +314,14 @@ mod mf {
     }
 
     impl Media {
-        pub(crate) fn new(device: &ID3D11Device, path: &str) -> Result<Self> {
+        pub(crate) fn new(
+            device: &ID3D11Device,
+            path: &str,
+            width: u32,
+            height: u32,
+        ) -> Result<Self> {
             let (media_source, source_reader, resampler, device_manager) =
-                open_media(device, path)?;
+                open_media(device, path, width, height)?;
 
             Ok(Self {
                 resampler: resampler,
@@ -664,7 +668,7 @@ pub(crate) async fn produce(
                     )?;
 
                     let path = path.to_owned();
-                    let mut media = mf::Media::new(&device, &path)?;
+                    let mut media = mf::Media::new(&device, &path, width, height)?;
 
                     media.debug_media_format()?;
 

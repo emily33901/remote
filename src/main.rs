@@ -75,6 +75,9 @@ struct Args {
     command: String,
 }
 
+const VIDEO_WIDTH: u32 = 240;
+const VIDEO_HEIGHT: u32 = 144;
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Configure logger at runtime
@@ -90,8 +93,8 @@ async fn main() -> Result<()> {
             ))
         })
         // Add blanket level filter -
-        .level(log::LevelFilter::Debug)
-        .level_for("remote", log::LevelFilter::Debug)
+        .level(log::LevelFilter::Info)
+        // .level_for("remote", log::LevelFilter::Debug)
         .level_for("webrtc_sctp::association", log::LevelFilter::Info)
         .level_for("webrtc_sctp::stream", log::LevelFilter::Info)
         .level_for("webrtc_sctp", log::LevelFilter::Info)
@@ -103,13 +106,13 @@ async fn main() -> Result<()> {
         // .level_for("hyper", log::LevelFilter::Info)
         // Output to stdout, files, and other Dispatch configurations
         .chain(std::io::stderr())
-        .chain(
-            std::fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .append(false)
-                .open(&format!("{}.log", args.name))?,
-        )
+        // .chain(
+        //     std::fs::OpenOptions::new()
+        //         .write(true)
+        //         .create(true)
+        //         .append(false)
+        //         .open(&format!("{}.log", args.name))?,
+        // )
         // .chain(fern::log_file()?)
         // Apply globally
         .apply()?;
@@ -156,7 +159,7 @@ async fn peer_inner(
         .await
         .unwrap();
 
-    let video_sink_tx = player::video::sink()?;
+    let video_sink_tx = player::video::sink(VIDEO_WIDTH, VIDEO_HEIGHT)?;
 
     tokio::spawn({
         async move {
@@ -290,8 +293,12 @@ async fn peer(address: &str, name: &str) -> Result<()> {
         let last_connection_request = last_connection_request.clone();
         let peer_controls = peer_controls.clone();
         async move {
-            let (tx, mut rx) =
-                media::produce("E:/emily/downloads/scdl/badapple1080.mp4", 144, 72).await?;
+            let (tx, mut rx) = media::produce(
+                "E:/emily/downloads/scdl/badapple1080.mp4",
+                VIDEO_WIDTH,
+                VIDEO_HEIGHT,
+            )
+            .await?;
 
             while let Some(event) = rx.recv().await {
                 match event {

@@ -178,7 +178,7 @@ pub(crate) mod audio {
                     self.reset_sink().await;
                     let source =
                         reader.periodic_access(std::time::Duration::from_millis(1000), |r| {
-                            log::debug!("!!!! player periodic access");
+                            // log::debug!("!!!! player periodic access");
                         });
 
                     let sink = self.sink().await;
@@ -285,6 +285,8 @@ pub(crate) mod video {
 
     fn create_device_and_swapchain(
         hwnd: HWND,
+        width: u32,
+        height: u32,
     ) -> Result<(ID3D11Device, ID3D11DeviceContext, IDXGISwapChain)> {
         unsafe {
             let mut device: Option<ID3D11Device> = None;
@@ -293,8 +295,8 @@ pub(crate) mod video {
 
             let swap_chain_desc = DXGI_SWAP_CHAIN_DESC {
                 BufferDesc: windows::Win32::Graphics::Dxgi::Common::DXGI_MODE_DESC {
-                    Width: 144,
-                    Height: 72,
+                    Width: width,
+                    Height: height,
                     RefreshRate: windows::Win32::Graphics::Dxgi::Common::DXGI_RATIONAL {
                         Numerator: 60,
                         Denominator: 1,
@@ -490,12 +492,13 @@ pub(crate) mod video {
         }
     }
 
-    pub(crate) fn sink() -> Result<mpsc::Sender<Vec<u8>>> {
+    pub(crate) fn sink(width: u32, height: u32) -> Result<mpsc::Sender<Vec<u8>>> {
         let (tx, mut rx) = mpsc::channel::<Vec<u8>>(10);
 
         tokio::spawn(async move {
             tokio::task::spawn_blocking(move || -> eyre::Result<()> {
-                let (device, context, swap_chain) = create_device_and_swapchain(create_window()?)?;
+                let (device, context, swap_chain) =
+                    create_device_and_swapchain(create_window()?, width, height)?;
 
                 let back_buffer: ID3D11Texture2D = unsafe { swap_chain.GetBuffer(0) }?;
                 let mut render_target: Option<ID3D11RenderTargetView> = None;
@@ -507,9 +510,9 @@ pub(crate) mod video {
                     )
                 }?;
 
-                let texture = create_texture(&device, 144, 72, DXGI_FORMAT_B8G8R8A8_UNORM)?;
+                let texture = create_texture(&device, width, height, DXGI_FORMAT_B8G8R8A8_UNORM)?;
                 let staging_texture =
-                    create_staging_texture(&device, 144, 72, DXGI_FORMAT_B8G8R8A8_UNORM)?;
+                    create_staging_texture(&device, width, height, DXGI_FORMAT_B8G8R8A8_UNORM)?;
 
                 unsafe { context.OMSetRenderTargets(Some(&[render_target.clone()]), None) };
 
@@ -518,8 +521,8 @@ pub(crate) mod video {
                 let viewport = D3D11_VIEWPORT {
                     TopLeftX: 0.0,
                     TopLeftY: 0.0,
-                    Width: 144.0,
-                    Height: 72.0,
+                    Width: width as f32,
+                    Height: height as f32,
                     MinDepth: 0.0,
                     MaxDepth: 1.0,
                 };
@@ -723,8 +726,8 @@ pub(crate) mod video {
                         left: 0,
                         top: 0,
                         front: 0,
-                        right: 144,
-                        bottom: 72,
+                        right: width,
+                        bottom: height,
                         back: 1,
                     };
                     unsafe {

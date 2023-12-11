@@ -25,6 +25,9 @@ pub enum ChannelControl {
     Close,
 }
 
+const BUFFERED_AMOUNT_LOW_THRESHOLD: usize = 512 * 1024; // 512 KB
+const MAX_BUFFERED_AMOUNT: usize = 1024 * 1024; // 1 MB
+
 async fn on_datachannel(
     channel: Arc<RTCDataChannel>,
     our_label: String,
@@ -51,6 +54,9 @@ async fn on_datachannel(
             })
         })
     });
+
+    // Use mpsc channel to send and receive a signal when more data can be sent
+    let (more_can_be_sent, mut maybe_more_can_be_sent) = tokio::sync::mpsc::channel(1);
 
     channel.on_error(Box::new(move |err| {
         Box::pin(async move { log::error!("channel error {err}") })
@@ -89,6 +95,18 @@ async fn on_datachannel(
         })
     });
 
+    channel
+        .set_buffered_amount_low_threshold(BUFFERED_AMOUNT_LOW_THRESHOLD)
+        .await;
+
+    channel
+        .on_buffered_amount_low(Box::new(move || {
+            let more_can_be_sent = more_can_be_sent.clone();
+
+            Box::pin(async move { more_can_be_sent.send(()).await.unwrap() })
+        }))
+        .await;
+
     // TODO(emily): Need to hold onto data until channel is open here
     // This should be done here instead of in audio.rs or in video.rs
     // TODO(emily): This should be inside on_datachannel instead of up here
@@ -108,17 +126,26 @@ async fn on_datachannel(
                 .take()
                 .expect("expected channel control");
             log::debug!("!! took channel {our_label} control");
+
             while let Some(control) = control_rx.recv().await {
                 match control {
                     ChannelControl::SendText(text) => {
                         channel.send_text(text).await.unwrap();
                     }
                     ChannelControl::Send(data) => {
+                        let buffered_amount = channel.buffered_amount().await;
+                        let buffered_total = buffered_amount + data.len();
                         match channel.send(&bytes::Bytes::from(data)).await {
                             Ok(_) => {}
                             Err(err) => {
-                                log::warn!("chanel {our_label} unable to send {err}");
+                                log::warn!("channel {our_label} unable to send {err}");
                             }
+                        }
+
+                        if buffered_total > MAX_BUFFERED_AMOUNT {
+                            // Wait for the signal that more can be sent
+                            log::warn!("!! buffered_total too large, waiting for low mark");
+                            let _ = maybe_more_can_be_sent.recv().await;
                         }
                     }
                     ChannelControl::Close => {
