@@ -1,10 +1,13 @@
 mod audio;
 mod channel;
+mod chunk;
 mod logic;
 mod media;
 mod peer;
 mod player;
 mod signalling;
+mod util;
+mod video;
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -67,18 +70,20 @@ impl FromStr for Command {
 struct Args {
     #[arg(short, long)]
     address: String,
+    #[arg(short, long)]
+    name: String,
     command: String,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     // Configure logger at runtime
+    let args = Args::parse();
     fern::Dispatch::new()
         // Perform allocation-free log formatting
         .format(|out, message, record| {
             out.finish(format_args!(
-                "[{} {} {}] {}",
-                humantime::format_rfc3339(std::time::SystemTime::now()),
+                "[{}] [{}] {}",
                 record.level(),
                 record.target(),
                 message
@@ -86,11 +91,26 @@ async fn main() -> Result<()> {
         })
         // Add blanket level filter -
         .level(log::LevelFilter::Debug)
+        .level_for("remote", log::LevelFilter::Debug)
+        .level_for("webrtc_sctp::association", log::LevelFilter::Info)
+        .level_for("webrtc_sctp::stream", log::LevelFilter::Info)
+        .level_for("webrtc_sctp", log::LevelFilter::Info)
+        .level_for(
+            "webrtc_sctp::association::association_internal",
+            log::LevelFilter::Info,
+        )
         // - and per-module overrides
         // .level_for("hyper", log::LevelFilter::Info)
         // Output to stdout, files, and other Dispatch configurations
-        .chain(std::io::stdout())
-        // .chain(fern::log_file("output.log")?)
+        .chain(std::io::stderr())
+        .chain(
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .append(false)
+                .open(&format!("{}.log", args.name))?,
+        )
+        // .chain(fern::log_file()?)
         // Apply globally
         .apply()?;
 
@@ -98,12 +118,11 @@ async fn main() -> Result<()> {
         println!("thread panicked {info}");
     }));
 
-    let args = Args::parse();
     let command = args.command.as_str().parse()?;
 
     match command {
         Command::SignallingServer => signalling::server(args.address.as_str()).await,
-        Command::Peer => Ok(peer(&args.address).await?),
+        Command::Peer => Ok(peer(&args.address, &args.name).await?),
     }
 }
 
@@ -122,32 +141,43 @@ async fn peer_inner(
 
     peer_controls.insert(their_peer_id, control);
 
-    let player = player::Player::new();
-    let (sink_tx, sink_rx) = player::sink()?;
+    let audio_player = player::audio::Player::new();
+    let (audio_sink_tx, audio_sink_rx) = player::audio::sink()?;
 
-    player
+    audio_player
         .control_tx
-        .send(player::PlayerControl::Volume(0.1))
+        .send(player::audio::PlayerControl::Volume(0.1))
         .await
         .unwrap();
 
-    player
+    audio_player
         .control_tx
-        .send(player::PlayerControl::Sink(sink_rx))
+        .send(player::audio::PlayerControl::Sink(audio_sink_rx))
         .await
         .unwrap();
+
+    let video_sink_tx = player::video::sink()?;
 
     tokio::spawn({
         async move {
             // NOTE(emily): Make sure to keep player alive
-            let player = player;
+            let player = audio_player;
             while let Some(event) = event.recv().await {
                 match event {
                     peer::PeerEvent::Audio(audio) => {
                         log::debug!("peer event audio {}", audio.len());
-                        sink_tx.send(audio).await.unwrap();
+                        util::send("PeerEvent to Player audio", &audio_sink_tx, audio)
+                            .await
+                            .unwrap();
+                        // audio_sink_tx.send(audio).await.unwrap();
                     }
-                    peer::PeerEvent::Video(video) => todo!(),
+                    peer::PeerEvent::Video(video) => {
+                        log::debug!("peer event video {}", video.len());
+                        util::send("PeerEvent to Player video", &video_sink_tx, video)
+                            .await
+                            .unwrap();
+                        // video_sink_tx.send(video).await.unwrap();
+                    }
                 }
             }
         }
@@ -156,7 +186,11 @@ async fn peer_inner(
     Ok(())
 }
 
-async fn peer(address: &str) -> Result<()> {
+async fn peer(address: &str, name: &str) -> Result<()> {
+    if name == "a" {
+        console_subscriber::init();
+    }
+
     let (tx, mut rx) = signalling::client(address).await?;
 
     let our_peer_id = Arc::new(Mutex::new(None));
@@ -178,6 +212,7 @@ async fn peer(address: &str) -> Result<()> {
                 match event {
                     signalling::SignallingEvent::Id(id) => {
                         log::info!("id {id}");
+                        println!("{id}");
                         *our_peer_id.lock().await = Some(id);
                     }
                     signalling::SignallingEvent::ConectionRequest(peer_id, connection_id) => {
@@ -256,22 +291,36 @@ async fn peer(address: &str) -> Result<()> {
         let peer_controls = peer_controls.clone();
         async move {
             let (tx, mut rx) =
-                media::produce("E:/emily/downloads/scdl/badapple1080.mp4", 1920, 1080).await?;
+                media::produce("E:/emily/downloads/scdl/badapple1080.mp4", 144, 72).await?;
 
             while let Some(event) = rx.recv().await {
                 match event {
                     media::MediaEvent::Audio(audio) => {
-                        log::debug!("audio event {}", audio.len());
+                        log::trace!("produce audio {}", audio.len());
                         let peer_controls = peer_controls.lock().await;
                         for (_, control) in peer_controls.iter() {
-                            control
-                                .send(PeerControl::Audio(audio.clone()))
-                                .await
-                                .unwrap();
+                            util::send(
+                                "produce to peer audio",
+                                &control,
+                                PeerControl::Audio(audio.clone()),
+                            )
+                            .await
+                            .unwrap();
                         }
                     }
                     media::MediaEvent::Video(video) => {
-                        log::debug!("video event {}", video.len());
+                        // log::debug!("throwing video");
+                        log::trace!("produce video {}", video.len());
+                        let peer_controls = peer_controls.lock().await;
+                        for (_, control) in peer_controls.iter() {
+                            util::send(
+                                "produce to peer video",
+                                &control,
+                                PeerControl::Video(video.clone()),
+                            )
+                            .await
+                            .unwrap();
+                        }
                     }
                 }
             }

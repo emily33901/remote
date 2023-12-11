@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use tokio::sync::{mpsc, Mutex};
 use webrtc::{
@@ -10,6 +10,8 @@ use webrtc::{
 };
 
 use eyre::{eyre, Result};
+
+use crate::util;
 
 pub enum ChannelEvent {
     Open(Arc<RTCDataChannel>),
@@ -23,16 +25,14 @@ pub enum ChannelControl {
     Close,
 }
 
-async fn on_open(
+async fn on_datachannel(
     channel: Arc<RTCDataChannel>,
     our_label: String,
     event_tx: mpsc::Sender<ChannelEvent>,
     control_rx: Arc<Mutex<Option<mpsc::Receiver<ChannelControl>>>>,
     control_tx: mpsc::Sender<ChannelControl>,
 ) -> Result<()> {
-    if channel.label() != our_label {
-        return Ok(());
-    }
+    assert_eq!(channel.label(), our_label);
 
     let id: u16 = channel.id();
     channel.on_close({
@@ -52,6 +52,10 @@ async fn on_open(
         })
     });
 
+    channel.on_error(Box::new(move |err| {
+        Box::pin(async move { log::error!("channel error {err}") })
+    }));
+
     channel.on_open({
         let our_label = our_label.clone();
         let channel = channel.clone();
@@ -59,37 +63,7 @@ async fn on_open(
         let control_rx_holder = control_rx.clone();
         Box::new(move || {
             Box::pin(async move {
-                log::debug!("channel {our_label} open");
-                event_tx
-                    .send(ChannelEvent::Open(channel.clone()))
-                    .await
-                    .unwrap();
-
-                tokio::spawn({
-                    let channel = channel.clone();
-                    async move {
-                        let mut control_rx = control_rx_holder
-                            .lock()
-                            .await
-                            .take()
-                            .expect("expected channel control");
-                        while let Some(control) = control_rx.recv().await {
-                            match control {
-                                ChannelControl::SendText(text) => {
-                                    channel.send_text(text).await.unwrap();
-                                }
-                                ChannelControl::Send(data) => {
-                                    channel.send(&bytes::Bytes::from(data)).await.unwrap();
-                                }
-                                ChannelControl::Close => {
-                                    channel.close().await.unwrap();
-                                    *control_rx_holder.lock().await = Some(control_rx);
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                });
+                log::debug!("!! channel {our_label} open");
             })
         })
     });
@@ -97,23 +71,87 @@ async fn on_open(
     channel.on_message({
         let channel = channel.clone();
         let event_tx = event_tx.clone();
+        let our_label = our_label.clone();
         Box::new(move |msg: DataChannelMessage| {
-            log::trace!("channel {our_label} message {msg:?}");
+            log::debug!("channel {our_label} message");
             let channel = channel.clone();
             let event_tx = event_tx.clone();
+            let our_label = our_label.clone();
             Box::pin(async move {
-                event_tx
-                    .send(ChannelEvent::Message(channel, msg))
-                    .await
-                    .unwrap();
+                util::send(
+                    &format!("datachannel to channel {our_label} event"),
+                    &event_tx,
+                    ChannelEvent::Message(channel, msg),
+                )
+                .await
+                .unwrap();
             })
         })
+    });
+
+    // TODO(emily): Need to hold onto data until channel is open here
+    // This should be done here instead of in audio.rs or in video.rs
+    // TODO(emily): This should be inside on_datachannel instead of up here
+
+    event_tx
+        .send(ChannelEvent::Open(channel.clone()))
+        .await
+        .unwrap();
+
+    tokio::spawn({
+        let control_rx_holder = control_rx.clone();
+        let channel = channel.clone();
+        async move {
+            let mut control_rx = control_rx_holder
+                .lock()
+                .await
+                .take()
+                .expect("expected channel control");
+            log::debug!("!! took channel {our_label} control");
+            while let Some(control) = control_rx.recv().await {
+                match control {
+                    ChannelControl::SendText(text) => {
+                        channel.send_text(text).await.unwrap();
+                    }
+                    ChannelControl::Send(data) => {
+                        match channel.send(&bytes::Bytes::from(data)).await {
+                            Ok(_) => {}
+                            Err(err) => {
+                                log::warn!("chanel {our_label} unable to send {err}");
+                            }
+                        }
+                    }
+                    ChannelControl::Close => {
+                        channel.close().await.unwrap();
+                        *control_rx_holder.lock().await = Some(control_rx);
+                        break;
+                    }
+                }
+            }
+        }
     });
 
     Ok(())
 }
 
+#[derive(derive_more::Deref, derive_more::DerefMut, Clone, Default)]
+pub(crate) struct ChannelStorage(
+    Arc<
+        Mutex<
+            HashMap<
+                String,
+                (
+                    Arc<Mutex<Option<mpsc::Receiver<ChannelControl>>>>,
+                    mpsc::Sender<ChannelEvent>,
+                    mpsc::Sender<ChannelControl>,
+                ),
+            >,
+        >,
+    >,
+);
+
 pub(crate) async fn channel(
+    storage: ChannelStorage,
     peer_connection: Arc<RTCPeerConnection>,
     our_label: &str,
     controlling: bool,
@@ -125,40 +163,47 @@ pub(crate) async fn channel(
 
     let control_rx = Arc::new(Mutex::new(Some(control_rx)));
 
+    {
+        storage.lock().await.insert(
+            our_label.clone(),
+            (control_rx.clone(), event_tx.clone(), control_tx.clone()),
+        );
+    }
+
     // Register data channel creation handling
+    // TODO(emily): There is only one on_data_channel per peer you silly.
     peer_connection.on_data_channel({
-        let our_label = our_label.clone();
-        let event_tx = event_tx.clone();
-        let control_rx = control_rx.clone();
-        let control_tx = control_tx.clone();
+        let storage = storage.clone();
         Box::new(move |d: Arc<RTCDataChannel>| {
             let channel_label = d.label().to_owned();
             let id = d.id();
 
-            log::debug!("New DataChannel {our_label} {id}");
+            log::debug!("New DataChannel {} {id}", d.label());
 
-            if channel_label == our_label {
-                let our_label = our_label.clone();
-                let event_tx = event_tx.clone();
-                let control_rx = control_rx.clone();
-                let control_tx = control_tx.clone();
-                Box::pin(async move {
-                    on_open(d, our_label, event_tx, control_rx, control_tx)
-                        .await
-                        .unwrap();
-                })
-            } else {
-                Box::pin(async {})
-            }
+            Box::pin({
+                let storage = storage.clone();
+                async move {
+                    if let Some(storage) = storage.lock().await.get(&channel_label) {
+                        let our_label = channel_label;
+                        let control_rx = storage.0.clone();
+                        let event_tx = storage.1.clone();
+                        let control_tx = storage.2.clone();
+                        on_datachannel(d, our_label, event_tx, control_rx, control_tx)
+                            .await
+                            .unwrap();
+                    }
+                }
+            })
         })
     });
 
     if controlling {
-        // Create a datachannel with label 'data'
+        // Create a datachannel with label
         let data_channel = peer_connection
             .create_data_channel(&our_label, channel_options)
             .await?;
-        on_open(
+
+        on_datachannel(
             data_channel,
             our_label,
             event_tx.clone(),

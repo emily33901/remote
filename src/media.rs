@@ -222,6 +222,13 @@ mod mf {
                 &MF_MT_SUBTYPE as *const _,
                 &MFVideoFormat_ARGB32 as *const _,
             )?;
+
+            let width = 144;
+            let height = 72;
+
+            let width_height = (width as u64) << 32 | (height as u64);
+
+            video_type.SetUINT64(&MF_MT_FRAME_SIZE, width_height)?;
         }
 
         unsafe {
@@ -616,6 +623,8 @@ mod mf {
 
 use eyre::{eyre, Result};
 
+use crate::util;
+
 pub(crate) enum MediaEvent {
     Audio(Vec<u8>),
     Video(Vec<u8>),
@@ -683,7 +692,7 @@ pub(crate) async fn produce(
 
                         if produced_video {
                             // Make video into buffer
-                            log::debug!("produced video");
+                            log::trace!("produced video");
                             let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
                             unsafe {
                                 context.Map(
@@ -708,26 +717,38 @@ pub(crate) async fn produce(
 
                             unsafe { context.Unmap(&texture, 0) };
 
-                            tokio::spawn({
+                            futures::executor::block_on(tokio::spawn({
                                 let event_tx = event_tx.clone();
                                 async move {
-                                    event_tx.send(MediaEvent::Video(buffer)).await.unwrap()
+                                    util::send(
+                                        "media producer video to media event",
+                                        &event_tx,
+                                        MediaEvent::Video(buffer),
+                                    )
+                                    .await
+                                    .unwrap();
                                 }
-                            });
+                            }))
+                            .unwrap();
                         }
 
                         if audio_buffer.len() > 0 {
-                            log::debug!("produced audio");
-                            tokio::spawn({
+                            log::trace!("produced audio");
+
+                            futures::executor::block_on(tokio::spawn({
                                 let audio_buffer = audio_buffer.clone();
                                 let event_tx = event_tx.clone();
                                 async move {
-                                    event_tx
-                                        .send(MediaEvent::Audio(audio_buffer))
-                                        .await
-                                        .unwrap()
+                                    util::send(
+                                        "media producer audio to media event",
+                                        &event_tx,
+                                        MediaEvent::Audio(audio_buffer),
+                                    )
+                                    .await
+                                    .unwrap();
                                 }
-                            });
+                            }))
+                            .unwrap();
                         }
 
                         deadline = next_deadline;

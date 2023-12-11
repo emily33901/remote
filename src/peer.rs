@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
 use crate::audio::audio_channel;
+use crate::channel::ChannelStorage;
 use crate::logic::logic_channel;
 use crate::signalling::SignallingControl;
+use crate::video::video_channel;
 use crate::PeerId;
 
 use eyre::{eyre, Result};
@@ -55,6 +57,8 @@ pub(crate) async fn peer(
     // for each PeerConnection.
     let mut registry = Registry::new();
 
+    let mut setting_engine = setting_engine::SettingEngine::default();
+
     // Use the default set of Interceptors
     registry = register_default_interceptors(registry, &mut m)?;
 
@@ -62,6 +66,7 @@ pub(crate) async fn peer(
     let api = APIBuilder::new()
         .with_media_engine(m)
         .with_interceptor_registry(registry)
+        .with_setting_engine(setting_engine)
         .build();
 
     // Prepare the configuration
@@ -116,8 +121,26 @@ pub(crate) async fn peer(
     let (control_tx, mut control_rx) = mpsc::channel(10);
     let (event_tx, event_rx) = mpsc::channel(10);
 
-    logic_channel(peer_connection.clone(), controlling).await?;
-    let (audio_tx, mut audio_rx) = audio_channel(peer_connection.clone(), controlling).await?;
+    let channel_storage = ChannelStorage::default();
+
+    logic_channel(
+        channel_storage.clone(),
+        peer_connection.clone(),
+        controlling,
+    )
+    .await?;
+    let (audio_tx, mut audio_rx) = audio_channel(
+        channel_storage.clone(),
+        peer_connection.clone(),
+        controlling,
+    )
+    .await?;
+    let (video_tx, mut video_rx) = video_channel(
+        channel_storage.clone(),
+        peer_connection.clone(),
+        controlling,
+    )
+    .await?;
 
     tokio::spawn({
         let peer_connection = peer_connection.clone();
@@ -192,7 +215,10 @@ pub(crate) async fn peer(
                             .unwrap();
                     }
                     PeerControl::Video(video) => {
-                        todo!()
+                        video_tx
+                            .send(crate::video::VideoControl::Video(video))
+                            .await
+                            .unwrap();
                     }
                 }
             }
@@ -208,6 +234,20 @@ pub(crate) async fn peer(
                     crate::audio::AudioEvent::Audio(audio) => {
                         log::debug!("audio event {}", audio.len());
                         event_tx.send(PeerEvent::Audio(audio)).await.unwrap();
+                    }
+                }
+            }
+        }
+    });
+
+    tokio::spawn({
+        let event_tx = event_tx.clone();
+        async move {
+            while let Some(event) = video_rx.recv().await {
+                match event {
+                    crate::video::VideoEvent::Video(video) => {
+                        log::debug!("video event {}", video.len());
+                        event_tx.send(PeerEvent::Video(video)).await.unwrap();
                     }
                 }
             }
