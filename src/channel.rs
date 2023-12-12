@@ -1,17 +1,23 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, VecDeque},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+};
 
 use tokio::sync::{mpsc, Mutex};
 use webrtc::{
     data_channel::{
         data_channel_init::RTCDataChannelInit, data_channel_message::DataChannelMessage,
-        RTCDataChannel,
+        data_channel_state::RTCDataChannelState, RTCDataChannel,
     },
     peer_connection::RTCPeerConnection,
 };
 
 use eyre::{eyre, Result};
 
-use crate::util;
+use crate::{util, ARBITRARY_CHANNEL_LIMIT};
 
 pub enum ChannelEvent {
     Open(Arc<RTCDataChannel>),
@@ -25,8 +31,8 @@ pub enum ChannelControl {
     Close,
 }
 
-const BUFFERED_AMOUNT_LOW_THRESHOLD: usize = 512 * 1024; // 512 KB
-const MAX_BUFFERED_AMOUNT: usize = 1024 * 1024; // 1 MB
+const BUFFERED_AMOUNT_LOW_THRESHOLD: usize = 500_000;
+const MAX_BUFFERED_AMOUNT: usize = 1_000_000;
 
 async fn on_datachannel(
     channel: Arc<RTCDataChannel>,
@@ -38,6 +44,7 @@ async fn on_datachannel(
     assert_eq!(channel.label(), our_label);
 
     let id: u16 = channel.id();
+
     channel.on_close({
         let our_label = our_label.clone();
         let channel = channel.clone();
@@ -68,8 +75,62 @@ async fn on_datachannel(
         let event_tx = event_tx.clone();
         let control_rx_holder = control_rx.clone();
         Box::new(move || {
+            let channel = channel.clone();
             Box::pin(async move {
                 log::debug!("!! channel {our_label} open");
+                event_tx
+                    .send(ChannelEvent::Open(channel.clone()))
+                    .await
+                    .unwrap();
+
+                // NOTE(emily): Only start handling controls once the data channel is open.
+                // This gives us natural back-pressure whilst we are waiting for the channel to open
+
+                tokio::spawn({
+                    let control_rx_holder = control_rx.clone();
+                    let channel = channel.clone();
+                    async move {
+                        let mut control_rx = control_rx_holder
+                            .lock()
+                            .await
+                            .take()
+                            .expect("expected channel control");
+                        log::debug!("!! took channel {our_label} control");
+
+                        while let Some(control) = control_rx.recv().await {
+                            match control {
+                                ChannelControl::SendText(text) => {
+                                    channel.send_text(text).await.unwrap();
+                                }
+                                ChannelControl::Send(data) => {
+                                    let len = data.len();
+
+                                    match channel.send(&bytes::Bytes::from(data)).await {
+                                        Ok(_) => {}
+                                        Err(err) => {
+                                            log::warn!("channel {our_label} unable to send {err}");
+                                        }
+                                    }
+
+                                    let buffered_total = len + channel.buffered_amount().await;
+
+                                    if buffered_total > MAX_BUFFERED_AMOUNT {
+                                        // Wait for the signal that more can be sent
+                                        log::warn!(
+                                            "!! buffered_total too large, waiting for low mark"
+                                        );
+                                        let _ = maybe_more_can_be_sent.recv().await;
+                                    }
+                                }
+                                ChannelControl::Close => {
+                                    channel.close().await.unwrap();
+                                    *control_rx_holder.lock().await = Some(control_rx);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                });
             })
         })
     });
@@ -107,57 +168,6 @@ async fn on_datachannel(
         }))
         .await;
 
-    // TODO(emily): Need to hold onto data until channel is open here
-    // This should be done here instead of in audio.rs or in video.rs
-    // TODO(emily): This should be inside on_datachannel instead of up here
-
-    event_tx
-        .send(ChannelEvent::Open(channel.clone()))
-        .await
-        .unwrap();
-
-    tokio::spawn({
-        let control_rx_holder = control_rx.clone();
-        let channel = channel.clone();
-        async move {
-            let mut control_rx = control_rx_holder
-                .lock()
-                .await
-                .take()
-                .expect("expected channel control");
-            log::debug!("!! took channel {our_label} control");
-
-            while let Some(control) = control_rx.recv().await {
-                match control {
-                    ChannelControl::SendText(text) => {
-                        channel.send_text(text).await.unwrap();
-                    }
-                    ChannelControl::Send(data) => {
-                        let buffered_amount = channel.buffered_amount().await;
-                        let buffered_total = buffered_amount + data.len();
-                        match channel.send(&bytes::Bytes::from(data)).await {
-                            Ok(_) => {}
-                            Err(err) => {
-                                log::warn!("channel {our_label} unable to send {err}");
-                            }
-                        }
-
-                        if buffered_total > MAX_BUFFERED_AMOUNT {
-                            // Wait for the signal that more can be sent
-                            log::warn!("!! buffered_total too large, waiting for low mark");
-                            let _ = maybe_more_can_be_sent.recv().await;
-                        }
-                    }
-                    ChannelControl::Close => {
-                        channel.close().await.unwrap();
-                        *control_rx_holder.lock().await = Some(control_rx);
-                        break;
-                    }
-                }
-            }
-        }
-    });
-
     Ok(())
 }
 
@@ -185,8 +195,8 @@ pub(crate) async fn channel(
     channel_options: Option<RTCDataChannelInit>,
 ) -> Result<(mpsc::Sender<ChannelControl>, mpsc::Receiver<ChannelEvent>)> {
     let our_label = our_label.to_owned();
-    let (control_tx, control_rx) = mpsc::channel(10);
-    let (event_tx, event_rx) = mpsc::channel(10);
+    let (control_tx, control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
+    let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
     let control_rx = Arc::new(Mutex::new(Some(control_rx)));
 

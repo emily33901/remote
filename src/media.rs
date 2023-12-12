@@ -309,8 +309,10 @@ mod mf {
         device_manager: IMFDXGIDeviceManager,
         media_source: IMFMediaSource,
         cur_time: i64,
-        video_timestamp: i64,
-        audio_timestamp: i64,
+        /// Next video timestamp in 100 nanoseconds
+        pub(crate) video_timestamp: i64,
+        /// Next audio timestamp in 100 nanoseconds
+        pub(crate) audio_timestamp: i64,
     }
 
     impl Media {
@@ -347,9 +349,6 @@ mod mf {
                     self.source_reader
                         .GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32)
                 }?;
-
-                let mut width = 0;
-                let mut height = 0;
 
                 let width_height =
                     unsafe { first_output.GetUINT64(&MF_MT_FRAME_SIZE as *const _) }?;
@@ -570,7 +569,7 @@ mod mf {
 
             let sample = unsafe { MFCreateSample() }?;
 
-            let buffer = unsafe { MFCreateMemoryBuffer(1024) }?;
+            let buffer = unsafe { MFCreateMemoryBuffer(2048) }?;
             unsafe { sample.AddBuffer(&buffer) }?;
 
             let mut output_buffer = MFT_OUTPUT_DATA_BUFFER::default();
@@ -606,6 +605,7 @@ mod mf {
 
         pub(crate) fn frame(
             &mut self,
+            start_time: std::time::SystemTime,
             elapsed: std::time::Duration,
             output_audio: &mut Vec<u8>,
             output_texture: ID3D11Texture2D,
@@ -615,7 +615,7 @@ mod mf {
             let produced_video = self.video_frame(self.cur_time, output_texture)?;
             self.audio_frame(self.cur_time, output_audio)?;
 
-            let next_deadline = std::time::SystemTime::UNIX_EPOCH
+            let next_deadline = start_time
                 + std::time::Duration::from_nanos(self.audio_timestamp as u64 * 100).min(
                     std::time::Duration::from_nanos(self.video_timestamp as u64 * 100),
                 );
@@ -627,11 +627,11 @@ mod mf {
 
 use eyre::{eyre, Result};
 
-use crate::util;
+use crate::{util, video::VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
 
 pub(crate) enum MediaEvent {
     Audio(Vec<u8>),
-    Video(Vec<u8>),
+    Video(VideoBuffer),
 }
 
 pub(crate) enum MediaControl {}
@@ -641,14 +641,15 @@ pub(crate) async fn produce(
     width: u32,
     height: u32,
 ) -> Result<(mpsc::Sender<MediaControl>, mpsc::Receiver<MediaEvent>)> {
-    let (event_tx, event_rx) = mpsc::channel(10);
-    let (control_tx, mut control_rx) = mpsc::channel(10);
+    let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
+    let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
     tokio::spawn(async move {
         while let Some(control) = control_rx.recv().await {
             match control {}
         }
     });
+
     tokio::spawn({
         let path = path.to_owned();
         async move {
@@ -674,6 +675,7 @@ pub(crate) async fn produce(
 
                     let mut deadline: Option<std::time::SystemTime> = None;
                     let mut prev = std::time::Instant::now();
+                    let start = std::time::SystemTime::now();
 
                     let mut audio_buffer: Vec<u8> = vec![];
 
@@ -692,7 +694,7 @@ pub(crate) async fn produce(
                         audio_buffer.resize(0, 0);
 
                         let (produced_video, next_deadline) =
-                            media.frame(elapsed, &mut audio_buffer, texture.clone())?;
+                            media.frame(start, elapsed, &mut audio_buffer, texture.clone())?;
 
                         if produced_video {
                             // Make video into buffer
@@ -721,38 +723,31 @@ pub(crate) async fn produce(
 
                             unsafe { context.Unmap(&texture, 0) };
 
-                            futures::executor::block_on(tokio::spawn({
-                                let event_tx = event_tx.clone();
-                                async move {
-                                    util::send(
-                                        "media producer video to media event",
-                                        &event_tx,
-                                        MediaEvent::Video(buffer),
-                                    )
-                                    .await
-                                    .unwrap();
+                            // Try and put a frame but if we are being back pressured then dump and run
+                            match event_tx.try_send(MediaEvent::Video(VideoBuffer {
+                                data: buffer,
+                                time: start
+                                    + std::time::Duration::from_nanos(
+                                        media.video_timestamp as u64 * 100,
+                                    ),
+                            })) {
+                                Ok(_) => {}
+                                Err(err) => {
+                                    log::trace!("video backpressured")
                                 }
-                            }))
-                            .unwrap();
+                            }
                         }
 
                         if audio_buffer.len() > 0 {
                             log::trace!("produced audio");
 
-                            futures::executor::block_on(tokio::spawn({
-                                let audio_buffer = audio_buffer.clone();
-                                let event_tx = event_tx.clone();
-                                async move {
-                                    util::send(
-                                        "media producer audio to media event",
-                                        &event_tx,
-                                        MediaEvent::Audio(audio_buffer),
-                                    )
-                                    .await
-                                    .unwrap();
+                            // Try and put a frame but if we are being back pressured then dump and run
+                            match event_tx.try_send(MediaEvent::Audio(audio_buffer.clone())) {
+                                Ok(_) => {}
+                                Err(err) => {
+                                    log::trace!("audio backpressured");
                                 }
-                            }))
-                            .unwrap();
+                            }
                         }
 
                         deadline = next_deadline;

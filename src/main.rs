@@ -23,6 +23,8 @@ use uuid::Uuid;
 pub(crate) type PeerId = Uuid;
 pub(crate) type ConnectionId = Uuid;
 
+const ARBITRARY_CHANNEL_LIMIT: usize = 10;
+
 #[derive(Debug, Clone)]
 enum Command {
     SignallingServer,
@@ -75,9 +77,6 @@ struct Args {
     command: String,
 }
 
-const VIDEO_WIDTH: u32 = 240;
-const VIDEO_HEIGHT: u32 = 144;
-
 #[tokio::main]
 async fn main() -> Result<()> {
     // Configure logger at runtime
@@ -117,6 +116,15 @@ async fn main() -> Result<()> {
         // Apply globally
         .apply()?;
 
+    dotenv::dotenv()?;
+
+    log::info!(
+        "remote - '{}' '{}' '{}'",
+        args.command,
+        args.address,
+        args.name
+    );
+
     std::panic::set_hook(Box::new(|info| {
         println!("thread panicked {info}");
     }));
@@ -136,6 +144,9 @@ async fn peer_inner(
     peer_controls: Arc<Mutex<HashMap<PeerId, mpsc::Sender<PeerControl>>>>,
     controlling: bool,
 ) -> Result<()> {
+    let width = u32::from_str(&std::env::var("WIDTH")?)?;
+    let height = u32::from_str(&std::env::var("HEIGHT")?)?;
+
     let mut peer_controls = peer_controls.lock().await;
 
     let (control, mut event) = peer::peer(our_peer_id, their_peer_id, tx.clone(), controlling)
@@ -159,7 +170,7 @@ async fn peer_inner(
         .await
         .unwrap();
 
-    let video_sink_tx = player::video::sink(VIDEO_WIDTH, VIDEO_HEIGHT)?;
+    let video_sink_tx = player::video::sink(width, height)?;
 
     tokio::spawn({
         async move {
@@ -175,7 +186,7 @@ async fn peer_inner(
                         // audio_sink_tx.send(audio).await.unwrap();
                     }
                     peer::PeerEvent::Video(video) => {
-                        log::debug!("peer event video {}", video.len());
+                        log::debug!("peer event video {}", video.data.len());
                         util::send("PeerEvent to Player video", &video_sink_tx, video)
                             .await
                             .unwrap();
@@ -190,6 +201,9 @@ async fn peer_inner(
 }
 
 async fn peer(address: &str, name: &str) -> Result<()> {
+    let width = u32::from_str(&std::env::var("WIDTH")?)?;
+    let height = u32::from_str(&std::env::var("HEIGHT")?)?;
+
     let (tx, mut rx) = signalling::client(address).await?;
 
     let our_peer_id = Arc::new(Mutex::new(None));
@@ -290,8 +304,7 @@ async fn peer(address: &str, name: &str) -> Result<()> {
         let peer_controls = peer_controls.clone();
         async move {
             let (tx, mut rx) =
-                media::produce("E:/emily/downloads/lagtrain.mp4", VIDEO_WIDTH, VIDEO_HEIGHT)
-                    .await?;
+                media::produce("E:/emily/downloads/lagtrain.mp4", width, height).await?;
 
             while let Some(event) = rx.recv().await {
                 match event {
@@ -310,7 +323,7 @@ async fn peer(address: &str, name: &str) -> Result<()> {
                     }
                     media::MediaEvent::Video(video) => {
                         // log::debug!("throwing video");
-                        log::trace!("produce video {}", video.len());
+                        log::trace!("produce video {}", video.data.len());
                         let peer_controls = peer_controls.lock().await;
                         for (_, control) in peer_controls.iter() {
                             util::send(

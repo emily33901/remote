@@ -1,22 +1,30 @@
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, Mutex};
 use webrtc::{data_channel::RTCDataChannel, peer_connection::RTCPeerConnection};
 
 use crate::{
     channel::{channel, ChannelControl, ChannelEvent, ChannelStorage},
     chunk::{assembly, chunk, AssemblyControl, Chunk, ChunkControl},
-    util,
+    util, ARBITRARY_CHANNEL_LIMIT,
 };
 
 use eyre::{eyre, Result};
+use std::str::FromStr;
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub(crate) struct VideoBuffer {
+    pub(crate) data: Vec<u8>,
+    pub(crate) time: std::time::SystemTime,
+}
 
 pub(crate) enum VideoEvent {
-    Video(Vec<u8>),
+    Video(VideoBuffer),
 }
 
 pub(crate) enum VideoControl {
-    Video(Vec<u8>),
+    Video(VideoBuffer),
 }
 
 pub(crate) async fn video_channel(
@@ -24,8 +32,8 @@ pub(crate) async fn video_channel(
     peer_connection: Arc<RTCPeerConnection>,
     controlling: bool,
 ) -> Result<(mpsc::Sender<VideoControl>, mpsc::Receiver<VideoEvent>)> {
-    let (control_tx, mut control_rx) = mpsc::channel(10);
-    let (event_tx, event_rx) = mpsc::channel(10);
+    let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
+    let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
     let (tx, mut rx) = channel(
         channel_storage,
@@ -42,8 +50,11 @@ pub(crate) async fn video_channel(
     )
     .await?;
 
-    let (chunk_tx, mut chunk_rx) = chunk::<Vec<u8>>(10_000).await?;
-    let (assembly_tx, mut assembly_rx) = assembly::<Vec<u8>>().await?;
+    let video_ttl = u64::from_str(&std::env::var("VIDEO_TTL")?)?;
+
+    let (chunk_tx, mut chunk_rx) =
+        chunk::<VideoBuffer>(20_000, std::time::Duration::from_millis(video_ttl)).await?;
+    let (assembly_tx, mut assembly_rx) = assembly::<VideoBuffer>().await?;
 
     tokio::spawn({
         let tx = tx.clone();

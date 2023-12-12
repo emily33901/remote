@@ -4,8 +4,8 @@ use crate::audio::audio_channel;
 use crate::channel::ChannelStorage;
 use crate::logic::logic_channel;
 use crate::signalling::SignallingControl;
-use crate::video::video_channel;
-use crate::PeerId;
+use crate::video::{video_channel, VideoBuffer};
+use crate::{PeerId, ARBITRARY_CHANNEL_LIMIT};
 
 use eyre::{eyre, Result};
 use media_engine::MediaEngine;
@@ -30,13 +30,13 @@ pub(crate) enum PeerControl {
     IceCandidate(String),
 
     Audio(Vec<u8>),
-    Video(Vec<u8>),
+    Video(VideoBuffer),
 }
 
 #[derive(Debug)]
 pub(crate) enum PeerEvent {
     Audio(Vec<u8>),
-    Video(Vec<u8>),
+    Video(VideoBuffer),
 }
 
 pub(crate) async fn peer(
@@ -118,8 +118,8 @@ pub(crate) async fn peer(
         })
     });
 
-    let (control_tx, mut control_rx) = mpsc::channel(10);
-    let (event_tx, event_rx) = mpsc::channel(10);
+    let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
+    let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
     let channel_storage = ChannelStorage::default();
 
@@ -146,7 +146,8 @@ pub(crate) async fn peer(
         let peer_connection = peer_connection.clone();
         let signalling_control = signalling_control.clone();
         async move {
-            let (pending_candidates_tx, mut pending_candidates_rx) = mpsc::channel(10);
+            let (pending_candidates_tx, mut pending_candidates_rx) =
+                mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
             while let Some(control) = control_rx.recv().await {
                 // log::debug!("peer control {control:?}");

@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use eyre::{eyre, Result};
 
-use crate::{ConnectionId, PeerId};
+use crate::{ConnectionId, PeerId, ARBITRARY_CHANNEL_LIMIT};
 
 #[derive(Debug, Serialize, Deserialize)]
 struct PeerToServerMessage {
@@ -253,7 +253,7 @@ pub(crate) async fn server(address: &str) -> Result<()> {
             println!("WebSocket connection established: {} {}", peer_id, addr);
 
             let (mut outgoing, mut incoming) = ws_stream.split();
-            let (tx, mut rx) = mpsc::channel(10);
+            let (tx, mut rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
             peers.lock().await.insert(peer_id, tx.clone());
 
@@ -422,8 +422,8 @@ pub(crate) async fn client(
 
     let (mut write, mut read) = ws_stream.split();
 
-    let (control_tx, mut control_rx) = mpsc::channel::<SignallingControl>(10);
-    let (event_tx, event_rx) = mpsc::channel::<SignallingEvent>(10);
+    let (control_tx, mut control_rx) = mpsc::channel::<SignallingControl>(ARBITRARY_CHANNEL_LIMIT);
+    let (event_tx, event_rx) = mpsc::channel::<SignallingEvent>(ARBITRARY_CHANNEL_LIMIT);
 
     log::debug!("client connected");
 

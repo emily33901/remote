@@ -13,7 +13,7 @@ pub(crate) async fn send<T: Send + Sync + 'static>(
     match permit {
         Ok(permit) => Ok(permit.send(item)),
         Err(err) => {
-            log::warn!("unable to get permit for {who} {err} blocking");
+            log::debug!("unable to get permit for {who} {err} blocking");
             Ok(sender.send(item).await?)
         }
     }

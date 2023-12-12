@@ -20,6 +20,8 @@ pub(crate) mod audio {
     use tokio::io::AsyncRead;
     use tokio::sync::mpsc::Receiver;
 
+    use crate::ARBITRARY_CHANNEL_LIMIT;
+
     #[derive(Debug)]
     pub(crate) struct SinkReader {
         store: Arc<Mutex<VecDeque<u8>>>,
@@ -40,7 +42,7 @@ pub(crate) mod audio {
             let store = store.clone();
             async move {
                 while let Some(buffer) = rx.recv().await {
-                    store.lock().await.extend(buffer.iter());
+                    store.lock().await.extend(buffer);
                 }
             }
         });
@@ -109,7 +111,7 @@ pub(crate) mod audio {
 
     impl Player {
         pub(crate) fn new() -> Self {
-            let (control_tx, control_rx) = mpsc::channel(10);
+            let (control_tx, control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
             let _loop_control_tx = control_tx.clone();
             let (state_tx, state_rx) = watch::channel(None);
 
@@ -231,7 +233,7 @@ pub(crate) mod audio {
 }
 
 pub(crate) mod video {
-    use std::mem::MaybeUninit;
+    use std::{mem::MaybeUninit, time::Instant};
 
     use eyre::{eyre, Result};
     use tokio::sync::mpsc;
@@ -266,6 +268,8 @@ pub(crate) mod video {
             },
         },
     };
+
+    use crate::{video::VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
 
     const FEATURE_LEVELS: [D3D_FEATURE_LEVEL; 9] = [
         D3D_FEATURE_LEVEL_12_1,
@@ -492,8 +496,8 @@ pub(crate) mod video {
         }
     }
 
-    pub(crate) fn sink(width: u32, height: u32) -> Result<mpsc::Sender<Vec<u8>>> {
-        let (tx, mut rx) = mpsc::channel::<Vec<u8>>(10);
+    pub(crate) fn sink(width: u32, height: u32) -> Result<mpsc::Sender<VideoBuffer>> {
+        let (tx, mut rx) = mpsc::channel::<VideoBuffer>(ARBITRARY_CHANNEL_LIMIT);
 
         tokio::spawn(async move {
             tokio::task::spawn_blocking(move || -> eyre::Result<()> {
@@ -785,7 +789,11 @@ pub(crate) mod video {
                     while let Ok(video) = rx.try_recv() {
                         last_video = Some(video);
                     }
+
                     if let Some(mut video) = last_video {
+                        if let Ok(duration) = video.time.elapsed() {
+                            log::info!("video frame is from {}ms ago", duration.as_millis());
+                        }
                         let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
                         unsafe {
                             context.Map(
@@ -799,9 +807,9 @@ pub(crate) mod video {
 
                         unsafe {
                             std::ptr::copy(
-                                video.as_mut_ptr(),
+                                video.data.as_mut_ptr(),
                                 mapped_resource.pData as *mut u8,
-                                video.len(),
+                                video.data.len(),
                             );
                         }
                     }
