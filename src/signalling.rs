@@ -1,3 +1,4 @@
+use std::error::Error;
 use std::{collections::HashMap, sync::Arc};
 
 use futures::stream::SplitSink;
@@ -14,6 +15,11 @@ use uuid::Uuid;
 use eyre::{eyre, Result};
 
 use crate::{ConnectionId, PeerId, ARBITRARY_CHANNEL_LIMIT};
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) enum SignallingError {
+    NoSuchPeer(PeerId),
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 struct PeerToServerMessage {
@@ -44,6 +50,7 @@ enum ServerToPeer {
     Offer(PeerId, String),
     Answer(PeerId, String),
     IceCandidate(PeerId, String),
+    Error(SignallingError),
 }
 
 fn make_id() -> Uuid {
@@ -316,6 +323,7 @@ pub(crate) enum SignallingEvent {
     Answer(PeerId, String),
     IceCandidate(PeerId, String),
     ConnectionAccepted(PeerId, ConnectionId),
+    Error(SignallingError),
 }
 
 async fn send_message(
@@ -332,49 +340,32 @@ async fn handle_control(
     control: SignallingControl,
 ) -> Result<()> {
     log::debug!("sending to server {control:?}");
-    match control {
-        SignallingControl::IceCandidate(peer_id, candidate) => {
-            let message = PeerToServerMessage {
-                job_id: 0,
-                inner: PeerToServer::IceCandidate(peer_id, candidate),
-            };
 
-            Ok(send_message(write, message).await?)
-        }
-        SignallingControl::Offer(peer_id, offer) => {
-            let message = PeerToServerMessage {
-                job_id: 0,
-                inner: PeerToServer::Offer(peer_id, offer),
-            };
+    let message = match control {
+        SignallingControl::IceCandidate(peer_id, candidate) => PeerToServerMessage {
+            job_id: 0,
+            inner: PeerToServer::IceCandidate(peer_id, candidate),
+        },
+        SignallingControl::Offer(peer_id, offer) => PeerToServerMessage {
+            job_id: 0,
+            inner: PeerToServer::Offer(peer_id, offer),
+        },
+        SignallingControl::Answer(peer_id, answer) => PeerToServerMessage {
+            job_id: 0,
+            inner: PeerToServer::Answer(peer_id, answer),
+        },
+        SignallingControl::RequestConnection(peer_id) => PeerToServerMessage {
+            job_id: 0,
+            inner: PeerToServer::ConnectToPeer(peer_id),
+        },
+        SignallingControl::AcceptConnection(connection_id) => PeerToServerMessage {
+            job_id: 0,
+            inner: PeerToServer::AcceptConnection(connection_id),
+        },
+        SignallingControl::RejectConnection(connection_id) => todo!(),
+    };
 
-            Ok(send_message(write, message).await?)
-        }
-        SignallingControl::Answer(peer_id, answer) => {
-            let message = PeerToServerMessage {
-                job_id: 0,
-                inner: PeerToServer::Answer(peer_id, answer),
-            };
-
-            Ok(send_message(write, message).await?)
-        }
-        SignallingControl::RequestConnection(peer_id) => {
-            let message = PeerToServerMessage {
-                job_id: 0,
-                inner: PeerToServer::ConnectToPeer(peer_id),
-            };
-
-            Ok(send_message(write, message).await?)
-        }
-        SignallingControl::AcceptConnection(connection_id) => {
-            let message = PeerToServerMessage {
-                job_id: 0,
-                inner: PeerToServer::AcceptConnection(connection_id),
-            };
-
-            Ok(send_message(write, message).await?)
-        }
-        SignallingControl::RejectConnection(connection_id) => Err(eyre!("No idea how to reject")),
-    }
+    Ok(send_message(write, message).await?)
 }
 
 async fn handle_message(event_tx: mpsc::Sender<SignallingEvent>, msg: Message) -> Result<()> {
@@ -382,26 +373,26 @@ async fn handle_message(event_tx: mpsc::Sender<SignallingEvent>, msg: Message) -
         Text(text) => {
             let message = serde_json::from_str::<ServerToPeerMessage>(&text)?;
             log::debug!("received {message:?}");
-            match message.inner {
-                ServerToPeer::Id(peer_id) => {
-                    Ok(event_tx.send(SignallingEvent::Id(peer_id)).await?)
-                }
-                ServerToPeer::ConnectionRequest(peer_id, connection_id) => Ok(event_tx
-                    .send(SignallingEvent::ConectionRequest(peer_id, connection_id))
-                    .await?),
-                ServerToPeer::ConnectionAccepted(peer_id, connection_id) => Ok(event_tx
-                    .send(SignallingEvent::ConnectionAccepted(peer_id, connection_id))
-                    .await?),
-                ServerToPeer::Offer(peer_id, offer) => Ok(event_tx
-                    .send(SignallingEvent::Offer(peer_id, offer))
-                    .await?),
-                ServerToPeer::Answer(peer_id, answer) => Ok(event_tx
-                    .send(SignallingEvent::Answer(peer_id, answer))
-                    .await?),
-                ServerToPeer::IceCandidate(peer_id, ice_candidate) => Ok(event_tx
-                    .send(SignallingEvent::IceCandidate(peer_id, ice_candidate))
-                    .await?),
-            }
+            let job_id = message.job_id;
+            Ok(event_tx
+                .send(match message.inner {
+                    ServerToPeer::Id(peer_id) => SignallingEvent::Id(peer_id),
+                    ServerToPeer::ConnectionRequest(peer_id, connection_id) => {
+                        SignallingEvent::ConectionRequest(peer_id, connection_id)
+                    }
+                    ServerToPeer::ConnectionAccepted(peer_id, connection_id) => {
+                        SignallingEvent::ConnectionAccepted(peer_id, connection_id)
+                    }
+                    ServerToPeer::Offer(peer_id, offer) => SignallingEvent::Offer(peer_id, offer),
+                    ServerToPeer::Answer(peer_id, answer) => {
+                        SignallingEvent::Answer(peer_id, answer)
+                    }
+                    ServerToPeer::IceCandidate(peer_id, ice_candidate) => {
+                        SignallingEvent::IceCandidate(peer_id, ice_candidate)
+                    }
+                    ServerToPeer::Error(error) => SignallingEvent::Error(error),
+                })
+                .await?)
         }
         Binary(_) | Frame(_) => Err(eyre!("No idea what to do with binary")),
         Close(_) => Err(eyre!("Going down")),

@@ -144,8 +144,8 @@ async fn peer_inner(
     peer_controls: Arc<Mutex<HashMap<PeerId, mpsc::Sender<PeerControl>>>>,
     controlling: bool,
 ) -> Result<()> {
-    let width = u32::from_str(&std::env::var("WIDTH")?)?;
-    let height = u32::from_str(&std::env::var("HEIGHT")?)?;
+    let width = u32::from_str(&std::env::var("width")?)?;
+    let height = u32::from_str(&std::env::var("height")?)?;
 
     let mut peer_controls = peer_controls.lock().await;
 
@@ -201,8 +201,8 @@ async fn peer_inner(
 }
 
 async fn peer(address: &str, name: &str) -> Result<()> {
-    let width = u32::from_str(&std::env::var("WIDTH")?)?;
-    let height = u32::from_str(&std::env::var("HEIGHT")?)?;
+    let width = u32::from_str(&std::env::var("width")?)?;
+    let height = u32::from_str(&std::env::var("height")?)?;
 
     let (tx, mut rx) = signalling::client(address).await?;
 
@@ -290,6 +290,9 @@ async fn peer(address: &str, name: &str) -> Result<()> {
                             peer_inner(our_peer_id, peer_id, tx.clone(), peer_controls, true)
                         });
                     }
+                    signalling::SignallingEvent::Error(error) => {
+                        log::info!("signalling error {error:?}");
+                    }
                 }
             }
 
@@ -304,7 +307,7 @@ async fn peer(address: &str, name: &str) -> Result<()> {
         let peer_controls = peer_controls.clone();
         async move {
             let (tx, mut rx) =
-                media::produce("E:/emily/downloads/lagtrain.mp4", width, height).await?;
+                media::produce(&std::env::var("media_filename")?, width, height).await?;
 
             while let Some(event) = rx.recv().await {
                 match event {

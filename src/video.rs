@@ -50,7 +50,7 @@ pub(crate) async fn video_channel(
     )
     .await?;
 
-    let video_ttl = u64::from_str(&std::env::var("VIDEO_TTL")?)?;
+    let video_ttl = u64::from_str(&std::env::var("video_ttl")?)?;
 
     let (chunk_tx, mut chunk_rx) =
         chunk::<VideoBuffer>(20_000, std::time::Duration::from_millis(video_ttl)).await?;
