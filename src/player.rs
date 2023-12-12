@@ -12,13 +12,10 @@ pub(crate) mod audio {
 
     use eyre::Result;
 
-    use std::{
-        io::{self},
-        task::Poll,
-    };
+    
 
-    use tokio::io::AsyncRead;
-    use tokio::sync::mpsc::Receiver;
+    
+    
 
     use crate::ARBITRARY_CHANNEL_LIMIT;
 
@@ -179,7 +176,7 @@ pub(crate) mod audio {
                 PlayerControl::Sink(reader) => {
                     self.reset_sink().await;
                     let source =
-                        reader.periodic_access(std::time::Duration::from_millis(1000), |r| {
+                        reader.periodic_access(std::time::Duration::from_millis(1000), |_r| {
                             // log::debug!("!!!! player periodic access");
                         });
 
@@ -233,13 +230,13 @@ pub(crate) mod audio {
 }
 
 pub(crate) mod video {
-    use std::{mem::MaybeUninit, time::Instant};
+    use std::{mem::MaybeUninit};
 
     use eyre::{eyre, Result};
     use tokio::sync::mpsc;
 
     use windows::{
-        core::{s, ComInterface, IUnknown, HSTRING, PCSTR},
+        core::{s, ComInterface, PCSTR},
         Win32::{
             Foundation::{HWND, LPARAM, LRESULT, S_OK, TRUE, WPARAM},
             Graphics::{
@@ -247,22 +244,17 @@ pub(crate) mod video {
                 Direct3D11::*,
                 Dxgi::{
                     Common::{
-                        DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R32G32B32A32_FLOAT,
-                        DXGI_FORMAT_R32G32B32_FLOAT, DXGI_FORMAT_R32G32_FLOAT,
+                        DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R32G32_FLOAT,
                         DXGI_FORMAT_R8G8B8A8_UNORM,
-                    },
-                    IDXGIAdapter1, IDXGIFactory4, IDXGISwapChain, DXGI_ADAPTER_FLAG,
-                    DXGI_ADAPTER_FLAG_NONE, DXGI_ADAPTER_FLAG_SOFTWARE, DXGI_SWAP_CHAIN_DESC,
+                    }, IDXGISwapChain, DXGI_SWAP_CHAIN_DESC,
                     DXGI_USAGE_RENDER_TARGET_OUTPUT,
                 },
-                Gdi::{BeginPaint, EndPaint, COLOR_WINDOW, COLOR_WINDOWFRAME, PAINTSTRUCT},
             },
             System::LibraryLoader::GetModuleHandleA,
             UI::WindowsAndMessaging::{
-                CreateWindowExA, DefWindowProcA, DispatchMessageA, GetMessageA, LoadCursorW,
-                PeekMessageA, PostQuitMessage, RegisterClassA, RegisterClassExA, ShowWindow,
-                CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, IDC_ARROW, MSG, PM_REMOVE, SW_NORMAL,
-                SW_SHOW, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CREATE, WM_DESTROY, WM_PAINT, WNDCLASSA,
+                CreateWindowExA, DefWindowProcA, DispatchMessageA, LoadCursorW,
+                PeekMessageA, PostQuitMessage, RegisterClassExA,
+                CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, IDC_ARROW, MSG, PM_REMOVE, WINDOW_EX_STYLE, WM_CREATE, WM_DESTROY,
                 WNDCLASSEXA, WNDCLASS_STYLES, WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_SYSMENU,
                 WS_VISIBLE,
             },

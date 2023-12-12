@@ -1,15 +1,15 @@
-use std::error::Error;
+
 use std::{collections::HashMap, sync::Arc};
 
 use futures::stream::SplitSink;
 use futures::{FutureExt, StreamExt, TryStreamExt};
-use futures::{Sink, SinkExt};
+use futures::{SinkExt};
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
 use tokio_tungstenite::tungstenite::Message::{self, Binary, Close, Frame, Ping, Pong, Text};
-use tokio_tungstenite::{tungstenite, MaybeTlsStream, WebSocketStream};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use uuid::Uuid;
 
 use eyre::{eyre, Result};
@@ -159,7 +159,7 @@ async fn handle_incoming_message_inner(
                 let r_peers = peers.clone();
 
                 tokio::spawn(async move {
-                    let peers = r_peers;
+                    let _peers = r_peers;
                     if let Ok(_) = reject_rx.await {
                         todo!();
                     }
@@ -204,7 +204,7 @@ async fn handle_incoming_message_inner(
             Ok(connection_request
                 .accept
                 .send(())
-                .map_err(|err| eyre!("Unable to accept connection"))?)
+                .map_err(|_err| eyre!("Unable to accept connection"))?)
         }
     }
 }
@@ -225,7 +225,7 @@ async fn handle_incoming_message(
         }
         Binary(_) | Frame(_) => Err(eyre!("No idea what to do with binary")),
         Close(_) => Err(eyre!("Going down")),
-        Ping(data) | Pong(data) => todo!(),
+        Ping(_data) | Pong(_data) => todo!(),
     }
 }
 
@@ -362,7 +362,7 @@ async fn handle_control(
             job_id: 0,
             inner: PeerToServer::AcceptConnection(connection_id),
         },
-        SignallingControl::RejectConnection(connection_id) => todo!(),
+        SignallingControl::RejectConnection(_connection_id) => todo!(),
     };
 
     Ok(send_message(write, message).await?)
@@ -373,7 +373,7 @@ async fn handle_message(event_tx: mpsc::Sender<SignallingEvent>, msg: Message) -
         Text(text) => {
             let message = serde_json::from_str::<ServerToPeerMessage>(&text)?;
             log::debug!("received {message:?}");
-            let job_id = message.job_id;
+            let _job_id = message.job_id;
             Ok(event_tx
                 .send(match message.inner {
                     ServerToPeer::Id(peer_id) => SignallingEvent::Id(peer_id),
@@ -396,7 +396,7 @@ async fn handle_message(event_tx: mpsc::Sender<SignallingEvent>, msg: Message) -
         }
         Binary(_) | Frame(_) => Err(eyre!("No idea what to do with binary")),
         Close(_) => Err(eyre!("Going down")),
-        Ping(data) | Pong(data) => todo!(),
+        Ping(_data) | Pong(_data) => todo!(),
     }
 }
 
@@ -434,8 +434,8 @@ pub(crate) async fn client(
                     }
                 }
             } {
-                Ok(ok) => {}
-                Err(err) => break,
+                Ok(_ok) => {}
+                Err(_err) => break,
             }
         }
     });

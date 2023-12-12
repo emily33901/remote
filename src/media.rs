@@ -1,7 +1,7 @@
 use tokio::sync::mpsc;
 use windows::Win32::{
     Graphics::Direct3D11::{
-        ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_MAPPED_SUBRESOURCE,
+        D3D11_MAPPED_SUBRESOURCE,
         D3D11_MAP_READ,
     },
     System::Com::{CoInitializeEx, COINIT_DISABLE_OLE1DDE},
@@ -10,13 +10,12 @@ use windows::Win32::{
 mod dx {
     use eyre::{eyre, Result};
     use windows::{
-        core::{ComInterface, IUnknown},
+        core::{ComInterface},
         Win32::Graphics::{
             Direct3D::*,
             Direct3D11::*,
             Dxgi::{
-                Common::DXGI_FORMAT, IDXGIAdapter1, IDXGIFactory4, DXGI_ADAPTER_FLAG,
-                DXGI_ADAPTER_FLAG_NONE, DXGI_ADAPTER_FLAG_SOFTWARE,
+                Common::DXGI_FORMAT,
             },
         },
     };
@@ -129,7 +128,7 @@ mod dx {
 mod mf {
     use std::mem::{ManuallyDrop, MaybeUninit};
 
-    use eyre::{eyre, Result};
+    use eyre::{Result};
     use windows::{
         core::{ComInterface, IUnknown, HSTRING},
         Win32::{
@@ -448,7 +447,7 @@ mod mf {
                         )
                     }?;
 
-                    let mut subresource_index = unsafe { dxgi_buffer.GetSubresourceIndex()? };
+                    let subresource_index = unsafe { dxgi_buffer.GetSubresourceIndex()? };
                     let texture = unsafe { texture.assume_init() };
 
                     let mut in_desc = D3D11_TEXTURE2D_DESC::default();
@@ -625,9 +624,9 @@ mod mf {
     }
 }
 
-use eyre::{eyre, Result};
+use eyre::{Result};
 
-use crate::{util, video::VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
+use crate::{video::VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
 
 pub(crate) enum MediaEvent {
     Audio(Vec<u8>),
@@ -732,7 +731,7 @@ pub(crate) async fn produce(
                                     ),
                             })) {
                                 Ok(_) => {}
-                                Err(err) => {
+                                Err(_err) => {
                                     log::trace!("video backpressured")
                                 }
                             }
@@ -744,7 +743,7 @@ pub(crate) async fn produce(
                             // Try and put a frame but if we are being back pressured then dump and run
                             match event_tx.try_send(MediaEvent::Audio(audio_buffer.clone())) {
                                 Ok(_) => {}
-                                Err(err) => {
+                                Err(_err) => {
                                     log::trace!("audio backpressured");
                                 }
                             }

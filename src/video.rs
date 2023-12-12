@@ -1,16 +1,16 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc, Mutex};
-use webrtc::{data_channel::RTCDataChannel, peer_connection::RTCPeerConnection};
+use tokio::sync::{mpsc};
+use webrtc::{peer_connection::RTCPeerConnection};
 
 use crate::{
     channel::{channel, ChannelControl, ChannelEvent, ChannelStorage},
-    chunk::{assembly, chunk, AssemblyControl, Chunk, ChunkControl},
+    chunk::{assembly, chunk, AssemblyControl, Chunk},
     util, ARBITRARY_CHANNEL_LIMIT,
 };
 
-use eyre::{eyre, Result};
+use eyre::{Result};
 use std::str::FromStr;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -57,14 +57,14 @@ pub(crate) async fn video_channel(
     let (assembly_tx, mut assembly_rx) = assembly::<VideoBuffer>().await?;
 
     tokio::spawn({
-        let tx = tx.clone();
+        let _tx = tx.clone();
         let assembly_tx = assembly_tx.clone();
         async move {
             while let Some(event) = rx.recv().await {
                 match event {
-                    ChannelEvent::Open(channel) => {}
-                    ChannelEvent::Close(channel) => {}
-                    ChannelEvent::Message(channel, message) => {
+                    ChannelEvent::Open(_channel) => {}
+                    ChannelEvent::Close(_channel) => {}
+                    ChannelEvent::Message(_channel, message) => {
                         let chunk: Chunk = bincode::deserialize(&message.data).unwrap();
                         util::send(
                             "video channel event to assembly control",

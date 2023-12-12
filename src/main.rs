@@ -13,7 +13,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::{collections::HashMap, fmt::Display};
 
-use clap::{Arg, Parser};
+use clap::{Parser};
 use eyre::Result;
 use peer::PeerControl;
 use signalling::SignallingControl;
@@ -175,7 +175,7 @@ async fn peer_inner(
     tokio::spawn({
         async move {
             // NOTE(emily): Make sure to keep player alive
-            let player = audio_player;
+            let _player = audio_player;
             while let Some(event) = event.recv().await {
                 match event {
                     peer::PeerEvent::Audio(audio) => {
@@ -200,7 +200,7 @@ async fn peer_inner(
     Ok(())
 }
 
-async fn peer(address: &str, name: &str) -> Result<()> {
+async fn peer(address: &str, _name: &str) -> Result<()> {
     let width = u32::from_str(&std::env::var("width")?)?;
     let height = u32::from_str(&std::env::var("height")?)?;
 
@@ -301,12 +301,12 @@ async fn peer(address: &str, name: &str) -> Result<()> {
     });
 
     tokio::task::spawn({
-        let tx = tx.clone();
-        let our_peer_id = our_peer_id.clone();
-        let last_connection_request = last_connection_request.clone();
+        let _tx = tx.clone();
+        let _our_peer_id = our_peer_id.clone();
+        let _last_connection_request = last_connection_request.clone();
         let peer_controls = peer_controls.clone();
         async move {
-            let (tx, mut rx) =
+            let (_tx, mut rx) =
                 media::produce(&std::env::var("media_filename")?, width, height).await?;
 
             while let Some(event) = rx.recv().await {

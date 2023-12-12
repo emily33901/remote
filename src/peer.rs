@@ -7,20 +7,20 @@ use crate::signalling::SignallingControl;
 use crate::video::{video_channel, VideoBuffer};
 use crate::{PeerId, ARBITRARY_CHANNEL_LIMIT};
 
-use eyre::{eyre, Result};
+use eyre::{Result};
 use media_engine::MediaEngine;
 use tokio::sync::mpsc;
 use webrtc::api::interceptor_registry::*;
 use webrtc::api::*;
-use webrtc::data_channel::data_channel_message::DataChannelMessage;
-use webrtc::data_channel::RTCDataChannel;
+
+
 use webrtc::ice_transport::ice_candidate::RTCIceCandidateInit;
 use webrtc::ice_transport::ice_server::RTCIceServer;
 use webrtc::interceptor::registry::Registry;
 use webrtc::peer_connection::configuration::RTCConfiguration;
-use webrtc::peer_connection::offer_answer_options::RTCOfferOptions;
+
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
-use webrtc::peer_connection::policy::ice_transport_policy::RTCIceTransportPolicy;
+
 use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 
 #[derive(Debug)]
@@ -40,7 +40,7 @@ pub(crate) enum PeerEvent {
 }
 
 pub(crate) async fn peer(
-    our_peer_id: PeerId,
+    _our_peer_id: PeerId,
     their_peer_id: PeerId,
     signalling_control: mpsc::Sender<SignallingControl>,
     controlling: bool,
@@ -57,7 +57,7 @@ pub(crate) async fn peer(
     // for each PeerConnection.
     let mut registry = Registry::new();
 
-    let mut setting_engine = setting_engine::SettingEngine::default();
+    let setting_engine = setting_engine::SettingEngine::default();
 
     // Use the default set of Interceptors
     registry = register_default_interceptors(registry, &mut m)?;
@@ -81,7 +81,7 @@ pub(crate) async fn peer(
     // Create a new RTCPeerConnection
     let peer_connection = Arc::new(api.new_peer_connection(config).await?);
 
-    let (done_tx, mut done_rx) = tokio::sync::mpsc::channel::<()>(1);
+    let (done_tx, _done_rx) = tokio::sync::mpsc::channel::<()>(1);
 
     // Set the handler for Peer connection state
     // This will notify you when the peer has connected/disconnected

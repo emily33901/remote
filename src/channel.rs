@@ -1,7 +1,6 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap},
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
     },
 };
@@ -9,13 +8,12 @@ use std::{
 use tokio::sync::{mpsc, Mutex};
 use webrtc::{
     data_channel::{
-        data_channel_init::RTCDataChannelInit, data_channel_message::DataChannelMessage,
-        data_channel_state::RTCDataChannelState, RTCDataChannel,
+        data_channel_init::RTCDataChannelInit, data_channel_message::DataChannelMessage, RTCDataChannel,
     },
     peer_connection::RTCPeerConnection,
 };
 
-use eyre::{eyre, Result};
+use eyre::{Result};
 
 use crate::{util, ARBITRARY_CHANNEL_LIMIT};
 
@@ -43,7 +41,7 @@ async fn on_datachannel(
 ) -> Result<()> {
     assert_eq!(channel.label(), our_label);
 
-    let id: u16 = channel.id();
+    let _id: u16 = channel.id();
 
     channel.on_close({
         let our_label = our_label.clone();
@@ -73,7 +71,7 @@ async fn on_datachannel(
         let our_label = our_label.clone();
         let channel = channel.clone();
         let event_tx = event_tx.clone();
-        let control_rx_holder = control_rx.clone();
+        let _control_rx_holder = control_rx.clone();
         Box::new(move || {
             let channel = channel.clone();
             Box::pin(async move {
