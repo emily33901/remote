@@ -5,7 +5,7 @@ use webrtc::{data_channel::RTCDataChannel, peer_connection::RTCPeerConnection};
 
 use crate::{
     channel::{channel, ChannelControl, ChannelEvent, ChannelStorage},
-    chunk::{chunk, Chunk, ChunkControl},
+    chunk::{assembly, chunk, AssemblyControl, Chunk, ChunkControl},
     util,
 };
 
@@ -43,10 +43,11 @@ pub(crate) async fn video_channel(
     .await?;
 
     let (chunk_tx, mut chunk_rx) = chunk::<Vec<u8>>(10_000).await?;
+    let (assembly_tx, mut assembly_rx) = assembly::<Vec<u8>>().await?;
 
     tokio::spawn({
         let tx = tx.clone();
-        let chunk_tx = chunk_tx.clone();
+        let assembly_tx = assembly_tx.clone();
         async move {
             while let Some(event) = rx.recv().await {
                 match event {
@@ -55,9 +56,9 @@ pub(crate) async fn video_channel(
                     ChannelEvent::Message(channel, message) => {
                         let chunk: Chunk = bincode::deserialize(&message.data).unwrap();
                         util::send(
-                            "video channel event to chunk control",
-                            &chunk_tx,
-                            ChunkControl::Chunk(chunk),
+                            "video channel event to assembly control",
+                            &assembly_tx,
+                            AssemblyControl::Chunk(chunk),
                         )
                         .await
                         .unwrap();
@@ -87,21 +88,25 @@ pub(crate) async fn video_channel(
     });
 
     tokio::spawn({
-        let tx = tx.clone();
         let event_tx = event_tx.clone();
+        async move {
+            while let Some(control) = assembly_rx.recv().await {
+                match control {
+                    crate::chunk::AssemblyEvent::Whole(whole) => {
+                        util::send("assembly video event", &event_tx, VideoEvent::Video(whole))
+                            .await
+                            .unwrap();
+                    }
+                }
+            }
+        }
+    });
+
+    tokio::spawn({
+        let tx = tx.clone();
         async move {
             while let Some(control) = chunk_rx.recv().await {
                 match control {
-                    crate::chunk::ChunkEvent::Whole(whole) => {
-                        log::debug!("video reassembled whole frame");
-                        util::send(
-                            "chunk event whole to video event",
-                            &event_tx,
-                            VideoEvent::Video(whole),
-                        )
-                        .await
-                        .unwrap();
-                    }
                     crate::chunk::ChunkEvent::Chunk(chunk) => {
                         util::send(
                             "chunk event chunk to channel control",

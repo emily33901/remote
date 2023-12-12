@@ -611,8 +611,8 @@ mod mf {
             output_texture: ID3D11Texture2D,
         ) -> Result<(bool, Option<std::time::SystemTime>)> {
             self.cur_time += elapsed.as_nanos() as i64 / 100;
-            let produced_video = self.video_frame(self.cur_time, output_texture)?;
 
+            let produced_video = self.video_frame(self.cur_time, output_texture)?;
             self.audio_frame(self.cur_time, output_audio)?;
 
             let next_deadline = std::time::SystemTime::UNIX_EPOCH

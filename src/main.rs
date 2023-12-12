@@ -56,7 +56,7 @@ impl std::error::Error for CommandParseError {
 impl FromStr for Command {
     type Err = CommandParseError;
 
-    fn from_str(s: &str) -> std::prelude::v1::Result<Self, Self::Err> {
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "server" => Ok(Self::SignallingServer),
             "peer" => Ok(Self::Peer),
@@ -190,10 +190,6 @@ async fn peer_inner(
 }
 
 async fn peer(address: &str, name: &str) -> Result<()> {
-    if name == "a" {
-        console_subscriber::init();
-    }
-
     let (tx, mut rx) = signalling::client(address).await?;
 
     let our_peer_id = Arc::new(Mutex::new(None));
@@ -293,12 +289,9 @@ async fn peer(address: &str, name: &str) -> Result<()> {
         let last_connection_request = last_connection_request.clone();
         let peer_controls = peer_controls.clone();
         async move {
-            let (tx, mut rx) = media::produce(
-                "E:/emily/downloads/scdl/badapple1080.mp4",
-                VIDEO_WIDTH,
-                VIDEO_HEIGHT,
-            )
-            .await?;
+            let (tx, mut rx) =
+                media::produce("E:/emily/downloads/lagtrain.mp4", VIDEO_WIDTH, VIDEO_HEIGHT)
+                    .await?;
 
             while let Some(event) = rx.recv().await {
                 match event {

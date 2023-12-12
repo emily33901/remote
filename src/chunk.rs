@@ -28,23 +28,86 @@ impl std::hash::Hash for Chunk {
 
 pub(crate) enum ChunkControl<T> {
     Whole(T),
+}
+
+pub(crate) enum ChunkEvent {
     Chunk(Chunk),
 }
 
-pub(crate) enum ChunkEvent<T> {
-    Whole(T),
+pub(crate) enum AssemblyControl {
     Chunk(Chunk),
+}
+
+pub(crate) enum AssemblyEvent<T> {
+    Whole(T),
+}
+
+pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + 'static>() -> Result<
+    (
+        mpsc::Sender<AssemblyControl>,
+        mpsc::Receiver<AssemblyEvent<T>>,
+    ),
+> {
+    let (control_tx, mut control_rx) = mpsc::channel(10);
+    let (event_tx, event_rx) = mpsc::channel(10);
+
+    tokio::spawn({
+        let event_tx = event_tx.clone();
+        async move {
+            let mut chunk_arrangement: HashMap<u32, HashSet<Chunk>> = HashMap::new();
+            while let Some(control) = control_rx.recv().await {
+                match control {
+                    AssemblyControl::Chunk(chunk) => {
+                        let total = chunk.total as usize;
+                        let chunk_id = chunk.id;
+                        let mut chunk_complete = false;
+
+                        if let Some(chunks) = chunk_arrangement.get_mut(&chunk.id) {
+                            // log::debug!(
+                            //     "!! chunk {chunk_id} part {} of {}",
+                            //     chunk.part,
+                            //     chunk.total
+                            // );
+
+                            chunks.insert(chunk);
+
+                            chunk_complete = chunks.len() == total;
+                        } else {
+                            let mut chunk_storage = HashSet::new();
+                            let id = chunk.id;
+                            chunk_storage.insert(chunk);
+                            chunk_arrangement.insert(id, chunk_storage);
+                        }
+
+                        if chunk_complete {
+                            if let Some(mut chunks) = chunk_arrangement.remove(&chunk_id) {
+                                log::debug!("!! assembling {chunk_id}");
+                                // got all chunks, build T
+                                let mut data = vec![];
+                                let mut chunks = chunks.drain().collect::<Vec<_>>();
+                                chunks.sort_by_cached_key(|c| c.part);
+                                // data.reserve();
+                                for chunk in chunks {
+                                    data.extend(chunk.data);
+                                }
+                                let v: T = bincode::deserialize(&data).unwrap();
+                                event_tx.send(AssemblyEvent::Whole(v)).await.unwrap();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    Ok((control_tx, event_rx))
 }
 
 pub(crate) async fn chunk<T: Serialize + for<'de> Deserialize<'de> + Send + 'static>(
     chunk_size: usize,
-) -> Result<(mpsc::Sender<ChunkControl<T>>, mpsc::Receiver<ChunkEvent<T>>)> {
+) -> Result<(mpsc::Sender<ChunkControl<T>>, mpsc::Receiver<ChunkEvent>)> {
     let (control_tx, mut control_rx) = mpsc::channel(10);
     let (event_tx, event_rx) = mpsc::channel(10);
-
-    // TODO(emily):
-    // there is a questionable contention here between outwards chunking and inwards reassembly
-    // and this can cause deadlocks.
 
     tokio::spawn({
         let event_tx = event_tx.clone();
@@ -86,49 +149,6 @@ pub(crate) async fn chunk<T: Serialize + for<'de> Deserialize<'de> + Send + 'sta
                                 }
                             }
                         });
-                    }
-                    ChunkControl::Chunk(chunk) => {
-                        let total = chunk.total as usize;
-                        let chunk_id = chunk.id;
-                        let mut chunk_complete = false;
-
-                        if let Some(chunks) = chunk_arrangement.get_mut(&chunk.id) {
-                            // log::debug!(
-                            //     "!! chunk {chunk_id} part {} of {}",
-                            //     chunk.part,
-                            //     chunk.total
-                            // );
-
-                            chunks.insert(chunk);
-
-                            chunk_complete = chunks.len() == total;
-                        } else {
-                            let mut chunk_storage = HashSet::new();
-                            let id = chunk.id;
-                            chunk_storage.insert(chunk);
-                            chunk_arrangement.insert(id, chunk_storage);
-                        }
-
-                        if chunk_complete {
-                            if let Some(mut chunks) = chunk_arrangement.remove(&chunk_id) {
-                                tokio::spawn({
-                                    let event_tx = event_tx.clone();
-                                    async move {
-                                        log::debug!("!! assembling {chunk_id}");
-                                        // got all chunks, build T
-                                        let mut data = vec![];
-                                        let mut chunks = chunks.drain().collect::<Vec<_>>();
-                                        chunks.sort_by_cached_key(|c| c.part);
-                                        // data.reserve();
-                                        for chunk in chunks {
-                                            data.extend(chunk.data);
-                                        }
-                                        let v: T = bincode::deserialize(&data).unwrap();
-                                        event_tx.send(ChunkEvent::Whole(v)).await.unwrap();
-                                    }
-                                });
-                            }
-                        }
                     }
                 }
             }
