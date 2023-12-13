@@ -53,10 +53,7 @@ pub(crate) async fn video_channel(
     )
     .await?;
 
-    let video_ttl = u64::from_str(&std::env::var("video_ttl")?)?;
-
-    let (chunk_tx, mut chunk_rx) =
-        chunk::<VideoBuffer>(20_000, std::time::Duration::from_millis(video_ttl)).await?;
+    let (chunk_tx, mut chunk_rx) = chunk::<VideoBuffer>(20_000).await?;
     let (assembly_tx, mut assembly_rx) = assembly::<VideoBuffer>().await?;
 
     tokio::spawn({
@@ -82,19 +79,29 @@ pub(crate) async fn video_channel(
         }
     });
 
+    let extra_duration = u32::from_str(&std::env::var("video_ttl")?)?;
+
     tokio::spawn({
         let chunk_tx = chunk_tx.clone();
         async move {
             while let Some(control) = control_rx.recv().await {
                 match control {
                     VideoControl::Video(video) => {
-                        util::send(
-                            "video control to chunk control",
-                            &chunk_tx,
-                            crate::chunk::ChunkControl::Whole(video),
-                        )
-                        .await
-                        .unwrap();
+                        let deadline = video.time;
+                        if let Ok(_) = deadline.elapsed() {
+                        } else {
+                            util::send(
+                                "video control to chunk control",
+                                &chunk_tx,
+                                crate::chunk::ChunkControl::Whole(
+                                    video,
+                                    deadline
+                                        + std::time::Duration::from_millis(extra_duration as u64),
+                                ),
+                            )
+                            .await
+                            .unwrap();
+                        }
                     }
                 }
             }

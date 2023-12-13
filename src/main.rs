@@ -23,7 +23,7 @@ use uuid::Uuid;
 pub(crate) type PeerId = Uuid;
 pub(crate) type ConnectionId = Uuid;
 
-const ARBITRARY_CHANNEL_LIMIT: usize = 10;
+const ARBITRARY_CHANNEL_LIMIT: usize = 5;
 
 #[derive(Debug, Clone)]
 enum Command {

@@ -30,7 +30,7 @@ impl std::hash::Hash for Chunk {
 }
 
 pub(crate) enum ChunkControl<T> {
-    Whole(T),
+    Whole(T, std::time::SystemTime),
 }
 
 pub(crate) enum ChunkEvent {
@@ -147,7 +147,6 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
 
 pub(crate) async fn chunk<T: Serialize + for<'de> Deserialize<'de> + Send + 'static>(
     chunk_size: usize,
-    ttl: std::time::Duration,
 ) -> Result<(mpsc::Sender<ChunkControl<T>>, mpsc::Receiver<ChunkEvent>)> {
     let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
@@ -162,12 +161,12 @@ pub(crate) async fn chunk<T: Serialize + for<'de> Deserialize<'de> + Send + 'sta
 
             while let Some(control) = control_rx.recv().await {
                 match control {
-                    ChunkControl::Whole(v) => {
+                    ChunkControl::Whole(v, ttl) => {
                         let chunk_id: u32 = next_chunk_id;
                         next_chunk_id += 1;
 
                         let event_tx = event_tx.clone();
-                        let deadline = std::time::SystemTime::now() + ttl;
+                        let deadline = ttl;
 
                         let encoded: Vec<u8> = match bincode::serialize(&v) {
                             Ok(v) => v,

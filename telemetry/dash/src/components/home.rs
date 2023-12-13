@@ -66,7 +66,7 @@ impl Home {
         match action {
             Action::Tick => {
                 if let Some(stream) = self.stream.as_mut() {
-                    const MAX_EVENTS_PER_TICK: usize = 10;
+                    const MAX_EVENTS_PER_TICK: usize = 50;
                     let mut events_count = 0;
                     while let Ok((client_id, event)) = stream.try_recv() {
                         self.events.push_front((client_id, event.clone()));
