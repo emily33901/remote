@@ -91,6 +91,14 @@ async fn on_datachannel(
                             .expect("expected channel control");
                         log::debug!("!! took channel {our_label} control");
 
+                        let sent_counter = telemetry::client::Counter::default();
+                        telemetry::client::watch_counter(
+                            &sent_counter,
+                            telemetry::Unit::Bytes,
+                            &format!("channel-{our_label}-sent"),
+                        )
+                        .await;
+
                         while let Some(control) = control_rx.recv().await {
                             match control {
                                 ChannelControl::SendText(text) => {
@@ -100,7 +108,9 @@ async fn on_datachannel(
                                     let len = data.len();
 
                                     match channel.send(&bytes::Bytes::from(data)).await {
-                                        Ok(_) => {}
+                                        Ok(_) => {
+                                            sent_counter.update(len);
+                                        }
                                         Err(err) => {
                                             log::warn!("channel {our_label} unable to send {err}");
                                         }
@@ -133,11 +143,23 @@ async fn on_datachannel(
         let channel = channel.clone();
         let event_tx = event_tx.clone();
         let our_label = our_label.clone();
+
+        let recv_counter = telemetry::client::Counter::default();
+        telemetry::client::watch_counter(
+            &recv_counter,
+            telemetry::Unit::Bytes,
+            &format!("channel-{our_label}-recv"),
+        )
+        .await;
+
         Box::new(move |msg: DataChannelMessage| {
             log::debug!("channel {our_label} message");
             let channel = channel.clone();
             let event_tx = event_tx.clone();
             let our_label = our_label.clone();
+
+            recv_counter.update(msg.data.len());
+
             Box::pin(async move {
                 util::send(
                     &format!("datachannel to channel {our_label} event"),

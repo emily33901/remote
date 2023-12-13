@@ -120,8 +120,8 @@ pub(crate) async fn peer(
     let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
-    telemetry::client::watch_channel(&control_tx, &format!("peer-control")).await;
-    telemetry::client::watch_channel(&event_tx, &format!("peer-event")).await;
+    telemetry::client::watch_channel(&control_tx, "peer-control").await;
+    telemetry::client::watch_channel(&event_tx, "peer-event").await;
 
     let channel_storage = ChannelStorage::default();
 

@@ -35,8 +35,8 @@ pub(crate) async fn video_channel(
     let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
-    telemetry::client::watch_channel(&control_tx, &format!("video-control")).await;
-    telemetry::client::watch_channel(&event_tx, &format!("video-event")).await;
+    telemetry::client::watch_channel(&control_tx, "video-control").await;
+    telemetry::client::watch_channel(&event_tx, "video-event").await;
 
     let (tx, mut rx) = channel(
         channel_storage,
@@ -53,7 +53,9 @@ pub(crate) async fn video_channel(
     )
     .await?;
 
-    let (chunk_tx, mut chunk_rx) = chunk::<VideoBuffer>(20_000).await?;
+    let video_chunk_size = usize::from_str(&std::env::var("video_chunk_size")?)?;
+
+    let (chunk_tx, mut chunk_rx) = chunk::<VideoBuffer>(video_chunk_size).await?;
     let (assembly_tx, mut assembly_rx) = assembly::<VideoBuffer>().await?;
 
     tokio::spawn({

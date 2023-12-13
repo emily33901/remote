@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use eyre::Result;
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 use tokio::sync::mpsc;
 
 use crate::ARBITRARY_CHANNEL_LIMIT;
@@ -54,8 +55,8 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
     let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
-    telemetry::client::watch_channel(&control_tx, &format!("assembly-control")).await;
-    telemetry::client::watch_channel(&event_tx, &format!("assembly-event")).await;
+    telemetry::client::watch_channel(&control_tx, "assembly-control").await;
+    telemetry::client::watch_channel(&event_tx, "assembly-event").await;
 
     tokio::spawn({
         let event_tx = event_tx.clone();
@@ -151,8 +152,8 @@ pub(crate) async fn chunk<T: Serialize + for<'de> Deserialize<'de> + Send + 'sta
     let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
-    telemetry::client::watch_channel(&control_tx, &format!("chunk-control")).await;
-    telemetry::client::watch_channel(&event_tx, &format!("chunk-event")).await;
+    telemetry::client::watch_channel(&control_tx, "chunk-control").await;
+    telemetry::client::watch_channel(&event_tx, "chunk-event").await;
 
     tokio::spawn({
         let event_tx = event_tx.clone();

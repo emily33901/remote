@@ -16,12 +16,23 @@ pub async fn stream() -> mpsc::Receiver<(ClientId, TelemetryEvent)> {
             tokio::spawn({
                 let tx = tx.clone();
                 async move {
-                    tx.send((id, TelemetryEvent::New)).await.unwrap();
+                    match async move {
+                        tx.send((id, TelemetryEvent::New)).await?;
 
-                    let mut bincode_reader = AsyncBincodeReader::from(client);
+                        let mut bincode_reader = AsyncBincodeReader::from(client);
 
-                    while let Some(Ok(event)) = bincode_reader.next().await {
-                        tx.send((id, event)).await.unwrap()
+                        while let Some(Ok(event)) = bincode_reader.next().await {
+                            tx.send((id, event)).await?
+                        }
+
+                        Ok::<_, eyre::Error>(())
+                    }
+                    .await
+                    {
+                        Ok(ok) => {}
+                        Err(err) => {
+                            log::warn!("client {id} went down {}", err);
+                        }
                     }
                 }
             });
