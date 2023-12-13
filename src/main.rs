@@ -13,7 +13,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 use std::{collections::HashMap, fmt::Display};
 
-use clap::{Parser};
+use clap::Parser;
 use eyre::Result;
 use peer::PeerControl;
 use signalling::SignallingControl;
@@ -201,6 +201,8 @@ async fn peer_inner(
 }
 
 async fn peer(address: &str, _name: &str) -> Result<()> {
+    telemetry::client::sink().await;
+
     let width = u32::from_str(&std::env::var("width")?)?;
     let height = u32::from_str(&std::env::var("height")?)?;
 

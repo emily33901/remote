@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
-use tokio::sync::{mpsc};
-use webrtc::{peer_connection::RTCPeerConnection};
+use tokio::sync::mpsc;
+use webrtc::peer_connection::RTCPeerConnection;
 
 use crate::{
     channel::{channel, ChannelControl, ChannelEvent, ChannelStorage},
     util, ARBITRARY_CHANNEL_LIMIT,
 };
 
-use eyre::{Result};
+use eyre::Result;
 
 pub(crate) enum AudioEvent {
     Audio(Vec<u8>),
@@ -28,6 +28,9 @@ pub(crate) async fn audio_channel(
 
     let (tx, mut rx) =
         channel(channel_storage, peer_connection, "audio", controlling, None).await?;
+
+    telemetry::client::watch_channel(&control_tx, "audio-control").await;
+    telemetry::client::watch_channel(&event_tx, "audio-event").await;
 
     tokio::spawn({
         let _tx = tx.clone();

@@ -54,6 +54,9 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
     let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
+    telemetry::client::watch_channel(&control_tx, &format!("assembly-control")).await;
+    telemetry::client::watch_channel(&event_tx, &format!("assembly-event")).await;
+
     tokio::spawn({
         let event_tx = event_tx.clone();
         async move {
@@ -148,6 +151,9 @@ pub(crate) async fn chunk<T: Serialize + for<'de> Deserialize<'de> + Send + 'sta
 ) -> Result<(mpsc::Sender<ChunkControl<T>>, mpsc::Receiver<ChunkEvent>)> {
     let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
+
+    telemetry::client::watch_channel(&control_tx, &format!("chunk-control")).await;
+    telemetry::client::watch_channel(&event_tx, &format!("chunk-event")).await;
 
     tokio::spawn({
         let event_tx = event_tx.clone();

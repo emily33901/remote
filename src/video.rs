@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tokio::sync::{mpsc};
-use webrtc::{peer_connection::RTCPeerConnection};
+use tokio::sync::mpsc;
+use webrtc::peer_connection::RTCPeerConnection;
 
 use crate::{
     channel::{channel, ChannelControl, ChannelEvent, ChannelStorage},
@@ -10,7 +10,7 @@ use crate::{
     util, ARBITRARY_CHANNEL_LIMIT,
 };
 
-use eyre::{Result};
+use eyre::Result;
 use std::str::FromStr;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -34,6 +34,9 @@ pub(crate) async fn video_channel(
 ) -> Result<(mpsc::Sender<VideoControl>, mpsc::Receiver<VideoEvent>)> {
     let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
+
+    telemetry::client::watch_channel(&control_tx, &format!("video-control")).await;
+    telemetry::client::watch_channel(&event_tx, &format!("video-event")).await;
 
     let (tx, mut rx) = channel(
         channel_storage,
