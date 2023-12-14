@@ -1,10 +1,10 @@
 mod audio;
-mod channel;
 mod chunk;
 mod logic;
 mod media;
 mod peer;
 mod player;
+mod rtc;
 mod signalling;
 mod util;
 mod video;
@@ -147,9 +147,11 @@ async fn peer_inner(
     let width = u32::from_str(&std::env::var("width")?)?;
     let height = u32::from_str(&std::env::var("height")?)?;
 
+    let api = rtc::Api::from_str(&std::env::var("webrtc_api")?)?;
+
     let mut peer_controls = peer_controls.lock().await;
 
-    let (control, mut event) = peer::peer(our_peer_id, their_peer_id, tx.clone(), controlling)
+    let (control, mut event) = peer::peer(api, our_peer_id, their_peer_id, tx.clone(), controlling)
         .await
         .unwrap();
 

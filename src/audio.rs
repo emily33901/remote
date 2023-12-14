@@ -4,7 +4,7 @@ use tokio::sync::mpsc;
 use webrtc::peer_connection::RTCPeerConnection;
 
 use crate::{
-    channel::{channel, ChannelControl, ChannelEvent, ChannelStorage},
+    rtc::{self, ChannelControl, ChannelEvent, ChannelStorage, PeerConnection},
     util, ARBITRARY_CHANNEL_LIMIT,
 };
 
@@ -20,14 +20,15 @@ pub(crate) enum AudioControl {
 
 pub(crate) async fn audio_channel(
     channel_storage: ChannelStorage,
-    peer_connection: Arc<RTCPeerConnection>,
+    peer_connection: Arc<dyn PeerConnection>,
     controlling: bool,
 ) -> Result<(mpsc::Sender<AudioControl>, mpsc::Receiver<AudioEvent>)> {
     let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
-    let (tx, mut rx) =
-        channel(channel_storage, peer_connection, "audio", controlling, None).await?;
+    let (tx, mut rx) = peer_connection
+        .channel(channel_storage, "audio", controlling, None)
+        .await?;
 
     telemetry::client::watch_channel(&control_tx, "audio-control").await;
     telemetry::client::watch_channel(&event_tx, "audio-event").await;
@@ -40,11 +41,11 @@ pub(crate) async fn audio_channel(
                 match event {
                     ChannelEvent::Open(_channel) => {}
                     ChannelEvent::Close(_channel) => {}
-                    ChannelEvent::Message(_channel, message) => {
+                    ChannelEvent::Message(_channel, data) => {
                         util::send(
                             "channel event to audio event",
                             &event_tx,
-                            AudioEvent::Audio(message.data.to_vec()),
+                            AudioEvent::Audio(data),
                         )
                         .await
                         .unwrap();

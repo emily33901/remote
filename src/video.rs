@@ -5,8 +5,8 @@ use tokio::sync::mpsc;
 use webrtc::peer_connection::RTCPeerConnection;
 
 use crate::{
-    channel::{channel, ChannelControl, ChannelEvent, ChannelStorage},
     chunk::{assembly, chunk, AssemblyControl, Chunk},
+    rtc::{self, ChannelControl, ChannelEvent, ChannelOptions, ChannelStorage, PeerConnection},
     util, ARBITRARY_CHANNEL_LIMIT,
 };
 
@@ -29,7 +29,7 @@ pub(crate) enum VideoControl {
 
 pub(crate) async fn video_channel(
     channel_storage: ChannelStorage,
-    peer_connection: Arc<RTCPeerConnection>,
+    peer_connection: Arc<dyn PeerConnection>,
     controlling: bool,
 ) -> Result<(mpsc::Sender<VideoControl>, mpsc::Receiver<VideoEvent>)> {
     let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
@@ -38,20 +38,17 @@ pub(crate) async fn video_channel(
     telemetry::client::watch_channel(&control_tx, "video-control").await;
     telemetry::client::watch_channel(&event_tx, "video-event").await;
 
-    let (tx, mut rx) = channel(
-        channel_storage,
-        peer_connection,
-        "video",
-        controlling,
-        Some(
-            webrtc::data_channel::data_channel_init::RTCDataChannelInit {
+    let (tx, mut rx) = peer_connection
+        .channel(
+            channel_storage,
+            "video",
+            controlling,
+            Some(ChannelOptions {
                 ordered: Some(false),
                 max_retransmits: Some(0),
-                ..Default::default()
-            },
-        ),
-    )
-    .await?;
+            }),
+        )
+        .await?;
 
     let video_chunk_size = usize::from_str(&std::env::var("video_chunk_size")?)?;
 
@@ -66,8 +63,8 @@ pub(crate) async fn video_channel(
                 match event {
                     ChannelEvent::Open(_channel) => {}
                     ChannelEvent::Close(_channel) => {}
-                    ChannelEvent::Message(_channel, message) => {
-                        let chunk: Chunk = bincode::deserialize(&message.data).unwrap();
+                    ChannelEvent::Message(_channel, data) => {
+                        let chunk: Chunk = bincode::deserialize(&data).unwrap();
                         util::send(
                             "video channel event to assembly control",
                             &assembly_tx,

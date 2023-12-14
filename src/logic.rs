@@ -1,14 +1,12 @@
-use eyre::{Result};
+use eyre::Result;
 use std::sync::Arc;
-use webrtc::{
-    peer_connection::RTCPeerConnection,
-};
+use webrtc::peer_connection::RTCPeerConnection;
 
-use crate::channel::{ChannelStorage};
+use crate::rtc::{ChannelStorage, PeerConnection};
 
 pub(crate) async fn logic_channel(
     _channel_storage: ChannelStorage,
-    _peer_connection: Arc<RTCPeerConnection>,
+    _peer_connection: Arc<dyn PeerConnection>,
     _controlling: bool,
 ) -> Result<()> {
     // let (tx, mut rx) =

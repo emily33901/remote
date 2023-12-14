@@ -11,19 +11,10 @@ use webrtc::{
 
 use eyre::Result;
 
-use crate::{util, ARBITRARY_CHANNEL_LIMIT};
-
-pub enum ChannelEvent {
-    Open(Arc<RTCDataChannel>),
-    Close(Arc<RTCDataChannel>),
-    Message(Arc<RTCDataChannel>, DataChannelMessage),
-}
-
-pub enum ChannelControl {
-    SendText(String),
-    Send(Vec<u8>),
-    Close,
-}
+use crate::{
+    rtc::{ChannelControl, ChannelEvent, ChannelStorage},
+    util, ARBITRARY_CHANNEL_LIMIT,
+};
 
 const BUFFERED_AMOUNT_LOW_THRESHOLD: usize = 500_000;
 const MAX_BUFFERED_AMOUNT: usize = 1_000_000;
@@ -164,7 +155,7 @@ async fn on_datachannel(
                 util::send(
                     &format!("datachannel to channel {our_label} event"),
                     &event_tx,
-                    ChannelEvent::Message(channel, msg),
+                    ChannelEvent::Message(channel, msg.data.to_vec()),
                 )
                 .await
                 .unwrap();
@@ -186,22 +177,6 @@ async fn on_datachannel(
 
     Ok(())
 }
-
-#[derive(derive_more::Deref, derive_more::DerefMut, Clone, Default)]
-pub(crate) struct ChannelStorage(
-    Arc<
-        Mutex<
-            HashMap<
-                String,
-                (
-                    Arc<Mutex<Option<mpsc::Receiver<ChannelControl>>>>,
-                    mpsc::Sender<ChannelEvent>,
-                    mpsc::Sender<ChannelControl>,
-                ),
-            >,
-        >,
-    >,
-);
 
 pub(crate) async fn channel(
     storage: ChannelStorage,
