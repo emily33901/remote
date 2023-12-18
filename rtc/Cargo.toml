@@ -1,0 +1,23 @@
+[package]
+name = "rtc"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+async-datachannel = "0.4.0"
+datachannel = "*"
+eyre = "0.6.10"
+parking_lot = "0.12.1"
+tokio = { version = "1.34.0", features = ["full"] }
+webrtc = "0.9.0"
+clap = { version = "4.4.8", features = ["derive"] }
+once_cell = { version = "1.18.0", features = ["parking_lot"] }
+derive_more = "0.99.17"
+serde_json = "1.0.108"
+serde = { version = "1.0", features = ["derive"] }
+telemetry = { path = "../telemetry" }
+async-trait = "0.1.74"
+log = "0.4.20"
+bytes = "1.5.0"

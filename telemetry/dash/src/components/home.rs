@@ -31,11 +31,8 @@ struct ChannelState {
 
 struct CounterState {
     name: String,
-    count: usize,
-    last: usize,
+    counts: VecDeque<(usize, std::time::Instant)>,
     unit: telemetry::Unit,
-    last_time: std::time::Instant,
-    time: std::time::Instant,
 }
 
 struct ClientState {
@@ -121,29 +118,26 @@ impl Home {
                                         CounterState {
                                             name: name,
                                             unit: unit,
-                                            count: 1,
-                                            last: 0,
-                                            time: std::time::Instant::now(),
-                                            last_time: std::time::Instant::now(),
+                                            counts: VecDeque::new(),
                                         },
                                     );
                                 }
                                 TelemetryEvent::Counter(CounterEvent::Statistic(statistic)) => {
                                     if let Some(counter) = client.counters.get_mut(&statistic.id) {
-                                        counter.last = counter.count;
-                                        counter.count = statistic.count;
-                                        counter.last_time = counter.time;
-                                        counter.time = std::time::Instant::now();
+                                        counter.counts.push_back((
+                                            statistic.count,
+                                            std::time::Instant::now(),
+                                        ));
+                                        if counter.counts.len() > 50 {
+                                            counter.counts.pop_front();
+                                        }
                                     } else {
                                         client.counters.insert(
                                             statistic.id,
                                             CounterState {
-                                                count: statistic.count,
                                                 unit: telemetry::Unit::Bytes,
                                                 name: format!("<unknown {}>", statistic.id),
-                                                last: 0,
-                                                time: std::time::Instant::now(),
-                                                last_time: std::time::Instant::now(),
+                                                counts: VecDeque::new(),
                                             },
                                         );
                                     }
@@ -260,15 +254,55 @@ impl Home {
     }
 
     fn format_counter(counter: &CounterState) -> String {
-        let diff = counter.count - counter.last;
-        let duration = counter.time - counter.last_time;
+        let recent_avg = if counter.counts.len() >= 2 {
+            let (count, time) = counter.counts[1];
+            let (last, last_time) = counter.counts[0];
+            Some((count - last) as f32 / (time.duration_since(last_time)).as_secs_f32())
+        } else {
+            None
+        };
+
+        let rolling_avg = if let (Some((_, old)), Some((_, new))) =
+            (counter.counts.front(), counter.counts.back())
+        {
+            let (total_count, total_duration) = counter
+                .counts
+                .iter()
+                .tuple_windows::<(&(usize, _), &(usize, _))>()
+                .into_iter()
+                .fold(
+                    (0.0, 0.0),
+                    |(total_count, total_time), ((last, last_time), (count, time))| {
+                        (
+                            total_count + ((count - last) as f32 / (1000.0 * 1000.0)),
+                            total_time + (time.duration_since(*last_time).as_secs_f32()),
+                        )
+                    },
+                );
+            Some(total_count / total_duration)
+        } else {
+            None
+        };
 
         match counter.unit {
             telemetry::Unit::Bytes => {
                 format!(
-                    "{:8.2}MB/s {:4} ",
-                    (diff as f32 / (1000.0 * 1000.0)) / duration.as_secs_f32(),
-                    counter.count,
+                    "{:>6}MB/s ({:>6}MB/s avg) {:8.2}MB",
+                    if let Some(recent_avg) = recent_avg {
+                        format!("{:>4.2}", recent_avg / (1000.0 * 1000.0))
+                    } else {
+                        "NaN".into()
+                    },
+                    if let Some(rolling_avg) = rolling_avg {
+                        format!("{:>4.2}", rolling_avg)
+                    } else {
+                        "NaN".into()
+                    },
+                    counter
+                        .counts
+                        .front()
+                        .map(|(c, _)| *c as f32 / (1000.0 * 1000.0))
+                        .unwrap_or_default(),
                 )
             }
         }

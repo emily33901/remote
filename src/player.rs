@@ -12,11 +12,6 @@ pub(crate) mod audio {
 
     use eyre::Result;
 
-    
-
-    
-    
-
     use crate::ARBITRARY_CHANNEL_LIMIT;
 
     #[derive(Debug)]
@@ -230,33 +225,34 @@ pub(crate) mod audio {
 }
 
 pub(crate) mod video {
-    use std::{mem::MaybeUninit};
+    use std::mem::MaybeUninit;
 
     use eyre::{eyre, Result};
-    use tokio::sync::mpsc;
+    use tokio::sync::{mpsc, mpsc::error::TryRecvError};
 
     use windows::{
         core::{s, ComInterface, PCSTR},
         Win32::{
-            Foundation::{HWND, LPARAM, LRESULT, S_OK, TRUE, WPARAM},
+            Foundation::{CloseHandle, HWND, LPARAM, LRESULT, S_OK, TRUE, WPARAM},
             Graphics::{
                 Direct3D::{Fxc::D3DCompile, *},
                 Direct3D11::*,
                 Dxgi::{
                     Common::{
-                        DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R32G32_FLOAT,
-                        DXGI_FORMAT_R8G8B8A8_UNORM,
-                    }, IDXGISwapChain, DXGI_SWAP_CHAIN_DESC,
-                    DXGI_USAGE_RENDER_TARGET_OUTPUT,
+                        DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12,
+                        DXGI_FORMAT_R32G32_FLOAT, DXGI_FORMAT_R8G8B8A8_UNORM,
+                        DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8_UNORM,
+                    },
+                    IDXGIKeyedMutex, IDXGIResource1, IDXGISwapChain, DXGI_SHARED_RESOURCE_READ,
+                    DXGI_SWAP_CHAIN_DESC, DXGI_USAGE_RENDER_TARGET_OUTPUT,
                 },
             },
             System::LibraryLoader::GetModuleHandleA,
             UI::WindowsAndMessaging::{
-                CreateWindowExA, DefWindowProcA, DispatchMessageA, LoadCursorW,
-                PeekMessageA, PostQuitMessage, RegisterClassExA,
-                CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, IDC_ARROW, MSG, PM_REMOVE, WINDOW_EX_STYLE, WM_CREATE, WM_DESTROY,
-                WNDCLASSEXA, WNDCLASS_STYLES, WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_SYSMENU,
-                WS_VISIBLE,
+                CreateWindowExA, DefWindowProcA, DispatchMessageA, LoadCursorW, PeekMessageA,
+                PostQuitMessage, RegisterClassExA, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT,
+                IDC_ARROW, MSG, PM_REMOVE, WINDOW_EX_STYLE, WM_CREATE, WM_DESTROY, WNDCLASSEXA,
+                WNDCLASS_STYLES, WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_VISIBLE,
             },
         },
     };
@@ -488,330 +484,429 @@ pub(crate) mod video {
         }
     }
 
-    pub(crate) fn sink(width: u32, height: u32) -> Result<mpsc::Sender<VideoBuffer>> {
-        let (tx, mut rx) = mpsc::channel::<VideoBuffer>(ARBITRARY_CHANNEL_LIMIT);
+    pub(crate) fn sink(width: u32, height: u32) -> Result<mpsc::Sender<ID3D11Texture2D>> {
+        let (tx, mut rx) = mpsc::channel::<ID3D11Texture2D>(ARBITRARY_CHANNEL_LIMIT);
 
-        tokio::spawn(async move {
-            tokio::task::spawn_blocking(move || -> eyre::Result<()> {
-                let (device, context, swap_chain) =
-                    create_device_and_swapchain(create_window()?, width, height)?;
+        tokio::spawn({
+            let tx = tx.clone();
 
-                let back_buffer: ID3D11Texture2D = unsafe { swap_chain.GetBuffer(0) }?;
-                let mut render_target: Option<ID3D11RenderTargetView> = None;
-                unsafe {
-                    device.CreateRenderTargetView(
-                        &back_buffer,
-                        None,
-                        Some(&mut render_target as *mut _),
-                    )
-                }?;
+            async move {
+                telemetry::client::watch_channel(&tx, "video sink").await;
 
-                let texture = create_texture(&device, width, height, DXGI_FORMAT_B8G8R8A8_UNORM)?;
-                let staging_texture =
-                    create_staging_texture(&device, width, height, DXGI_FORMAT_B8G8R8A8_UNORM)?;
+                match tokio::task::spawn_blocking(move || -> eyre::Result<()> {
+                    let (device, context, swap_chain) =
+                        create_device_and_swapchain(create_window()?, width, height)?;
 
-                unsafe { context.OMSetRenderTargets(Some(&[render_target.clone()]), None) };
+                    let back_buffer: ID3D11Texture2D = unsafe { swap_chain.GetBuffer(0) }?;
+                    let mut render_target: Option<ID3D11RenderTargetView> = None;
+                    unsafe {
+                        device.CreateRenderTargetView(
+                            &back_buffer,
+                            None,
+                            Some(&mut render_target as *mut _),
+                        )
+                    }?;
 
-                let render_target = render_target.unwrap();
+                    let texture = create_texture(&device, width, height, DXGI_FORMAT_NV12)?;
 
-                let viewport = D3D11_VIEWPORT {
-                    TopLeftX: 0.0,
-                    TopLeftY: 0.0,
-                    Width: width as f32,
-                    Height: height as f32,
-                    MinDepth: 0.0,
-                    MaxDepth: 1.0,
-                };
+                    unsafe { context.OMSetRenderTargets(Some(&[render_target.clone()]), None) };
 
-                unsafe { context.RSSetViewports(Some(&[viewport])) };
+                    let render_target = render_target.unwrap();
 
-                let sample_desc = D3D11_SAMPLER_DESC {
-                    Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
-                    AddressU: D3D11_TEXTURE_ADDRESS_CLAMP,
-                    AddressV: D3D11_TEXTURE_ADDRESS_CLAMP,
-                    AddressW: D3D11_TEXTURE_ADDRESS_CLAMP,
-                    ComparisonFunc: D3D11_COMPARISON_NEVER,
-                    MinLOD: 0.0,
-                    MaxLOD: f32::MAX,
-                    ..Default::default()
-                };
+                    let viewport = D3D11_VIEWPORT {
+                        TopLeftX: 0.0,
+                        TopLeftY: 0.0,
+                        Width: width as f32,
+                        Height: height as f32,
+                        MinDepth: 0.0,
+                        MaxDepth: 1.0,
+                    };
 
-                let mut sampler_state: Option<ID3D11SamplerState> = None;
-                unsafe {
-                    device.CreateSamplerState(&sample_desc, Some(&mut sampler_state as *mut _))
-                }?;
+                    unsafe { context.RSSetViewports(Some(&[viewport])) };
 
-                unsafe { context.PSSetSamplers(0, Some(&[sampler_state.clone()])) };
+                    let sample_desc = D3D11_SAMPLER_DESC {
+                        Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
+                        AddressU: D3D11_TEXTURE_ADDRESS_CLAMP,
+                        AddressV: D3D11_TEXTURE_ADDRESS_CLAMP,
+                        AddressW: D3D11_TEXTURE_ADDRESS_CLAMP,
+                        ComparisonFunc: D3D11_COMPARISON_NEVER,
+                        MinLOD: 0.0,
+                        MaxLOD: f32::MAX,
+                        ..Default::default()
+                    };
 
-                let vertex_shader_blob =
-                    compile_shader(include_str!("shader.hlsl"), s!("vs_main"), s!("vs_5_0"))?;
-                let mut vertex_shader: Option<ID3D11VertexShader> = None;
-                unsafe {
-                    let vertex_shader_blob_buffer = std::slice::from_raw_parts(
-                        vertex_shader_blob.GetBufferPointer() as *const u8,
-                        vertex_shader_blob.GetBufferSize(),
-                    );
-                    device.CreateVertexShader(
-                        vertex_shader_blob_buffer,
-                        None,
-                        Some(&mut vertex_shader as *mut _),
-                    )
-                }?;
+                    let mut sampler_state: Option<ID3D11SamplerState> = None;
+                    unsafe {
+                        device.CreateSamplerState(&sample_desc, Some(&mut sampler_state as *mut _))
+                    }?;
 
-                let vertex_shader = vertex_shader.unwrap();
+                    unsafe { context.PSSetSamplers(0, Some(&[sampler_state.clone()])) };
 
-                let pixel_shader_blob =
-                    compile_shader(include_str!("shader.hlsl"), s!("ps_main"), s!("ps_5_0"))?;
-                let mut pixel_shader: Option<ID3D11PixelShader> = None;
-                unsafe {
-                    let pixel_shader_blob_buffer = std::slice::from_raw_parts(
-                        pixel_shader_blob.GetBufferPointer() as *const u8,
-                        pixel_shader_blob.GetBufferSize(),
-                    );
-                    device.CreatePixelShader(
-                        pixel_shader_blob_buffer,
-                        None,
-                        Some(&mut pixel_shader as *mut _),
-                    )
-                }?;
+                    let vertex_shader_blob =
+                        compile_shader(include_str!("shader.hlsl"), s!("vs_main"), s!("vs_5_0"))?;
+                    let mut vertex_shader: Option<ID3D11VertexShader> = None;
+                    unsafe {
+                        let vertex_shader_blob_buffer = std::slice::from_raw_parts(
+                            vertex_shader_blob.GetBufferPointer() as *const u8,
+                            vertex_shader_blob.GetBufferSize(),
+                        );
+                        device.CreateVertexShader(
+                            vertex_shader_blob_buffer,
+                            None,
+                            Some(&mut vertex_shader as *mut _),
+                        )
+                    }?;
 
-                let pixel_shader = pixel_shader.unwrap();
+                    let vertex_shader = vertex_shader.unwrap();
 
-                let pipeline_items = &[
-                    D3D11_INPUT_ELEMENT_DESC {
-                        SemanticName: s!("POS"),
-                        SemanticIndex: 0,
-                        Format: DXGI_FORMAT_R32G32_FLOAT,
-                        InputSlot: 0,
-                        AlignedByteOffset: 0,
-                        InputSlotClass: D3D11_INPUT_PER_VERTEX_DATA,
-                        InstanceDataStepRate: 0,
-                    },
-                    D3D11_INPUT_ELEMENT_DESC {
-                        SemanticName: s!("TEX"),
-                        SemanticIndex: 0,
-                        Format: DXGI_FORMAT_R32G32_FLOAT,
-                        InputSlot: 0,
-                        AlignedByteOffset: D3D11_APPEND_ALIGNED_ELEMENT,
-                        InputSlotClass: D3D11_INPUT_PER_VERTEX_DATA,
-                        InstanceDataStepRate: 0,
-                    },
-                ];
+                    let pixel_shader_blob =
+                        compile_shader(include_str!("shader.hlsl"), s!("ps_main"), s!("ps_5_0"))?;
+                    let mut pixel_shader: Option<ID3D11PixelShader> = None;
+                    unsafe {
+                        let pixel_shader_blob_buffer = std::slice::from_raw_parts(
+                            pixel_shader_blob.GetBufferPointer() as *const u8,
+                            pixel_shader_blob.GetBufferSize(),
+                        );
+                        device.CreatePixelShader(
+                            pixel_shader_blob_buffer,
+                            None,
+                            Some(&mut pixel_shader as *mut _),
+                        )
+                    }?;
 
-                let mut input_layout: Option<ID3D11InputLayout> = None;
-                unsafe {
-                    let vertex_shader_blob_buffer = std::slice::from_raw_parts(
-                        vertex_shader_blob.GetBufferPointer() as *const u8,
-                        vertex_shader_blob.GetBufferSize(),
-                    );
-                    device.CreateInputLayout(
-                        pipeline_items,
-                        vertex_shader_blob_buffer,
-                        Some(&mut input_layout as *mut _),
-                    )
-                }?;
+                    let pixel_shader = pixel_shader.unwrap();
 
-                let input_layout = input_layout.unwrap();
+                    let pipeline_items = &[
+                        D3D11_INPUT_ELEMENT_DESC {
+                            SemanticName: s!("POS"),
+                            SemanticIndex: 0,
+                            Format: DXGI_FORMAT_R32G32_FLOAT,
+                            InputSlot: 0,
+                            AlignedByteOffset: 0,
+                            InputSlotClass: D3D11_INPUT_PER_VERTEX_DATA,
+                            InstanceDataStepRate: 0,
+                        },
+                        D3D11_INPUT_ELEMENT_DESC {
+                            SemanticName: s!("TEX"),
+                            SemanticIndex: 0,
+                            Format: DXGI_FORMAT_R32G32_FLOAT,
+                            InputSlot: 0,
+                            AlignedByteOffset: D3D11_APPEND_ALIGNED_ELEMENT,
+                            InputSlotClass: D3D11_INPUT_PER_VERTEX_DATA,
+                            InstanceDataStepRate: 0,
+                        },
+                    ];
 
-                #[repr(C)]
-                struct Vertex {
-                    x: f32,
-                    y: f32,
-                    u: f32,
-                    v: f32,
-                }
+                    let mut input_layout: Option<ID3D11InputLayout> = None;
+                    unsafe {
+                        let vertex_shader_blob_buffer = std::slice::from_raw_parts(
+                            vertex_shader_blob.GetBufferPointer() as *const u8,
+                            vertex_shader_blob.GetBufferSize(),
+                        );
+                        device.CreateInputLayout(
+                            pipeline_items,
+                            vertex_shader_blob_buffer,
+                            Some(&mut input_layout as *mut _),
+                        )
+                    }?;
 
-                let verticies = &[
-                    Vertex {
-                        x: -1.0,
-                        y: 1.0,
-                        u: 0.0,
-                        v: 0.0,
-                    },
-                    Vertex {
-                        x: 1.0,
-                        y: -1.0,
-                        u: 1.0,
-                        v: 1.0,
-                    },
-                    Vertex {
-                        x: -1.0,
-                        y: -1.0,
-                        u: 0.0,
-                        v: 1.0,
-                    },
-                    Vertex {
-                        x: -1.0,
-                        y: 1.0,
-                        u: 0.0,
-                        v: 0.0,
-                    },
-                    Vertex {
-                        x: 1.0,
-                        y: 1.0,
-                        u: 1.0,
-                        v: 0.0,
-                    },
-                    Vertex {
-                        x: 1.0,
-                        y: -1.0,
-                        u: 1.0,
-                        v: 1.0,
-                    },
-                ];
+                    let input_layout = input_layout.unwrap();
 
-                let topology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+                    #[repr(C)]
+                    struct Vertex {
+                        x: f32,
+                        y: f32,
+                        u: f32,
+                        v: f32,
+                    }
 
-                let buffer_desc = D3D11_BUFFER_DESC {
-                    Usage: D3D11_USAGE_DEFAULT,
-                    ByteWidth: (verticies.len() * std::mem::size_of::<Vertex>()) as u32,
-                    BindFlags: D3D11_BIND_VERTEX_BUFFER.0 as u32,
-                    ..Default::default()
-                };
+                    let verticies = &[
+                        Vertex {
+                            x: -1.0,
+                            y: 1.0,
+                            u: 0.0,
+                            v: 0.0,
+                        },
+                        Vertex {
+                            x: 1.0,
+                            y: -1.0,
+                            u: 1.0,
+                            v: 1.0,
+                        },
+                        Vertex {
+                            x: -1.0,
+                            y: -1.0,
+                            u: 0.0,
+                            v: 1.0,
+                        },
+                        Vertex {
+                            x: -1.0,
+                            y: 1.0,
+                            u: 0.0,
+                            v: 0.0,
+                        },
+                        Vertex {
+                            x: 1.0,
+                            y: 1.0,
+                            u: 1.0,
+                            v: 0.0,
+                        },
+                        Vertex {
+                            x: 1.0,
+                            y: -1.0,
+                            u: 1.0,
+                            v: 1.0,
+                        },
+                    ];
 
-                let subresource_data = D3D11_SUBRESOURCE_DATA {
-                    pSysMem: verticies.as_ptr() as *const std::ffi::c_void,
-                    ..Default::default()
-                };
+                    let topology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 
-                let mut vertex_buffer: Option<ID3D11Buffer> = None;
+                    let buffer_desc = D3D11_BUFFER_DESC {
+                        Usage: D3D11_USAGE_DEFAULT,
+                        ByteWidth: (verticies.len() * std::mem::size_of::<Vertex>()) as u32,
+                        BindFlags: D3D11_BIND_VERTEX_BUFFER.0 as u32,
+                        ..Default::default()
+                    };
 
-                unsafe {
-                    device.CreateBuffer(
-                        &buffer_desc as *const _,
-                        Some(&subresource_data as *const _),
-                        Some(&mut vertex_buffer as *mut _),
-                    )
-                }?;
+                    let subresource_data = D3D11_SUBRESOURCE_DATA {
+                        pSysMem: verticies.as_ptr() as *const std::ffi::c_void,
+                        ..Default::default()
+                    };
 
-                let mut texture_view: Option<ID3D11ShaderResourceView> = None;
+                    let mut vertex_buffer: Option<ID3D11Buffer> = None;
 
-                unsafe {
-                    let mut texture_view_desc: D3D11_SHADER_RESOURCE_VIEW_DESC =
-                        D3D11_SHADER_RESOURCE_VIEW_DESC {
-                            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                            ViewDimension: D3D11_SRV_DIMENSION_TEXTURE2D,
-                            ..Default::default()
+                    unsafe {
+                        device.CreateBuffer(
+                            &buffer_desc as *const _,
+                            Some(&subresource_data as *const _),
+                            Some(&mut vertex_buffer as *mut _),
+                        )
+                    }?;
+
+                    let mut texture_lum_view: Option<ID3D11ShaderResourceView> = None;
+
+                    unsafe {
+                        let mut texture_view_desc: D3D11_SHADER_RESOURCE_VIEW_DESC =
+                            D3D11_SHADER_RESOURCE_VIEW_DESC {
+                                Format: DXGI_FORMAT_R8_UNORM,
+                                ViewDimension: D3D11_SRV_DIMENSION_TEXTURE2D,
+                                ..Default::default()
+                            };
+
+                        texture_view_desc.Anonymous.Texture2D = D3D11_TEX2D_SRV {
+                            MostDetailedMip: 0,
+                            MipLevels: 1,
                         };
 
-                    texture_view_desc.Anonymous.Texture2D = D3D11_TEX2D_SRV {
-                        MostDetailedMip: 0,
-                        MipLevels: 1,
-                    };
-
-                    device.CreateShaderResourceView(
-                        &texture,
-                        Some(&texture_view_desc as *const _),
-                        Some(&mut texture_view as *mut _),
-                    )
-                }?;
-                // let vertex_buffer = vertex_buffer.unwrap();
-                let texture_view = texture_view.unwrap();
-
-                loop {
-                    unsafe {
-                        let mut message = MSG::default();
-                        while PeekMessageA(&mut message, None, 0, 0, PM_REMOVE).into() {
-                            DispatchMessageA(&message);
-                        }
-                    }
-
-                    // Copy from staging texture to real texture
-
-                    let region = D3D11_BOX {
-                        left: 0,
-                        top: 0,
-                        front: 0,
-                        right: width,
-                        bottom: height,
-                        back: 1,
-                    };
-                    unsafe {
-                        context.CopySubresourceRegion(
+                        device.CreateShaderResourceView(
                             &texture,
-                            0,
-                            0,
-                            0,
-                            0,
-                            &staging_texture,
-                            0,
-                            Some(&region),
+                            Some(&texture_view_desc as *const _),
+                            Some(&mut texture_lum_view as *mut _),
                         )
-                    };
+                    }?;
 
-                    unsafe { context.ClearRenderTargetView(&render_target, &[0.0, 0.0, 0.2, 1.0]) };
-
-                    unsafe {
-                        context.IASetInputLayout(&input_layout);
-                        context.VSSetShader(&vertex_shader, None);
-                        context.PSSetShader(&pixel_shader, None);
-                    }
+                    let mut texture_chrom_view: Option<ID3D11ShaderResourceView> = None;
 
                     unsafe {
-                        context.PSSetShaderResources(0, Some(&[Some(texture_view.clone())]));
-                        context.PSSetSamplers(0, Some(&[sampler_state.clone()]));
-                    }
+                        let mut texture_view_desc: D3D11_SHADER_RESOURCE_VIEW_DESC =
+                            D3D11_SHADER_RESOURCE_VIEW_DESC {
+                                Format: DXGI_FORMAT_R8G8_UNORM,
+                                ViewDimension: D3D11_SRV_DIMENSION_TEXTURE2D,
+                                ..Default::default()
+                            };
 
-                    unsafe {
-                        let mut offset = 0_u32;
-                        let stride = std::mem::size_of::<Vertex>() as u32;
-                        context.IASetVertexBuffers(
-                            0,
-                            1,
-                            Some(&vertex_buffer as *const _),
-                            Some(&stride as *const _),
-                            Some(&mut offset),
-                        );
-                        context.IASetPrimitiveTopology(topology);
-                    }
+                        texture_view_desc.Anonymous.Texture2D = D3D11_TEX2D_SRV {
+                            MostDetailedMip: 0,
+                            MipLevels: 1,
+                        };
 
-                    unsafe { context.Draw(verticies.len() as u32, 0) };
+                        device.CreateShaderResourceView(
+                            &texture,
+                            Some(&texture_view_desc as *const _),
+                            Some(&mut texture_chrom_view as *mut _),
+                        )
+                    }?;
 
-                    unsafe {
-                        match swap_chain.Present(1, 0) {
-                            S_OK => {}
-                            err => {
-                                log::debug!("Failed present {err}")
+                    // let vertex_buffer = vertex_buffer.unwrap();
+                    let texture_lum_view = texture_lum_view.unwrap();
+                    let texture_chrom_view = texture_chrom_view.unwrap();
+
+                    loop {
+                        unsafe {
+                            let mut message = MSG::default();
+                            while PeekMessageA(&mut message, None, 0, 0, PM_REMOVE).into() {
+                                DispatchMessageA(&message);
                             }
                         }
-                    };
 
-                    // Pull all frames out and use the latest
-                    let mut last_video = None;
-                    while let Ok(video) = rx.try_recv() {
-                        last_video = Some(video);
-                    }
+                        unsafe {
+                            context.ClearRenderTargetView(&render_target, &[0.0, 0.0, 0.2, 1.0])
+                        };
 
-                    if let Some(mut video) = last_video {
-                        if let Ok(duration) = video.time.elapsed() {
-                            log::info!("video frame is from {}ms ago", duration.as_millis());
+                        unsafe {
+                            context.IASetInputLayout(&input_layout);
+                            context.VSSetShader(&vertex_shader, None);
+                            context.PSSetShader(&pixel_shader, None);
                         }
-                        let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
-                        unsafe {
-                            context.Map(
-                                &staging_texture,
-                                0,
-                                D3D11_MAP_WRITE,
-                                0,
-                                Some(&mut mapped_resource as *mut _),
-                            )
-                        }?;
 
                         unsafe {
-                            std::ptr::copy(
-                                video.data.as_mut_ptr(),
-                                mapped_resource.pData as *mut u8,
-                                video.data.len(),
+                            context.PSSetShaderResources(
+                                0,
+                                Some(&[
+                                    Some(texture_lum_view.clone()),
+                                    Some(texture_chrom_view.clone()),
+                                ]),
                             );
+                            context.PSSetSamplers(0, Some(&[sampler_state.clone()]));
+                        }
+
+                        unsafe {
+                            let mut offset = 0_u32;
+                            let stride = std::mem::size_of::<Vertex>() as u32;
+                            context.IASetVertexBuffers(
+                                0,
+                                1,
+                                Some(&vertex_buffer as *const _),
+                                Some(&stride as *const _),
+                                Some(&mut offset),
+                            );
+                            context.IASetPrimitiveTopology(topology);
+                        }
+
+                        unsafe { context.Draw(verticies.len() as u32, 0) };
+
+                        unsafe {
+                            match swap_chain.Present(1, 0) {
+                                S_OK => {}
+                                err => {
+                                    log::debug!("Failed present {err}")
+                                }
+                            }
+                        };
+
+                        // Pull all frames out and use the latest
+                        let mut last_video = None;
+                        loop {
+                            match rx.try_recv() {
+                                Ok(frame) => last_video = Some(frame),
+                                Err(TryRecvError::Empty) => break,
+                                Err(TryRecvError::Disconnected) => {
+                                    log::error!("player disconnected");
+                                    Err(TryRecvError::Disconnected)?
+                                }
+                            }
+                        }
+                        while let Ok(video) = rx.try_recv() {
+                            last_video = Some(video);
+                        }
+
+                        if let Some(mut video) = last_video {
+                            // log::info!("player got frame");
+                            // if let Ok(duration) = video.time.elapsed() {
+                            //     log::info!("video frame is from {}ms ago", duration.as_millis());
+                            // }
+
+                            // let dxgi_resource: IDXGIResource1 = video.cast()?;
+                            // if unsafe { dxgi_resource.GetDevice::<ID3D11Device>()? } != device {
+                            //     let handle = unsafe {
+                            //         dxgi_resource.CreateSharedHandle(
+                            //             None,
+                            //             DXGI_SHARED_RESOURCE_READ,
+                            //             None,
+                            //         )?
+                            //     };
+
+                            //     let mut shared_video: Option<ID3D11Texture2D> = None;
+                            //     unsafe {
+                            //         device.OpenSharedResource(handle, &mut shared_video)?;
+                            //     }
+                            //     video = shared_video.unwrap();
+                            //     unsafe { CloseHandle(handle)? };
+                            // }
+
+                            let mut in_desc = D3D11_TEXTURE2D_DESC::default();
+                            let mut out_desc = D3D11_TEXTURE2D_DESC::default();
+                            unsafe {
+                                video.GetDesc(&mut in_desc as *mut _);
+                                texture.GetDesc(&mut out_desc as *mut _);
+                            }
+
+                            // If keyed mutex then lock keyed muticies
+
+                            let keyed_in = if D3D11_RESOURCE_MISC_FLAG(in_desc.MiscFlags as i32)
+                                .contains(D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX)
+                            {
+                                let keyed: IDXGIKeyedMutex = video.cast()?;
+                                unsafe {
+                                    keyed.AcquireSync(0, u32::MAX)?;
+                                }
+                                Some(keyed)
+                            } else {
+                                None
+                            };
+
+                            let keyed_out = if D3D11_RESOURCE_MISC_FLAG(out_desc.MiscFlags as i32)
+                                .contains(D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX)
+                            {
+                                let keyed: IDXGIKeyedMutex = texture.cast()?;
+                                unsafe {
+                                    keyed.AcquireSync(0, u32::MAX)?;
+                                }
+                                Some(keyed)
+                            } else {
+                                None
+                            };
+
+                            let device = unsafe { video.GetDevice() }?;
+                            let context = unsafe { device.GetImmediateContext() }?;
+
+                            let region = D3D11_BOX {
+                                left: 0,
+                                top: 0,
+                                front: 0,
+                                right: out_desc.Width,
+                                bottom: out_desc.Height,
+                                back: 1,
+                            };
+                            unsafe {
+                                context.CopySubresourceRegion(
+                                    &texture,
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    &video,
+                                    0,
+                                    Some(&region),
+                                )
+                            };
+
+                            if let Some(keyed) = keyed_out {
+                                unsafe {
+                                    keyed.ReleaseSync(0)?;
+                                }
+                            }
+
+                            if let Some(keyed) = keyed_in {
+                                unsafe {
+                                    keyed.ReleaseSync(0)?;
+                                }
+                            }
+                        } else {
+                            // log::warn!("no frame for player");
+                            // log::error!("!!! no video frame waiting?")
                         }
                     }
-                }
 
-                Ok(())
-            })
-            .await
-            .unwrap()
-            .unwrap();
+                    Ok(())
+                })
+                .await
+                .unwrap()
+                {
+                    Ok(_ok) => log::warn!("player sink down ok"),
+                    Err(err) => log::error!("player sink down error {err}"),
+                };
+            }
         });
 
         Ok(tx)

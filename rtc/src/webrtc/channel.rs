@@ -12,12 +12,27 @@ use webrtc::{
 use eyre::Result;
 
 use crate::{
-    rtc::{ChannelControl, ChannelEvent, ChannelStorage},
-    util, ARBITRARY_CHANNEL_LIMIT,
+    ARBITRARY_CHANNEL_LIMIT, {ChannelControl, ChannelEvent},
 };
 
 const BUFFERED_AMOUNT_LOW_THRESHOLD: usize = 500_000;
 const MAX_BUFFERED_AMOUNT: usize = 1_000_000;
+
+#[derive(derive_more::Deref, derive_more::DerefMut, Clone, Default)]
+pub(crate) struct ChannelStorage(
+    Arc<
+        Mutex<
+            HashMap<
+                String,
+                (
+                    Arc<Mutex<Option<mpsc::Receiver<ChannelControl>>>>,
+                    mpsc::Sender<ChannelEvent>,
+                    mpsc::Sender<ChannelControl>,
+                ),
+            >,
+        >,
+    >,
+);
 
 async fn on_datachannel(
     channel: Arc<RTCDataChannel>,
@@ -41,7 +56,7 @@ async fn on_datachannel(
             let event_tx = event_tx.clone();
             let control_tx = control_tx.clone();
             Box::pin(async move {
-                event_tx.send(ChannelEvent::Close(channel)).await.unwrap();
+                event_tx.send(ChannelEvent::Close).await.unwrap();
                 control_tx.send(ChannelControl::Close).await.unwrap();
             })
         })
@@ -63,10 +78,7 @@ async fn on_datachannel(
             let channel = channel.clone();
             Box::pin(async move {
                 log::debug!("!! channel {our_label} open");
-                event_tx
-                    .send(ChannelEvent::Open(channel.clone()))
-                    .await
-                    .unwrap();
+                event_tx.send(ChannelEvent::Open).await.unwrap();
 
                 // NOTE(emily): Only start handling controls once the data channel is open.
                 // This gives us natural back-pressure whilst we are waiting for the channel to open
@@ -152,13 +164,10 @@ async fn on_datachannel(
             recv_counter.update(msg.data.len());
 
             Box::pin(async move {
-                util::send(
-                    &format!("datachannel to channel {our_label} event"),
-                    &event_tx,
-                    ChannelEvent::Message(channel, msg.data.to_vec()),
-                )
-                .await
-                .unwrap();
+                event_tx
+                    .send(ChannelEvent::Message(msg.data.to_vec()))
+                    .await
+                    .unwrap();
             })
         })
     });

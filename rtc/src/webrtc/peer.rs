@@ -17,22 +17,23 @@ use webrtc::{
 };
 
 use crate::{
-    rtc::{self, RtcPeerControl, RtcPeerEvent, RtcPeerState},
-    ARBITRARY_CHANNEL_LIMIT,
+    ARBITRARY_CHANNEL_LIMIT, {RtcPeerControl, RtcPeerEvent, RtcPeerState},
 };
+
+use super::{channel::ChannelStorage, WebrtcRsPeerConnection};
 
 pub(crate) async fn rtc_peer(
     controlling: bool,
 ) -> Result<(
-    Arc<dyn rtc::PeerConnection>,
+    Arc<dyn crate::PeerConnection>,
     mpsc::Sender<RtcPeerControl>,
     mpsc::Receiver<RtcPeerEvent>,
 )> {
     let (control_tx, mut control_rx) = mpsc::channel::<RtcPeerControl>(ARBITRARY_CHANNEL_LIMIT);
     let (event_tx, event_rx) = mpsc::channel::<RtcPeerEvent>(ARBITRARY_CHANNEL_LIMIT);
 
-    telemetry::client::watch_channel(&control_tx, "rtcpeer-control").await;
-    telemetry::client::watch_channel(&event_tx, "rtcpeer-event").await;
+    telemetry::client::watch_channel(&control_tx, "webrtc-rs-peer-control").await;
+    telemetry::client::watch_channel(&event_tx, "webrtc-rs-peer-event").await;
 
     // Create a MediaEngine object to configure the supported codec
     let mut m = MediaEngine::default();
@@ -138,6 +139,7 @@ pub(crate) async fn rtc_peer(
     });
 
     tokio::spawn({
+        // TODO(emily): Keep weak here
         let peer_connection = peer_connection.clone();
         let event_tx = event_tx.clone();
         async move {
@@ -206,6 +208,13 @@ pub(crate) async fn rtc_peer(
                 }
             }
         }
+    });
+
+    let storage = ChannelStorage::default();
+
+    let peer_connection = Arc::new(WebrtcRsPeerConnection {
+        inner: peer_connection,
+        storage: storage,
     });
 
     Ok((peer_connection, control_tx, event_rx))

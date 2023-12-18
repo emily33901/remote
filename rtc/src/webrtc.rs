@@ -7,25 +7,31 @@ use ::webrtc::{data_channel::RTCDataChannel, peer_connection::RTCPeerConnection}
 use tokio::sync::mpsc;
 use webrtc::data_channel::data_channel_init::RTCDataChannelInit;
 
-use super::{
-    ChannelControl, ChannelEvent, ChannelOptions, ChannelStorage, DataChannel, PeerConnection,
-};
+use self::channel::ChannelStorage;
+
+use super::{ChannelControl, ChannelEvent, ChannelOptions, DataChannel, PeerConnection};
 use eyre::Result;
 
 impl DataChannel for RTCDataChannel {}
 
+pub(crate) struct WebrtcRsPeerConnection {
+    inner: Arc<RTCPeerConnection>,
+    storage: ChannelStorage,
+}
+
+impl WebrtcRsPeerConnection {}
+
 #[async_trait::async_trait]
-impl PeerConnection for RTCPeerConnection {
+impl PeerConnection for WebrtcRsPeerConnection {
     async fn channel(
         self: Arc<Self>,
-        storage: ChannelStorage,
         our_label: &str,
         controlling: bool,
         channel_options: Option<ChannelOptions>,
     ) -> Result<(mpsc::Sender<ChannelControl>, mpsc::Receiver<ChannelEvent>)> {
         channel::channel(
-            storage,
-            self,
+            self.storage.clone(),
+            self.inner.clone(),
             our_label,
             controlling,
             channel_options.map(|options| RTCDataChannelInit {
@@ -40,9 +46,9 @@ impl PeerConnection for RTCPeerConnection {
     async fn offer(&self, controlling: bool) -> Result<()> {
         // TODO(emily): I feel like this is a little silly.
         if controlling {
-            let offer = self.create_offer(None).await?;
+            let offer = self.inner.create_offer(None).await?;
             log::debug!("made offer {offer:?}");
-            self.set_local_description(offer).await?;
+            self.inner.set_local_description(offer).await?;
         }
 
         Ok(())

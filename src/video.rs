@@ -2,11 +2,10 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
-use webrtc::peer_connection::RTCPeerConnection;
 
 use crate::{
     chunk::{assembly, chunk, AssemblyControl, Chunk},
-    rtc::{self, ChannelControl, ChannelEvent, ChannelOptions, ChannelStorage, PeerConnection},
+    rtc::{ChannelControl, ChannelEvent, ChannelOptions, PeerConnection},
     util, ARBITRARY_CHANNEL_LIMIT,
 };
 
@@ -16,7 +15,9 @@ use std::str::FromStr;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) struct VideoBuffer {
     pub(crate) data: Vec<u8>,
+    pub(crate) sequence_header: Option<Vec<u8>>,
     pub(crate) time: std::time::SystemTime,
+    pub(crate) duration: std::time::Duration,
 }
 
 pub(crate) enum VideoEvent {
@@ -28,7 +29,6 @@ pub(crate) enum VideoControl {
 }
 
 pub(crate) async fn video_channel(
-    channel_storage: ChannelStorage,
     peer_connection: Arc<dyn PeerConnection>,
     controlling: bool,
 ) -> Result<(mpsc::Sender<VideoControl>, mpsc::Receiver<VideoEvent>)> {
@@ -40,7 +40,6 @@ pub(crate) async fn video_channel(
 
     let (tx, mut rx) = peer_connection
         .channel(
-            channel_storage,
             "video",
             controlling,
             Some(ChannelOptions {
@@ -61,9 +60,9 @@ pub(crate) async fn video_channel(
         async move {
             while let Some(event) = rx.recv().await {
                 match event {
-                    ChannelEvent::Open(_channel) => {}
-                    ChannelEvent::Close(_channel) => {}
-                    ChannelEvent::Message(_channel, data) => {
+                    ChannelEvent::Open => {}
+                    ChannelEvent::Close => {}
+                    ChannelEvent::Message(data) => {
                         let chunk: Chunk = bincode::deserialize(&data).unwrap();
                         util::send(
                             "video channel event to assembly control",

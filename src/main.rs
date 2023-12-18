@@ -4,7 +4,6 @@ mod logic;
 mod media;
 mod peer;
 mod player;
-mod rtc;
 mod signalling;
 mod util;
 mod video;
@@ -16,14 +15,16 @@ use std::{collections::HashMap, fmt::Display};
 use clap::Parser;
 use eyre::Result;
 use peer::PeerControl;
+use rtc;
 use signalling::SignallingControl;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::{mpsc, Mutex};
 use uuid::Uuid;
 
 pub(crate) type PeerId = Uuid;
 pub(crate) type ConnectionId = Uuid;
 
-const ARBITRARY_CHANNEL_LIMIT: usize = 50;
+const ARBITRARY_CHANNEL_LIMIT: usize = 10;
 
 #[derive(Debug, Clone)]
 enum Command {
@@ -81,6 +82,13 @@ struct Args {
 async fn main() -> Result<()> {
     // Configure logger at runtime
     let args = Args::parse();
+
+    let log_level = if "peer" == args.command {
+        log::LevelFilter::Info
+    } else {
+        log::LevelFilter::Debug
+    };
+
     fern::Dispatch::new()
         // Perform allocation-free log formatting
         .format(|out, message, record| {
@@ -92,7 +100,7 @@ async fn main() -> Result<()> {
             ))
         })
         // Add blanket level filter -
-        .level(log::LevelFilter::Info)
+        .level(log_level)
         // .level_for("remote", log::LevelFilter::Debug)
         .level_for("webrtc_sctp::association", log::LevelFilter::Info)
         .level_for("webrtc_sctp::stream", log::LevelFilter::Info)
@@ -146,6 +154,7 @@ async fn peer_inner(
 ) -> Result<()> {
     let width = u32::from_str(&std::env::var("width")?)?;
     let height = u32::from_str(&std::env::var("height")?)?;
+    let bitrate = u32::from_str(&std::env::var("bitrate")?)?;
 
     let api = rtc::Api::from_str(&std::env::var("webrtc_api")?)?;
 
@@ -172,12 +181,28 @@ async fn peer_inner(
         .await
         .unwrap();
 
+    let (h264_control, mut h264_event) =
+        media::decoder::h264_decoder(width, height, 30, bitrate).await?;
+
     let video_sink_tx = player::video::sink(width, height)?;
+
+    tokio::spawn({
+        async move {
+            while let Some(event) = h264_event.recv().await {
+                match event {
+                    media::decoder::DecoderEvent::Frame(tex, _) => {
+                        video_sink_tx.send(tex).await.unwrap()
+                    }
+                }
+            }
+        }
+    });
 
     tokio::spawn({
         async move {
             // NOTE(emily): Make sure to keep player alive
             let _player = audio_player;
+
             while let Some(event) = event.recv().await {
                 match event {
                     peer::PeerEvent::Audio(audio) => {
@@ -189,10 +214,10 @@ async fn peer_inner(
                     }
                     peer::PeerEvent::Video(video) => {
                         log::debug!("peer event video {}", video.data.len());
-                        util::send("PeerEvent to Player video", &video_sink_tx, video)
+                        let _ = h264_control
+                            .send(media::decoder::DecoderControl::Data(video))
                             .await
                             .unwrap();
-                        // video_sink_tx.send(video).await.unwrap();
                     }
                 }
             }
@@ -207,6 +232,7 @@ async fn peer(address: &str, _name: &str) -> Result<()> {
 
     let width = u32::from_str(&std::env::var("width")?)?;
     let height = u32::from_str(&std::env::var("height")?)?;
+    let bitrate = u32::from_str(&std::env::var("bitrate")?)?;
 
     let (tx, mut rx) = signalling::client(address).await?;
 
@@ -305,13 +331,14 @@ async fn peer(address: &str, _name: &str) -> Result<()> {
     });
 
     tokio::task::spawn({
+        let our_name = _name.to_owned();
         let _tx = tx.clone();
         let _our_peer_id = our_peer_id.clone();
         let _last_connection_request = last_connection_request.clone();
         let peer_controls = peer_controls.clone();
         async move {
             let (_tx, mut rx) =
-                media::produce(&std::env::var("media_filename")?, width, height).await?;
+                media::produce(&std::env::var("media_filename")?, width, height, bitrate).await?;
 
             while let Some(event) = rx.recv().await {
                 match event {
@@ -354,6 +381,7 @@ async fn peer(address: &str, _name: &str) -> Result<()> {
         let our_peer_id = our_peer_id.clone();
         let last_connection_request = last_connection_request.clone();
         let peer_controls = peer_controls.clone();
+
         move || {
             for line in std::io::stdin().lines() {
                 if let Ok(line) = line {
@@ -410,6 +438,7 @@ async fn peer(address: &str, _name: &str) -> Result<()> {
                                 connection_id,
                             ))?;
                         }
+
                         command => log::info!("Unknown command {command}"),
                     }
                 }

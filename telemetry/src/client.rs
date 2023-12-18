@@ -67,7 +67,7 @@ pub async fn watch_channel<T: Send + 'static>(sender: &mpsc::Sender<T>, name: &s
     });
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Counter(Arc<AtomicUsize>);
 
 impl Counter {

@@ -2,14 +2,13 @@ use std::sync::Arc;
 
 use crate::audio::audio_channel;
 use crate::logic::logic_channel;
-use crate::rtc::{self, ChannelStorage};
+use crate::rtc::{self};
 use crate::signalling::SignallingControl;
 use crate::video::{video_channel, VideoBuffer};
 use crate::{PeerId, ARBITRARY_CHANNEL_LIMIT};
 
 use eyre::Result;
 use tokio::sync::mpsc;
-use webrtc::api::*;
 
 #[derive(Debug)]
 pub(crate) enum PeerControl {
@@ -36,36 +35,24 @@ pub(crate) async fn peer(
 ) -> Result<(mpsc::Sender<PeerControl>, mpsc::Receiver<PeerEvent>)> {
     let (peer_connection, rtc_control, mut rtc_event) = api.peer(controlling).await?;
 
+    // TODO(emily): Funnelling audio + video through the same channel here creates a pinch point that can be less ideal.
     let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
     telemetry::client::watch_channel(&control_tx, "peer-control").await;
     telemetry::client::watch_channel(&event_tx, "peer-event").await;
 
-    let channel_storage = ChannelStorage::default();
-
-    logic_channel(
-        channel_storage.clone(),
-        peer_connection.clone(),
-        controlling,
-    )
-    .await?;
-    let (audio_tx, mut audio_rx) = audio_channel(
-        channel_storage.clone(),
-        peer_connection.clone(),
-        controlling,
-    )
-    .await?;
-    let (video_tx, mut video_rx) = video_channel(
-        channel_storage.clone(),
-        peer_connection.clone(),
-        controlling,
-    )
-    .await?;
+    logic_channel(peer_connection.clone(), controlling).await?;
+    let (audio_tx, mut audio_rx) = audio_channel(peer_connection.clone(), controlling).await?;
+    let (video_tx, mut video_rx) = video_channel(peer_connection.clone(), controlling).await?;
 
     tokio::spawn({
         let rtc_control = rtc_control.clone();
+        let peer_connection = peer_connection.clone();
         async move {
+            // keep peer connection alive
+            let _peer_connection = peer_connection;
+
             while let Some(control) = control_rx.recv().await {
                 // log::debug!("peer control {control:?}");
                 match control {
