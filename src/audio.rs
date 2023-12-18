@@ -30,19 +30,34 @@ pub(crate) async fn audio_channel(
         let _tx = tx.clone();
         let event_tx = event_tx.clone();
         async move {
-            while let Some(event) = rx.recv().await {
-                match event {
-                    ChannelEvent::Open => {}
-                    ChannelEvent::Close => {}
-                    ChannelEvent::Message(data) => {
-                        util::send(
-                            "channel event to audio event",
-                            &event_tx,
-                            AudioEvent::Audio(data),
-                        )
-                        .await
-                        .unwrap();
+            match tokio::spawn(async move {
+                while let Some(event) = rx.recv().await {
+                    match event {
+                        ChannelEvent::Open => {}
+                        ChannelEvent::Close => {}
+                        ChannelEvent::Message(data) => {
+                            util::send(
+                                "channel event to audio event",
+                                &event_tx,
+                                AudioEvent::Audio(data),
+                            )
+                            .await?;
+                        }
                     }
+                }
+
+                eyre::Ok(())
+            })
+            .await
+            {
+                Ok(r) => match r {
+                    Ok(_) => {}
+                    Err(err) => {
+                        log::error!("audio channel event error {err}");
+                    }
+                },
+                Err(err) => {
+                    log::error!("audio channel event join error {err}");
                 }
             }
         }
@@ -51,17 +66,27 @@ pub(crate) async fn audio_channel(
     tokio::spawn({
         let tx = tx.clone();
         async move {
-            while let Some(control) = control_rx.recv().await {
-                match control {
-                    // TODO(emily): we should be pulling as much data as possible out of the
-                    // channel here and passing to ChunkControl.
-                    AudioControl::Audio(audio) => util::send(
-                        "audio control to channel control",
-                        &tx,
-                        ChannelControl::Send(audio),
-                    )
-                    .await
-                    .unwrap(),
+            match tokio::spawn(async move {
+                while let Some(control) = control_rx.recv().await {
+                    match control {
+                        // TODO(emily): we should be pulling as much data as possible out of the
+                        // channel here and passing to ChunkControl.
+                        AudioControl::Audio(audio) => tx.send(ChannelControl::Send(audio)).await?,
+                    }
+                }
+
+                eyre::Ok(())
+            })
+            .await
+            {
+                Ok(r) => match r {
+                    Ok(_) => {}
+                    Err(err) => {
+                        log::error!("audio channel control error {err}");
+                    }
+                },
+                Err(err) => {
+                    log::error!("audio channel control join error {err}");
                 }
             }
         }

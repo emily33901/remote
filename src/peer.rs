@@ -1,5 +1,3 @@
-
-
 use crate::audio::audio_channel;
 use crate::logic::logic_channel;
 use crate::rtc::{self};
@@ -11,6 +9,9 @@ use eyre::Result;
 use tokio::sync::mpsc;
 
 #[derive(Debug)]
+pub(crate) enum PeerError {}
+
+#[derive(Debug)]
 pub(crate) enum PeerControl {
     Offer(String),
     Answer(String),
@@ -18,12 +19,15 @@ pub(crate) enum PeerControl {
 
     Audio(Vec<u8>),
     Video(VideoBuffer),
+
+    Die,
 }
 
 #[derive(Debug)]
 pub(crate) enum PeerEvent {
     Audio(Vec<u8>),
     Video(VideoBuffer),
+    // Error(PeerError),
 }
 
 pub(crate) async fn peer(
@@ -50,57 +54,54 @@ pub(crate) async fn peer(
         let rtc_control = rtc_control.clone();
         let peer_connection = peer_connection.clone();
         async move {
-            // keep peer connection alive
-            let _peer_connection = peer_connection;
+            match tokio::spawn(async move {
+                // keep peer connection alive
+                let _peer_connection = peer_connection;
 
-            while let Some(control) = control_rx.recv().await {
-                // log::debug!("peer control {control:?}");
-                match control {
-                    PeerControl::Offer(offer) => {
-                        rtc_control
-                            .send(rtc::RtcPeerControl::Offer(offer))
-                            .await
-                            .unwrap();
-                    }
-                    PeerControl::Answer(answer) => {
-                        rtc_control
-                            .send(rtc::RtcPeerControl::Answer(answer))
-                            .await
-                            .unwrap();
-                    }
-                    PeerControl::IceCandidate(ice_candidate) => {
-                        rtc_control
-                            .send(rtc::RtcPeerControl::IceCandidate(ice_candidate))
-                            .await
-                            .unwrap();
-                    }
-                    PeerControl::Audio(audio) => {
-                        audio_tx
-                            .send(crate::audio::AudioControl::Audio(audio))
-                            .await
-                            .unwrap();
-                    }
-                    PeerControl::Video(video) => {
-                        video_tx
-                            .send(crate::video::VideoControl::Video(video))
-                            .await
-                            .unwrap();
+                while let Some(control) = control_rx.recv().await {
+                    // log::debug!("peer control {control:?}");
+                    match control {
+                        PeerControl::Offer(offer) => {
+                            rtc_control.send(rtc::RtcPeerControl::Offer(offer)).await?;
+                        }
+                        PeerControl::Answer(answer) => {
+                            rtc_control
+                                .send(rtc::RtcPeerControl::Answer(answer))
+                                .await?;
+                        }
+                        PeerControl::IceCandidate(ice_candidate) => {
+                            rtc_control
+                                .send(rtc::RtcPeerControl::IceCandidate(ice_candidate))
+                                .await?;
+                        }
+                        PeerControl::Audio(audio) => {
+                            audio_tx
+                                .send(crate::audio::AudioControl::Audio(audio))
+                                .await?;
+                        }
+                        PeerControl::Video(video) => {
+                            video_tx
+                                .send(crate::video::VideoControl::Video(video))
+                                .await?;
+                        }
+                        PeerControl::Die => {
+                            log::info!("peer control got die");
+                            break;
+                        }
                     }
                 }
-            }
-            log::debug!("peer control going down");
-        }
-    });
-
-    tokio::spawn({
-        let event_tx = event_tx.clone();
-        async move {
-            while let Some(event) = audio_rx.recv().await {
-                match event {
-                    crate::audio::AudioEvent::Audio(audio) => {
-                        // log::debug!("audio event {}", audio.len());
-                        event_tx.send(PeerEvent::Audio(audio)).await.unwrap();
+                eyre::Ok(())
+            })
+            .await
+            {
+                Ok(r) => match r {
+                    Ok(_) => {}
+                    Err(err) => {
+                        log::error!("peer control error {err}");
                     }
+                },
+                Err(err) => {
+                    log::error!("peer control join error {err}");
                 }
             }
         }
@@ -109,12 +110,56 @@ pub(crate) async fn peer(
     tokio::spawn({
         let event_tx = event_tx.clone();
         async move {
-            while let Some(event) = video_rx.recv().await {
-                match event {
-                    crate::video::VideoEvent::Video(video) => {
-                        // log::debug!("video event {}", video.len());
-                        event_tx.send(PeerEvent::Video(video)).await.unwrap();
+            match tokio::spawn(async move {
+                while let Some(event) = audio_rx.recv().await {
+                    match event {
+                        crate::audio::AudioEvent::Audio(audio) => {
+                            event_tx.send(PeerEvent::Audio(audio)).await?;
+                        }
                     }
+                }
+
+                eyre::Ok(())
+            })
+            .await
+            {
+                Ok(r) => match r {
+                    Ok(_) => {}
+                    Err(err) => {
+                        log::error!("audio rx error {err}");
+                    }
+                },
+                Err(err) => {
+                    log::error!("audio event join error {err}");
+                }
+            }
+        }
+    });
+
+    tokio::spawn({
+        let event_tx = event_tx.clone();
+        async move {
+            match tokio::spawn(async move {
+                while let Some(event) = video_rx.recv().await {
+                    match event {
+                        crate::video::VideoEvent::Video(video) => {
+                            event_tx.send(PeerEvent::Video(video)).await?;
+                        }
+                    }
+                }
+
+                eyre::Ok(())
+            })
+            .await
+            {
+                Ok(r) => match r {
+                    Ok(_) => {}
+                    Err(err) => {
+                        log::error!("video rx error {err}");
+                    }
+                },
+                Err(err) => {
+                    log::error!("video event join error {err}");
                 }
             }
         }
@@ -123,29 +168,45 @@ pub(crate) async fn peer(
     tokio::spawn({
         let signalling_control = signalling_control.clone();
         async move {
-            while let Some(event) = rtc_event.recv().await {
-                match event {
-                    rtc::RtcPeerEvent::IceCandidate(candidate) => {
-                        signalling_control
-                            .send(SignallingControl::IceCandidate(their_peer_id, candidate))
-                            .await
-                            .unwrap();
+            match tokio::spawn(async move {
+                while let Some(event) = rtc_event.recv().await {
+                    match event {
+                        rtc::RtcPeerEvent::IceCandidate(candidate) => {
+                            signalling_control
+                                .send(SignallingControl::IceCandidate(their_peer_id, candidate))
+                                .await?;
+                        }
+                        rtc::RtcPeerEvent::StateChange(state_change) => {
+                            log::info!("peer state change: {state_change:?}");
+                            if let rtc::RtcPeerState::Failed = state_change {
+                                break;
+                            }
+                        }
+                        rtc::RtcPeerEvent::Offer(offer) => {
+                            signalling_control
+                                .send(SignallingControl::Offer(their_peer_id, offer))
+                                .await?;
+                        }
+                        rtc::RtcPeerEvent::Answer(answer) => {
+                            signalling_control
+                                .send(SignallingControl::Answer(their_peer_id, answer))
+                                .await?;
+                        }
                     }
-                    rtc::RtcPeerEvent::StateChange(state_change) => {
-                        log::info!("Peer state change: {state_change:?}")
+                }
+
+                eyre::Ok(())
+            })
+            .await
+            {
+                Ok(r) => match r {
+                    Ok(_) => {}
+                    Err(err) => {
+                        log::error!("rtc_event error {err}");
                     }
-                    rtc::RtcPeerEvent::Offer(offer) => {
-                        signalling_control
-                            .send(SignallingControl::Offer(their_peer_id, offer))
-                            .await
-                            .unwrap();
-                    }
-                    rtc::RtcPeerEvent::Answer(answer) => {
-                        signalling_control
-                            .send(SignallingControl::Answer(their_peer_id, answer))
-                            .await
-                            .unwrap();
-                    }
+                },
+                Err(err) => {
+                    log::error!("rtc_event join error {err}");
                 }
             }
         }

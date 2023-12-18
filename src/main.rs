@@ -438,6 +438,13 @@ async fn peer(address: &str, _name: &str) -> Result<()> {
                                 connection_id,
                             ))?;
                         }
+                        "die" => {
+                            tokio::spawn(async move {
+                                for (_, control) in peer_controls.lock().await.drain() {
+                                    control.send(PeerControl::Die).await.unwrap();
+                                }
+                            });
+                        }
 
                         command => log::info!("Unknown command {command}"),
                     }

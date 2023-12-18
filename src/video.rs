@@ -58,20 +58,35 @@ pub(crate) async fn video_channel(
         let _tx = tx.clone();
         let assembly_tx = assembly_tx.clone();
         async move {
-            while let Some(event) = rx.recv().await {
-                match event {
-                    ChannelEvent::Open => {}
-                    ChannelEvent::Close => {}
-                    ChannelEvent::Message(data) => {
-                        let chunk: Chunk = bincode::deserialize(&data).unwrap();
-                        util::send(
-                            "video channel event to assembly control",
-                            &assembly_tx,
-                            AssemblyControl::Chunk(chunk),
-                        )
-                        .await
-                        .unwrap();
+            match tokio::spawn(async move {
+                while let Some(event) = rx.recv().await {
+                    match event {
+                        ChannelEvent::Open => {}
+                        ChannelEvent::Close => {}
+                        ChannelEvent::Message(data) => {
+                            let chunk: Chunk = bincode::deserialize(&data).unwrap();
+                            util::send(
+                                "video channel event to assembly control",
+                                &assembly_tx,
+                                AssemblyControl::Chunk(chunk),
+                            )
+                            .await?
+                        }
                     }
+                }
+
+                eyre::Ok(())
+            })
+            .await
+            {
+                Ok(r) => match r {
+                    Ok(_) => {}
+                    Err(err) => {
+                        log::error!("video channel event error {err}");
+                    }
+                },
+                Err(err) => {
+                    log::error!("video channel event join error {err}");
                 }
             }
         }
@@ -82,21 +97,35 @@ pub(crate) async fn video_channel(
     tokio::spawn({
         let chunk_tx = chunk_tx.clone();
         async move {
-            while let Some(control) = control_rx.recv().await {
-                match control {
-                    VideoControl::Video(video) => {
-                        let deadline = video.time;
-                        if let Ok(_) = deadline.elapsed() {
-                        } else {
-                            util::send(
-                                "video control to chunk control",
-                                &chunk_tx,
-                                crate::chunk::ChunkControl::Whole(video, deadline),
-                            )
-                            .await
-                            .unwrap();
+            match tokio::spawn(async move {
+                while let Some(control) = control_rx.recv().await {
+                    match control {
+                        VideoControl::Video(video) => {
+                            let deadline = video.time;
+                            if let Ok(_) = deadline.elapsed() {
+                            } else {
+                                util::send(
+                                    "video control to chunk control",
+                                    &chunk_tx,
+                                    crate::chunk::ChunkControl::Whole(video, deadline),
+                                )
+                                .await?;
+                            }
                         }
                     }
+                }
+                eyre::Ok(())
+            })
+            .await
+            {
+                Ok(r) => match r {
+                    Ok(_) => {}
+                    Err(err) => {
+                        log::error!("video channel control error {err}");
+                    }
+                },
+                Err(err) => {
+                    log::error!("video channel control join error {err}");
                 }
             }
         }
@@ -105,13 +134,27 @@ pub(crate) async fn video_channel(
     tokio::spawn({
         let event_tx = event_tx.clone();
         async move {
-            while let Some(control) = assembly_rx.recv().await {
-                match control {
-                    crate::chunk::AssemblyEvent::Whole(whole) => {
-                        util::send("assembly video event", &event_tx, VideoEvent::Video(whole))
-                            .await
-                            .unwrap();
+            match tokio::spawn(async move {
+                while let Some(control) = assembly_rx.recv().await {
+                    match control {
+                        crate::chunk::AssemblyEvent::Whole(whole) => {
+                            util::send("assembly video event", &event_tx, VideoEvent::Video(whole))
+                                .await?;
+                        }
                     }
+                }
+                eyre::Ok(())
+            })
+            .await
+            {
+                Ok(r) => match r {
+                    Ok(_) => {}
+                    Err(err) => {
+                        log::error!("video channel assembly event error {err}");
+                    }
+                },
+                Err(err) => {
+                    log::error!("video channel assembly event join error {err}");
                 }
             }
         }
@@ -120,18 +163,32 @@ pub(crate) async fn video_channel(
     tokio::spawn({
         let tx = tx.clone();
         async move {
-            while let Some(control) = chunk_rx.recv().await {
-                match control {
-                    crate::chunk::ChunkEvent::Chunk(chunk) => {
-                        util::send(
-                            "chunk event chunk to channel control",
-                            &tx,
-                            ChannelControl::Send(bincode::serialize(&chunk).unwrap()),
-                        )
-                        .await
-                        .unwrap();
-                        // log::debug!("video chunking frame");
+            match tokio::spawn(async move {
+                while let Some(control) = chunk_rx.recv().await {
+                    match control {
+                        crate::chunk::ChunkEvent::Chunk(chunk) => {
+                            util::send(
+                                "chunk event chunk to channel control",
+                                &tx,
+                                ChannelControl::Send(bincode::serialize(&chunk)?),
+                            )
+                            .await?;
+                        }
                     }
+                }
+
+                eyre::Ok(())
+            })
+            .await
+            {
+                Ok(r) => match r {
+                    Ok(_) => {}
+                    Err(err) => {
+                        log::error!("video channel chunk event error {err}");
+                    }
+                },
+                Err(err) => {
+                    log::error!("video channel chunk event join error {err}");
                 }
             }
         }

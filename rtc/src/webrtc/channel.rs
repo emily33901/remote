@@ -47,12 +47,10 @@ async fn on_datachannel(
 
     channel.on_close({
         let our_label = our_label.clone();
-        let channel = channel.clone();
         let event_tx = event_tx.clone();
         let control_tx = control_tx.clone();
         Box::new(move || {
             log::debug!("channel {our_label} closed");
-            let channel = channel.clone();
             let event_tx = event_tx.clone();
             let control_tx = control_tx.clone();
             Box::pin(async move {
@@ -71,11 +69,11 @@ async fn on_datachannel(
 
     channel.on_open({
         let our_label = our_label.clone();
-        let channel = channel.clone();
+        let channel = Arc::downgrade(&channel);
         let event_tx = event_tx.clone();
         let _control_rx_holder = control_rx.clone();
         Box::new(move || {
-            let channel = channel.clone();
+            // let channel = channel.clone();
             Box::pin(async move {
                 log::debug!("!! channel {our_label} open");
                 event_tx.send(ChannelEvent::Open).await.unwrap();
@@ -87,53 +85,76 @@ async fn on_datachannel(
                     let control_rx_holder = control_rx.clone();
                     let channel = channel.clone();
                     async move {
-                        let mut control_rx = control_rx_holder
-                            .lock()
-                            .await
-                            .take()
-                            .expect("expected channel control");
-                        log::debug!("!! took channel {our_label} control");
+                        match tokio::spawn(async move {
+                            let mut control_rx = control_rx_holder
+                                .lock()
+                                .await
+                                .take()
+                                .expect("expected channel control");
+                            log::debug!("!! took channel {our_label} control");
 
-                        let sent_counter = telemetry::client::Counter::default();
-                        telemetry::client::watch_counter(
-                            &sent_counter,
-                            telemetry::Unit::Bytes,
-                            &format!("channel-{our_label}-sent"),
-                        )
-                        .await;
+                            let sent_counter = telemetry::client::Counter::default();
+                            telemetry::client::watch_counter(
+                                &sent_counter,
+                                telemetry::Unit::Bytes,
+                                &format!("channel-{our_label}-sent"),
+                            )
+                            .await;
 
-                        while let Some(control) = control_rx.recv().await {
-                            match control {
-                                ChannelControl::SendText(text) => {
-                                    channel.send_text(text).await.unwrap();
-                                }
-                                ChannelControl::Send(data) => {
-                                    let len = data.len();
-
-                                    match channel.send(&bytes::Bytes::from(data)).await {
-                                        Ok(_) => {
-                                            sent_counter.update(len);
+                            while let Some(control) = control_rx.recv().await {
+                                if let Some(channel) = channel.upgrade() {
+                                    match control {
+                                        ChannelControl::SendText(text) => {
+                                            channel.send_text(text).await?;
                                         }
-                                        Err(err) => {
-                                            log::warn!("channel {our_label} unable to send {err}");
+                                        ChannelControl::Send(data) => {
+                                            let len = data.len();
+
+                                            match channel.send(&bytes::Bytes::from(data)).await {
+                                                Ok(_) => {
+                                                    sent_counter.update(len);
+                                                }
+                                                Err(err) => {
+                                                    log::warn!(
+                                                        "channel {our_label} unable to send {err}"
+                                                    );
+                                                }
+                                            }
+
+                                            let buffered_total =
+                                                len + channel.buffered_amount().await;
+
+                                            if buffered_total > MAX_BUFFERED_AMOUNT {
+                                                // Wait for the signal that more can be sent
+                                                log::warn!(
+                                                "!! buffered_total too large, waiting for low mark"
+                                            );
+                                                let _ = maybe_more_can_be_sent.recv().await;
+                                            }
+                                        }
+                                        ChannelControl::Close => {
+                                            channel.close().await.unwrap();
+                                            *control_rx_holder.lock().await = Some(control_rx);
+                                            break;
                                         }
                                     }
-
-                                    let buffered_total = len + channel.buffered_amount().await;
-
-                                    if buffered_total > MAX_BUFFERED_AMOUNT {
-                                        // Wait for the signal that more can be sent
-                                        log::warn!(
-                                            "!! buffered_total too large, waiting for low mark"
-                                        );
-                                        let _ = maybe_more_can_be_sent.recv().await;
-                                    }
-                                }
-                                ChannelControl::Close => {
-                                    channel.close().await.unwrap();
-                                    *control_rx_holder.lock().await = Some(control_rx);
+                                } else {
                                     break;
                                 }
+                            }
+
+                            eyre::Ok(())
+                        })
+                        .await
+                        {
+                            Ok(r) => match r {
+                                Ok(_) => {}
+                                Err(err) => {
+                                    log::error!("video channel chunk event error {err}");
+                                }
+                            },
+                            Err(err) => {
+                                log::error!("video channel chunk event join error {err}");
                             }
                         }
                     }
@@ -143,7 +164,6 @@ async fn on_datachannel(
     });
 
     channel.on_message({
-        let channel = channel.clone();
         let event_tx = event_tx.clone();
         let our_label = our_label.clone();
 
@@ -157,7 +177,6 @@ async fn on_datachannel(
 
         Box::new(move |msg: DataChannelMessage| {
             log::debug!("channel {our_label} message");
-            let channel = channel.clone();
             let event_tx = event_tx.clone();
             let our_label = our_label.clone();
 
