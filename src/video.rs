@@ -91,11 +91,7 @@ pub(crate) async fn video_channel(
                             util::send(
                                 "video control to chunk control",
                                 &chunk_tx,
-                                crate::chunk::ChunkControl::Whole(
-                                    video,
-                                    deadline
-                                        + std::time::Duration::from_millis(extra_duration as u64),
-                                ),
+                                crate::chunk::ChunkControl::Whole(video, deadline),
                             )
                             .await
                             .unwrap();
