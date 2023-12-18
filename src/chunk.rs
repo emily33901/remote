@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use eyre::Result;
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
+
 use tokio::sync::mpsc;
 
 use crate::ARBITRARY_CHANNEL_LIMIT;

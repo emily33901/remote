@@ -1,39 +1,35 @@
 use std::{
-    mem::{ManuallyDrop, MaybeUninit},
-    time::UNIX_EPOCH,
+    mem::{MaybeUninit},
 };
 
 use eyre::Result;
 use tokio::sync::mpsc;
 use windows::{
-    core::{s, ComInterface, IUnknown, HSTRING},
+    core::{ComInterface},
     Win32::{
-        Foundation::{FALSE, TRUE},
         Graphics::{
             Direct3D11::{
-                ID3D11Device, ID3D11Texture2D, D3D11_BOX, D3D11_MAPPED_SUBRESOURCE,
-                D3D11_MAP_WRITE, D3D11_RESOURCE_MISC_FLAG, D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX,
+                ID3D11Texture2D, D3D11_BOX, D3D11_RESOURCE_MISC_FLAG, D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX,
                 D3D11_TEXTURE2D_DESC,
             },
             Dxgi::{
                 Common::{
-                    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_FORMAT_R8G8_UNORM,
-                    DXGI_FORMAT_R8_UNORM,
+                    DXGI_FORMAT_NV12,
                 },
-                IDXGIKeyedMutex, IDXGIResource1,
+                IDXGIKeyedMutex,
             },
         },
         Media::MediaFoundation::*,
         System::Com::{
-            CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
-            COINIT_DISABLE_OLE1DDE, COINIT_MULTITHREADED,
+            CoInitializeEx, COINIT_APARTMENTTHREADED,
+            COINIT_DISABLE_OLE1DDE,
         },
     },
 };
 
-use crate::{media::produce::debug_video_format, video::VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
+use crate::{video::VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
 
-use super::dx::create_texture;
+
 
 pub(crate) enum DecoderControl {
     Data(VideoBuffer),
@@ -63,7 +59,7 @@ pub(crate) async fn h264_decoder(
                 let mut reset_token = 0_u32;
                 let mut device_manager: Option<IMFDXGIDeviceManager> = None;
 
-                let (device, context) = super::dx::create_device()?;
+                let (device, _context) = super::dx::create_device()?;
 
                 unsafe {
                     MFCreateDXGIDeviceManager(

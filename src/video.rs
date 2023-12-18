@@ -77,7 +77,7 @@ pub(crate) async fn video_channel(
         }
     });
 
-    let extra_duration = u32::from_str(&std::env::var("video_ttl")?)?;
+    let _extra_duration = u32::from_str(&std::env::var("video_ttl")?)?;
 
     tokio::spawn({
         let chunk_tx = chunk_tx.clone();

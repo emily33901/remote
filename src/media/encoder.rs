@@ -1,36 +1,18 @@
-use std::{
-    mem::{ManuallyDrop, MaybeUninit},
-    time::UNIX_EPOCH,
-};
+use std::{mem::MaybeUninit, time::UNIX_EPOCH};
 
 use eyre::Result;
 use tokio::sync::mpsc;
 use windows::{
-    core::{ComInterface, IUnknown, HSTRING},
+    core::ComInterface,
     Win32::{
-        Foundation::{FALSE, TRUE},
-        Graphics::{
-            Direct3D11::{
-                ID3D11Device, ID3D11Texture2D, D3D11_BOX, D3D11_MAPPED_SUBRESOURCE,
-                D3D11_MAP_WRITE, D3D11_RESOURCE_MISC_FLAG, D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX,
-                D3D11_TEXTURE2D_DESC,
-            },
-            Dxgi::{
-                Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12},
-                IDXGIKeyedMutex,
-            },
-        },
+        Foundation::FALSE,
+        Graphics::Direct3D11::ID3D11Texture2D,
         Media::MediaFoundation::*,
-        System::Com::{
-            CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
-            COINIT_DISABLE_OLE1DDE, COINIT_MULTITHREADED,
-        },
+        System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE},
     },
 };
 
 use crate::{media::produce::debug_video_format, video::VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
-
-use super::dx::create_texture;
 
 pub(crate) enum EncoderControl {
     Frame(ID3D11Texture2D, std::time::SystemTime),
@@ -57,7 +39,7 @@ pub(crate) async fn h264_encoder(
                 let mut reset_token = 0_u32;
                 let mut device_manager: Option<IMFDXGIDeviceManager> = None;
 
-                let (device, context) = super::dx::create_device()?;
+                let (device, _context) = super::dx::create_device()?;
 
                 unsafe {
                     MFCreateDXGIDeviceManager(
@@ -170,7 +152,7 @@ pub(crate) async fn h264_encoder(
                 // let output_media_buffer = unsafe { MFCreateMemoryBuffer(width * height * 4) }?;
                 // unsafe { output_sample.AddBuffer(&output_media_buffer.clone()) }?;
 
-                let mut status = 0;
+                let _status = 0;
 
                 loop {
                     let event = event_gen.GetEvent(MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS(0))?;
@@ -214,7 +196,7 @@ pub(crate) async fn h264_encoder(
 
                             let mut status = 0_u32;
                             match transform.ProcessOutput(0, &mut output_buffers, &mut status) {
-                                Ok(ok) => {
+                                Ok(_ok) => {
                                     // let timestamp = unsafe { sample.GetSampleTime()? };
                                     let sample = output_buffers[0].pSample.take().unwrap();
                                     let media_buffer =
@@ -226,8 +208,8 @@ pub(crate) async fn h264_encoder(
                                     let mut output = vec![];
                                     let mut sequence_header = None;
 
-                                    let mut sample_time;
-                                    let mut duration;
+                                    let sample_time;
+                                    let duration;
 
                                     unsafe {
                                         let is_keyframe =

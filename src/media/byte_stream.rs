@@ -15,7 +15,7 @@ impl IMFByteStream_Impl for ByteStream {
         todo!()
     }
 
-    fn SetLength(&self, qwlength: u64) -> ::windows::core::Result<()> {
+    fn SetLength(&self, _qwlength: u64) -> ::windows::core::Result<()> {
         todo!()
     }
 
@@ -23,7 +23,7 @@ impl IMFByteStream_Impl for ByteStream {
         todo!()
     }
 
-    fn SetCurrentPosition(&self, qwposition: u64) -> ::windows::core::Result<()> {
+    fn SetCurrentPosition(&self, _qwposition: u64) -> ::windows::core::Result<()> {
         todo!()
     }
 
@@ -31,53 +31,53 @@ impl IMFByteStream_Impl for ByteStream {
         todo!()
     }
 
-    fn Read(&self, pb: *mut u8, cb: u32, pcbread: *mut u32) -> ::windows::core::Result<()> {
+    fn Read(&self, _pb: *mut u8, _cb: u32, _pcbread: *mut u32) -> ::windows::core::Result<()> {
         todo!()
     }
 
     fn BeginRead(
         &self,
-        pb: *mut u8,
-        cb: u32,
-        pcallback: ::core::option::Option<&IMFAsyncCallback>,
-        punkstate: ::core::option::Option<&::windows::core::IUnknown>,
+        _pb: *mut u8,
+        _cb: u32,
+        _pcallback: ::core::option::Option<&IMFAsyncCallback>,
+        _punkstate: ::core::option::Option<&::windows::core::IUnknown>,
     ) -> ::windows::core::Result<()> {
         todo!()
     }
 
     fn EndRead(
         &self,
-        presult: ::core::option::Option<&IMFAsyncResult>,
+        _presult: ::core::option::Option<&IMFAsyncResult>,
     ) -> ::windows::core::Result<u32> {
         todo!()
     }
 
-    fn Write(&self, pb: *const u8, cb: u32) -> ::windows::core::Result<u32> {
+    fn Write(&self, _pb: *const u8, _cb: u32) -> ::windows::core::Result<u32> {
         todo!()
     }
 
     fn BeginWrite(
         &self,
-        pb: *const u8,
-        cb: u32,
-        pcallback: ::core::option::Option<&IMFAsyncCallback>,
-        punkstate: ::core::option::Option<&::windows::core::IUnknown>,
+        _pb: *const u8,
+        _cb: u32,
+        _pcallback: ::core::option::Option<&IMFAsyncCallback>,
+        _punkstate: ::core::option::Option<&::windows::core::IUnknown>,
     ) -> ::windows::core::Result<()> {
         todo!()
     }
 
     fn EndWrite(
         &self,
-        presult: ::core::option::Option<&IMFAsyncResult>,
+        _presult: ::core::option::Option<&IMFAsyncResult>,
     ) -> ::windows::core::Result<u32> {
         todo!()
     }
 
     fn Seek(
         &self,
-        seekorigin: MFBYTESTREAM_SEEK_ORIGIN,
-        llseekoffset: i64,
-        dwseekflags: u32,
+        _seekorigin: MFBYTESTREAM_SEEK_ORIGIN,
+        _llseekoffset: i64,
+        _dwseekflags: u32,
     ) -> ::windows::core::Result<u64> {
         todo!()
     }

@@ -17,7 +17,7 @@ use eyre::Result;
 use peer::PeerControl;
 use rtc;
 use signalling::SignallingControl;
-use tokio::io::AsyncWriteExt;
+
 use tokio::sync::{mpsc, Mutex};
 use uuid::Uuid;
 
@@ -331,7 +331,7 @@ async fn peer(address: &str, _name: &str) -> Result<()> {
     });
 
     tokio::task::spawn({
-        let our_name = _name.to_owned();
+        let _our_name = _name.to_owned();
         let _tx = tx.clone();
         let _our_peer_id = our_peer_id.clone();
         let _last_connection_request = last_connection_request.clone();

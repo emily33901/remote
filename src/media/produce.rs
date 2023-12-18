@@ -215,7 +215,7 @@ impl Media {
 
     pub(crate) fn debug_media_format(&self) -> Result<()> {
         {
-            let native_type = unsafe {
+            let _native_type = unsafe {
                 self.source_reader.GetNativeMediaType(
                     MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32,
                     MF_SOURCE_READER_CURRENT_TYPE_INDEX.0 as u32,

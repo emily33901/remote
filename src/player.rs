@@ -233,17 +233,17 @@ pub(crate) mod video {
     use windows::{
         core::{s, ComInterface, PCSTR},
         Win32::{
-            Foundation::{CloseHandle, HWND, LPARAM, LRESULT, S_OK, TRUE, WPARAM},
+            Foundation::{HWND, LPARAM, LRESULT, S_OK, TRUE, WPARAM},
             Graphics::{
                 Direct3D::{Fxc::D3DCompile, *},
                 Direct3D11::*,
                 Dxgi::{
                     Common::{
-                        DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12,
+                        DXGI_FORMAT, DXGI_FORMAT_NV12,
                         DXGI_FORMAT_R32G32_FLOAT, DXGI_FORMAT_R8G8B8A8_UNORM,
                         DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8_UNORM,
                     },
-                    IDXGIKeyedMutex, IDXGIResource1, IDXGISwapChain, DXGI_SHARED_RESOURCE_READ,
+                    IDXGIKeyedMutex, IDXGISwapChain,
                     DXGI_SWAP_CHAIN_DESC, DXGI_USAGE_RENDER_TARGET_OUTPUT,
                 },
             },
@@ -257,7 +257,7 @@ pub(crate) mod video {
         },
     };
 
-    use crate::{video::VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
+    use crate::{ARBITRARY_CHANNEL_LIMIT};
 
     const FEATURE_LEVELS: [D3D_FEATURE_LEVEL; 9] = [
         D3D_FEATURE_LEVEL_12_1,
@@ -800,7 +800,7 @@ pub(crate) mod video {
                             last_video = Some(video);
                         }
 
-                        if let Some(mut video) = last_video {
+                        if let Some(video) = last_video {
                             // log::info!("player got frame");
                             // if let Ok(duration) = video.time.elapsed() {
                             //     log::info!("video frame is from {}ms ago", duration.as_millis());

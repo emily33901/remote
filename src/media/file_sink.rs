@@ -1,29 +1,16 @@
 use std::{
-    mem::{ManuallyDrop, MaybeUninit},
-    time::UNIX_EPOCH,
+    mem::{MaybeUninit},
 };
 
 use eyre::Result;
 use tokio::sync::mpsc;
 use windows::{
-    core::{ComInterface, IUnknown, HSTRING},
+    core::{HSTRING},
     Win32::{
-        Foundation::{FALSE, TRUE},
-        Graphics::{
-            Direct3D11::{
-                ID3D11Device, ID3D11Texture2D, D3D11_BOX, D3D11_MAPPED_SUBRESOURCE,
-                D3D11_MAP_WRITE, D3D11_RESOURCE_MISC_FLAG, D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX,
-                D3D11_TEXTURE2D_DESC,
-            },
-            Dxgi::{
-                Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12},
-                IDXGIKeyedMutex,
-            },
-        },
         Media::MediaFoundation::*,
         System::Com::{
-            CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED,
-            COINIT_DISABLE_OLE1DDE, COINIT_MULTITHREADED,
+            CoInitializeEx, COINIT_APARTMENTTHREADED,
+            COINIT_DISABLE_OLE1DDE,
         },
     },
 };
@@ -53,7 +40,7 @@ pub(crate) fn file_sink(
             CoInitializeEx(None, COINIT_DISABLE_OLE1DDE | COINIT_APARTMENTTHREADED)?;
             unsafe { MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)? }
 
-            let (device, context) = super::dx::create_device()?;
+            let (device, _context) = super::dx::create_device()?;
 
             let mut reset_token = 0_u32;
             let mut device_manager: Option<IMFDXGIDeviceManager> = None;
@@ -106,7 +93,7 @@ pub(crate) fn file_sink(
                 match control {
                     FileSinkControl::Video(VideoBuffer {
                         data,
-                        sequence_header,
+                        sequence_header: _,
                         time,
                         duration,
                     }) => {
@@ -149,7 +136,7 @@ pub(crate) fn file_sink(
         .await
         .unwrap()
         {
-            Ok(ok) => log::debug!("file_sink died ok"),
+            Ok(_ok) => log::debug!("file_sink died ok"),
             Err(err) => log::error!("file_sink died with error {err}"),
         };
     });
