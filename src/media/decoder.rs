@@ -1,35 +1,25 @@
-use std::{
-    mem::{MaybeUninit},
-};
+use std::mem::MaybeUninit;
 
 use eyre::Result;
 use tokio::sync::mpsc;
 use windows::{
-    core::{ComInterface},
+    core::ComInterface,
     Win32::{
         Graphics::{
             Direct3D11::{
-                ID3D11Texture2D, D3D11_BOX, D3D11_RESOURCE_MISC_FLAG, D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX,
-                D3D11_TEXTURE2D_DESC,
+                ID3D11Texture2D, D3D11_BOX, D3D11_RESOURCE_MISC_FLAG,
+                D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX, D3D11_TEXTURE2D_DESC,
             },
-            Dxgi::{
-                Common::{
-                    DXGI_FORMAT_NV12,
-                },
-                IDXGIKeyedMutex,
-            },
+            Dxgi::{Common::DXGI_FORMAT_NV12, IDXGIKeyedMutex},
         },
         Media::MediaFoundation::*,
-        System::Com::{
-            CoInitializeEx, COINIT_APARTMENTTHREADED,
-            COINIT_DISABLE_OLE1DDE,
-        },
+        System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE},
     },
 };
 
 use crate::{video::VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
 
-
+use super::dx::copy_texture;
 
 pub(crate) enum DecoderControl {
     Data(VideoBuffer),
@@ -163,35 +153,12 @@ pub(crate) async fn h264_decoder(
                     output_type
                         .SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO as *const _, pixel_aspect_ratio)?;
 
-                    // output_type
-                    //     .SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
-                    // // // output_type.SetUINT32(&MF_MT_MAX_KEYFRAME_SPACING, 16)?;
-                    // output_type.SetUINT32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
-
-                    // output_type.SetUINT32(&MF_MT_MPEG2_PROFILE, eAVDecH2.0 as u32)?;
-
                     transform.SetOutputType(0, &output_type, 0)?;
                 }
 
                 transform.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
                 transform.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
                 transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
-
-                // let output_sample = unsafe { MFCreateSample() }?;
-
-                // let output_media_buffer = unsafe { MFCreateMemoryBuffer(width * height * 4) }?;
-                // unsafe { output_sample.AddBuffer(&output_media_buffer.clone()) }?;
-
-                // TODO(emily): This is really bad, we should accept a texture in that we copy into
-                // instad of returning the same texture over and over in an event
-                // OR do what webrtc does and use a ring of textures
-
-                // let staging_texture = super::dx::create_staging_texture_write(
-                //     &device,
-                //     width,
-                //     height,
-                //     DXGI_FORMAT_NV12,
-                // )?;
 
                 loop {
                     let DecoderControl::Data(VideoBuffer {
@@ -251,19 +218,20 @@ pub(crate) async fn h264_decoder(
                         let mut output_buffers = [output_buffer];
 
                         let mut status = 0_u32;
-                        // log::info!("entering ProcessOutput");
                         match transform.ProcessOutput(0, &mut output_buffers, &mut status) {
                             Ok(ok) => {
-                                let output_texture = super::dx::create_texture(
+                                let output_texture = super::dx::TextureBuilder::new(
                                     &device,
                                     width,
                                     height,
-                                    DXGI_FORMAT_NV12,
+                                    super::dx::TextureFormat::NV12,
                                 )
+                                .keyed_mutex()
+                                .build()
                                 .unwrap();
 
                                 let sample = output_buffers[0].pSample.take().unwrap();
-                                // let timestamp = unsafe { sample.GetSampleTime()? };
+                                let timestamp = unsafe { sample.GetSampleTime()? };
 
                                 let media_buffer = unsafe { sample.GetBufferByIndex(0) }?;
                                 let dxgi_buffer: IMFDXGIBuffer = media_buffer.cast()?;
@@ -282,75 +250,7 @@ pub(crate) async fn h264_decoder(
                                     unsafe { dxgi_buffer.GetSubresourceIndex()? };
                                 let texture = unsafe { texture.assume_init() };
 
-                                let mut in_desc = D3D11_TEXTURE2D_DESC::default();
-                                let mut out_desc = D3D11_TEXTURE2D_DESC::default();
-                                unsafe {
-                                    texture.GetDesc(&mut in_desc as *mut _);
-                                    output_texture.GetDesc(&mut out_desc as *mut _);
-                                }
-
-                                // If keyed mutex then lock keyed muticies
-
-                                let keyed_in = if D3D11_RESOURCE_MISC_FLAG(in_desc.MiscFlags as i32)
-                                    .contains(D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX)
-                                {
-                                    let keyed: IDXGIKeyedMutex = texture.cast()?;
-                                    unsafe {
-                                        keyed.AcquireSync(0, u32::MAX)?;
-                                    }
-                                    Some(keyed)
-                                } else {
-                                    None
-                                };
-
-                                let keyed_out =
-                                    if D3D11_RESOURCE_MISC_FLAG(out_desc.MiscFlags as i32)
-                                        .contains(D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX)
-                                    {
-                                        let keyed: IDXGIKeyedMutex = output_texture.cast()?;
-                                        unsafe {
-                                            keyed.AcquireSync(0, u32::MAX)?;
-                                        }
-                                        Some(keyed)
-                                    } else {
-                                        None
-                                    };
-
-                                let device = unsafe { texture.GetDevice() }?;
-                                let context = unsafe { device.GetImmediateContext() }?;
-
-                                let region = D3D11_BOX {
-                                    left: 0,
-                                    top: 0,
-                                    front: 0,
-                                    right: out_desc.Width,
-                                    bottom: out_desc.Height,
-                                    back: 1,
-                                };
-                                unsafe {
-                                    context.CopySubresourceRegion(
-                                        &output_texture,
-                                        0,
-                                        0,
-                                        0,
-                                        0,
-                                        &texture,
-                                        subresource_index,
-                                        Some(&region),
-                                    )
-                                };
-
-                                if let Some(keyed) = keyed_out {
-                                    unsafe {
-                                        keyed.ReleaseSync(0)?;
-                                    }
-                                }
-
-                                if let Some(keyed) = keyed_in {
-                                    unsafe {
-                                        keyed.ReleaseSync(0)?;
-                                    }
-                                }
+                                copy_texture(&output_texture, &texture, Some(subresource_index))?;
 
                                 // TODO(emily): fake timestamp because h264 has no timestamp
                                 event_tx
@@ -364,7 +264,6 @@ pub(crate) async fn h264_decoder(
                             }
                             Err(err) => {
                                 // log::warn!("output flags {}", output_buffers[0].dwStatus);
-
                                 Err(err)
                             }
                         }

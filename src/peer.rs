@@ -9,7 +9,9 @@ use eyre::Result;
 use tokio::sync::mpsc;
 
 #[derive(Debug)]
-pub(crate) enum PeerError {}
+pub(crate) enum PeerError {
+    Unknown,
+}
 
 #[derive(Debug)]
 pub(crate) enum PeerControl {
@@ -27,7 +29,7 @@ pub(crate) enum PeerControl {
 pub(crate) enum PeerEvent {
     Audio(Vec<u8>),
     Video(VideoBuffer),
-    // Error(PeerError),
+    Error(PeerError),
 }
 
 pub(crate) async fn peer(
@@ -167,6 +169,7 @@ pub(crate) async fn peer(
 
     tokio::spawn({
         let signalling_control = signalling_control.clone();
+        let event_tx = event_tx.clone();
         async move {
             match tokio::spawn(async move {
                 while let Some(event) = rtc_event.recv().await {
@@ -179,6 +182,7 @@ pub(crate) async fn peer(
                         rtc::RtcPeerEvent::StateChange(state_change) => {
                             log::info!("peer state change: {state_change:?}");
                             if let rtc::RtcPeerState::Failed = state_change {
+                                event_tx.send(PeerEvent::Error(PeerError::Unknown)).await?;
                                 break;
                             }
                         }

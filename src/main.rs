@@ -160,9 +160,8 @@ async fn peer_inner(
 
     let mut peer_controls = peer_controls.lock().await;
 
-    let (control, mut event) = peer::peer(api, our_peer_id, their_peer_id, tx.clone(), controlling)
-        .await
-        .unwrap();
+    let (control, mut event) =
+        peer::peer(api, our_peer_id, their_peer_id, tx.clone(), controlling).await?;
 
     peer_controls.insert(their_peer_id, control);
 
@@ -172,14 +171,12 @@ async fn peer_inner(
     audio_player
         .control_tx
         .send(player::audio::PlayerControl::Volume(0.1))
-        .await
-        .unwrap();
+        .await?;
 
     audio_player
         .control_tx
         .send(player::audio::PlayerControl::Sink(audio_sink_rx))
-        .await
-        .unwrap();
+        .await?;
 
     let (h264_control, mut h264_event) =
         media::decoder::h264_decoder(width, height, 30, bitrate).await?;
@@ -218,6 +215,10 @@ async fn peer_inner(
                             .send(media::decoder::DecoderControl::Data(video))
                             .await
                             .unwrap();
+                    }
+                    peer::PeerEvent::Error(error) => {
+                        log::warn!("peer event error {error:?}");
+                        break;
                     }
                 }
             }
@@ -326,7 +327,7 @@ async fn peer(address: &str, _name: &str) -> Result<()> {
                 }
             }
 
-            log::debug!("client going down");
+            log::info!("client going down");
         }
     });
 

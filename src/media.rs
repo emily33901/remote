@@ -1,7 +1,5 @@
 use tokio::sync::mpsc;
-use windows::Win32::{
-    System::Com::{CoInitializeEx, COINIT_DISABLE_OLE1DDE},
-};
+use windows::Win32::System::Com::{CoInitializeEx, COINIT_DISABLE_OLE1DDE};
 
 pub(crate) mod dx;
 
@@ -10,7 +8,6 @@ mod produce;
 pub(crate) mod decoder;
 pub(crate) mod encoder;
 
-pub(crate) mod byte_stream;
 pub(crate) mod file_sink;
 
 use eyre::Result;
@@ -53,12 +50,9 @@ pub(crate) async fn produce(
 
                     let (device, context) = dx::create_device()?;
 
-                    let texture = dx::create_texture_sync(
-                        &device,
-                        width,
-                        height,
-                        windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_NV12,
-                    )?;
+                    let texture =
+                        dx::TextureBuilder::new(&device, width, height, dx::TextureFormat::NV12)
+                            .build()?;
 
                     let path = path.to_owned();
                     let mut media = produce::Media::new(&device, &path, width, height)?;
@@ -90,12 +84,13 @@ pub(crate) async fn produce(
 
                         if produced_video {
                             // Try and put a frame but if we are being back pressured then dump and run
-                            let new_texture = dx::create_texture_sync(
+                            let new_texture = dx::TextureBuilder::new(
                                 &device,
                                 width,
                                 height,
-                                windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_NV12,
-                            )?;
+                                dx::TextureFormat::NV12,
+                            )
+                            .build()?;
 
                             unsafe { context.CopyResource(&new_texture, &texture) };
 
@@ -143,12 +138,22 @@ pub(crate) async fn produce(
     tokio::spawn({
         let event_tx = event_tx.clone();
         async move {
-            while let Some(event) = h264_event.recv().await {
-                match event {
-                    encoder::EncoderEvent::Data(data) => {
-                        event_tx.send(MediaEvent::Video(data)).await.unwrap()
+            match tokio::spawn(async move {
+                while let Some(event) = h264_event.recv().await {
+                    match event {
+                        encoder::EncoderEvent::Data(data) => {
+                            event_tx.send(MediaEvent::Video(data)).await?
+                        }
                     }
                 }
+
+                eyre::Ok(())
+            })
+            .await
+            .unwrap()
+            {
+                Ok(_) => {}
+                Err(err) => log::error!("encoder event err {err}"),
             }
         }
     });

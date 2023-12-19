@@ -1,17 +1,12 @@
-use std::{
-    mem::{MaybeUninit},
-};
+use std::mem::MaybeUninit;
 
 use eyre::Result;
 use tokio::sync::mpsc;
 use windows::{
-    core::{HSTRING},
+    core::HSTRING,
     Win32::{
         Media::MediaFoundation::*,
-        System::Com::{
-            CoInitializeEx, COINIT_APARTMENTTHREADED,
-            COINIT_DISABLE_OLE1DDE,
-        },
+        System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE},
     },
 };
 
