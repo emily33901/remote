@@ -103,6 +103,7 @@ pub(crate) async fn video_channel(
                         VideoControl::Video(video) => {
                             let deadline = video.time;
                             if let Ok(_) = deadline.elapsed() {
+                                log::warn!("throwing expired frame");
                             } else {
                                 util::send(
                                     "video control to chunk control",

@@ -83,8 +83,8 @@ pub(crate) async fn channel(
                 Some(channel_tx),
                 Some(channel_rx),
                 control_rx.clone(),
-                event_tx.clone(),
-                control_tx.clone(),
+                Some(event_tx.clone()),
+                Some(control_tx.clone()),
             ),
         );
     }

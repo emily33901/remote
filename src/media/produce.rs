@@ -317,74 +317,7 @@ impl Media {
                 let subresource_index = unsafe { dxgi_buffer.GetSubresourceIndex()? };
                 let texture = unsafe { texture.assume_init() };
 
-                let mut in_desc = D3D11_TEXTURE2D_DESC::default();
-                let mut out_desc = D3D11_TEXTURE2D_DESC::default();
-                unsafe {
-                    texture.GetDesc(&mut in_desc as *mut _);
-                    output.GetDesc(&mut out_desc as *mut _);
-                }
-
-                // If keyed mutex then lock keyed muticies
-
-                let keyed_in = if D3D11_RESOURCE_MISC_FLAG(in_desc.MiscFlags as i32)
-                    .contains(D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX)
-                {
-                    let keyed: IDXGIKeyedMutex = texture.cast()?;
-                    unsafe {
-                        keyed.AcquireSync(0, u32::MAX)?;
-                    }
-                    Some(keyed)
-                } else {
-                    None
-                };
-
-                let keyed_out = if D3D11_RESOURCE_MISC_FLAG(out_desc.MiscFlags as i32)
-                    .contains(D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX)
-                {
-                    let keyed: IDXGIKeyedMutex = texture.cast()?;
-                    unsafe {
-                        keyed.AcquireSync(0, u32::MAX)?;
-                    }
-                    Some(keyed)
-                } else {
-                    None
-                };
-
-                let device = unsafe { texture.GetDevice() }?;
-                let context = unsafe { device.GetImmediateContext() }?;
-
-                let region = D3D11_BOX {
-                    left: 0,
-                    top: 0,
-                    front: 0,
-                    right: out_desc.Width,
-                    bottom: out_desc.Height,
-                    back: 1,
-                };
-                unsafe {
-                    context.CopySubresourceRegion(
-                        &output,
-                        0,
-                        0,
-                        0,
-                        0,
-                        &texture,
-                        subresource_index,
-                        Some(&region),
-                    )
-                };
-
-                if let Some(keyed) = keyed_out {
-                    unsafe {
-                        keyed.ReleaseSync(0)?;
-                    }
-                }
-
-                if let Some(keyed) = keyed_in {
-                    unsafe {
-                        keyed.ReleaseSync(0)?;
-                    }
-                }
+                super::dx::copy_texture(&output, &texture, Some(subresource_index))?;
 
                 Ok(true)
             }

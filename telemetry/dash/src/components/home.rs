@@ -242,7 +242,10 @@ impl Home {
                             ])
                             .split(*area);
 
-                        f.render_widget(Paragraph::new(channel.name.clone()), layout[0]);
+                        f.render_widget(
+                            Paragraph::new(format!("{}: {}", id, channel.name)),
+                            layout[0],
+                        );
                         // Force guage to be at most 1 line
                         let mut layout = layout[1].clone();
                         layout.height = 1;
@@ -364,7 +367,10 @@ impl Home {
                             ])
                             .split(*area);
 
-                        f.render_widget(Paragraph::new(counter.name.clone()), layout[0]);
+                        f.render_widget(
+                            Paragraph::new(format!("{}: {}", id, counter.name)),
+                            layout[0],
+                        );
                         // Force guage to be at most 1 line
                         let mut layout = layout[1].clone();
                         layout.height = 1;

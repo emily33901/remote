@@ -8,6 +8,8 @@ mod produce;
 pub(crate) mod decoder;
 pub(crate) mod encoder;
 
+mod color_conversion;
+mod desktop_duplication;
 pub(crate) mod file_sink;
 
 use eyre::Result;
@@ -102,8 +104,12 @@ pub(crate) async fn produce(
                                     ),
                             )) {
                                 Ok(_) => {}
-                                Err(_err) => {
+                                Err(mpsc::error::TrySendError::Full(_)) => {
                                     log::debug!("video backpressured")
+                                }
+                                Err(mpsc::error::TrySendError::Closed(_)) => {
+                                    log::error!("produce channel closed, going down");
+                                    break;
                                 }
                             }
                         }
@@ -114,8 +120,12 @@ pub(crate) async fn produce(
                             // Try and put a frame but if we are being back pressured then dump and run
                             match event_tx.try_send(MediaEvent::Audio(audio_buffer.clone())) {
                                 Ok(_) => {}
-                                Err(_err) => {
-                                    log::trace!("audio backpressured");
+                                Err(mpsc::error::TrySendError::Full(_)) => {
+                                    log::debug!("video backpressured")
+                                }
+                                Err(mpsc::error::TrySendError::Closed(_)) => {
+                                    log::error!("produce channel closed, going down");
+                                    break;
                                 }
                             }
                         }
@@ -155,6 +165,84 @@ pub(crate) async fn produce(
                 Ok(_) => {}
                 Err(err) => log::error!("encoder event err {err}"),
             }
+        }
+    });
+
+    Ok((control_tx, event_rx))
+}
+
+pub(crate) async fn duplicate_desktop(
+    width: u32,
+    height: u32,
+    bitrate: u32,
+) -> Result<(mpsc::Sender<MediaControl>, mpsc::Receiver<MediaEvent>)> {
+    let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
+    let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
+
+    let (h264_control, mut h264_event) = encoder::h264_encoder(width, height, 30, bitrate).await?;
+
+    let (convert_control, mut convert_event) =
+        color_conversion::convert_bgra_to_nv12(width, height).await?;
+
+    let (dd_control, mut dd_event) = desktop_duplication::desktop_duplication()?;
+
+    tokio::spawn(async move { while let Some(control) = control_rx.recv().await {} });
+
+    tokio::spawn(async move {
+        while let Some(event) = dd_event.recv().await {
+            match event {
+                desktop_duplication::DDEvent::Size(_, _) => {}
+                desktop_duplication::DDEvent::Frame(texture, time) => {
+                    let _ = convert_control
+                        .send(color_conversion::ConvertControl::Frame(texture, time))
+                        .await;
+                    //         .unwrap();
+                }
+            }
+        }
+    });
+
+    tokio::spawn({
+        let event_tx = event_tx.clone();
+        async move {
+            match tokio::spawn(async move {
+                while let Some(event) = h264_event.recv().await {
+                    match event {
+                        encoder::EncoderEvent::Data(data) => {
+                            event_tx.send(MediaEvent::Video(data)).await?
+                        }
+                    }
+                }
+
+                eyre::Ok(())
+            })
+            .await
+            .unwrap()
+            {
+                Ok(_) => {}
+                Err(err) => log::error!("encoder event err {err}"),
+            }
+        }
+    });
+
+    tokio::spawn(async move {
+        match tokio::spawn(async move {
+            while let Some(event) = convert_event.recv().await {
+                match event {
+                    color_conversion::ConvertEvent::Frame(frame, time) => {
+                        h264_control
+                            .send(encoder::EncoderControl::Frame(frame, time))
+                            .await?
+                    }
+                }
+            }
+            eyre::Ok(())
+        })
+        .await
+        .unwrap()
+        {
+            Ok(_) => {}
+            Err(err) => log::error!("convert event err {err}"),
         }
     });
 

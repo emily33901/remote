@@ -201,16 +201,6 @@ pub(crate) async fn h264_decoder(
                     sample.SetSampleDuration(duration.as_nanos() as i64 / 100)?;
 
                     let process_output = || {
-                        // let status = transform.GetOutputStatus()?;
-
-                        // if status != MFT_OUTPUT_STATUS_SAMPLE_READY.0 as u32 {
-                        //     // return Err(MF_E_TRANSFORM_NEED_MORE_INPUT);
-                        //     return Err(windows::core::Error::new(
-                        //         MF_E_TRANSFORM_NEED_MORE_INPUT,
-                        //         HSTRING::from("need more input"),
-                        //     ));
-                        // }
-
                         let mut output_buffer = MFT_OUTPUT_DATA_BUFFER::default();
                         output_buffer.dwStatus = 0;
                         output_buffer.dwStreamID = 0;
@@ -252,11 +242,13 @@ pub(crate) async fn h264_decoder(
 
                                 copy_texture(&output_texture, &texture, Some(subresource_index))?;
 
-                                // TODO(emily): fake timestamp because h264 has no timestamp
                                 event_tx
                                     .blocking_send(DecoderEvent::Frame(
                                         output_texture,
-                                        std::time::SystemTime::now(),
+                                        std::time::SystemTime::UNIX_EPOCH
+                                            + std::time::Duration::from_nanos(
+                                                timestamp as u64 * 100,
+                                            ),
                                     ))
                                     .unwrap();
 

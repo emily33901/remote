@@ -97,7 +97,9 @@ pub(crate) async fn peer(
             .await
             {
                 Ok(r) => match r {
-                    Ok(_) => {}
+                    Ok(_) => {
+                        log::info!("peer control done")
+                    }
                     Err(err) => {
                         log::error!("peer control error {err}");
                     }

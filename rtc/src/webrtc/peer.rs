@@ -140,71 +140,79 @@ pub(crate) async fn rtc_peer(
 
     tokio::spawn({
         // TODO(emily): Keep weak here
-        let peer_connection = peer_connection.clone();
+        let peer_connection = Arc::downgrade(&peer_connection);
         let event_tx = event_tx.clone();
         async move {
             let (pending_candidates_tx, mut pending_candidates_rx) =
                 mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
             while let Some(control) = control_rx.recv().await {
-                match control {
-                    RtcPeerControl::IceCandidate(candidate) => {
-                        if peer_connection.remote_description().await.is_some() {
+                if let Some(peer_connection) = peer_connection.upgrade() {
+                    match control {
+                        RtcPeerControl::IceCandidate(candidate) => {
+                            if peer_connection.remote_description().await.is_some() {
+                                peer_connection
+                                    .add_ice_candidate(RTCIceCandidateInit {
+                                        candidate: candidate,
+                                        ..Default::default()
+                                    })
+                                    .await
+                                    .unwrap();
+                            } else {
+                                log::debug!("storing candidate until remote description arrives");
+                                pending_candidates_tx.send(candidate).await.unwrap();
+                            }
+                        }
+                        RtcPeerControl::Offer(offer) => {
                             peer_connection
-                                .add_ice_candidate(RTCIceCandidateInit {
-                                    candidate: candidate,
-                                    ..Default::default()
-                                })
+                                .set_remote_description(
+                                    RTCSessionDescription::offer(offer).unwrap(),
+                                )
                                 .await
                                 .unwrap();
-                        } else {
-                            log::debug!("storing candidate until remote description arrives");
-                            pending_candidates_tx.send(candidate).await.unwrap();
-                        }
-                    }
-                    RtcPeerControl::Offer(offer) => {
-                        peer_connection
-                            .set_remote_description(RTCSessionDescription::offer(offer).unwrap())
-                            .await
-                            .unwrap();
 
-                        let answer = peer_connection.create_answer(None).await.unwrap();
+                            let answer = peer_connection.create_answer(None).await.unwrap();
 
-                        event_tx
-                            .send(RtcPeerEvent::Answer(answer.sdp.clone()))
-                            .await
-                            .unwrap();
-
-                        peer_connection.set_local_description(answer).await.unwrap();
-
-                        while let Ok(candidate) = pending_candidates_rx.try_recv() {
-                            log::debug!("adding stored candidate");
-                            peer_connection
-                                .add_ice_candidate(RTCIceCandidateInit {
-                                    candidate,
-                                    ..Default::default()
-                                })
+                            event_tx
+                                .send(RtcPeerEvent::Answer(answer.sdp.clone()))
                                 .await
                                 .unwrap();
-                        }
-                    }
-                    RtcPeerControl::Answer(answer) => {
-                        peer_connection
-                            .set_remote_description(RTCSessionDescription::answer(answer).unwrap())
-                            .await
-                            .unwrap();
 
-                        while let Ok(candidate) = pending_candidates_rx.try_recv() {
-                            log::debug!("adding stored candidate");
+                            peer_connection.set_local_description(answer).await.unwrap();
+
+                            while let Ok(candidate) = pending_candidates_rx.try_recv() {
+                                log::debug!("adding stored candidate");
+                                peer_connection
+                                    .add_ice_candidate(RTCIceCandidateInit {
+                                        candidate,
+                                        ..Default::default()
+                                    })
+                                    .await
+                                    .unwrap();
+                            }
+                        }
+                        RtcPeerControl::Answer(answer) => {
                             peer_connection
-                                .add_ice_candidate(RTCIceCandidateInit {
-                                    candidate,
-                                    ..Default::default()
-                                })
+                                .set_remote_description(
+                                    RTCSessionDescription::answer(answer).unwrap(),
+                                )
                                 .await
                                 .unwrap();
+
+                            while let Ok(candidate) = pending_candidates_rx.try_recv() {
+                                log::debug!("adding stored candidate");
+                                peer_connection
+                                    .add_ice_candidate(RTCIceCandidateInit {
+                                        candidate,
+                                        ..Default::default()
+                                    })
+                                    .await
+                                    .unwrap();
+                            }
                         }
                     }
+                } else {
+                    break;
                 }
             }
         }

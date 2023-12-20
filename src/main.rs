@@ -187,8 +187,8 @@ async fn peer_inner(
         async move {
             while let Some(event) = h264_event.recv().await {
                 match event {
-                    media::decoder::DecoderEvent::Frame(tex, _) => {
-                        video_sink_tx.send(tex).await.unwrap()
+                    media::decoder::DecoderEvent::Frame(tex, time) => {
+                        video_sink_tx.send((tex, time)).await.unwrap()
                     }
                 }
             }
@@ -338,38 +338,52 @@ async fn peer(address: &str, _name: &str) -> Result<()> {
         let _last_connection_request = last_connection_request.clone();
         let peer_controls = peer_controls.clone();
         async move {
-            let (_tx, mut rx) =
-                media::produce(&std::env::var("media_filename")?, width, height, bitrate).await?;
+            match tokio::spawn(async move {
+                let (tx, mut rx) = media::duplicate_desktop(width, height, bitrate).await?;
+                // let (_tx, mut rx) =
+                //     media::produce(&std::env::var("media_filename")?, width, height, bitrate)
+                //         .await?;
 
-            while let Some(event) = rx.recv().await {
-                match event {
-                    media::MediaEvent::Audio(audio) => {
-                        log::trace!("produce audio {}", audio.len());
-                        let peer_controls = peer_controls.lock().await;
-                        for (_, control) in peer_controls.iter() {
-                            util::send(
-                                "produce to peer audio",
-                                &control,
-                                PeerControl::Audio(audio.clone()),
-                            )
-                            .await
-                            .unwrap();
+                while let Some(event) = rx.recv().await {
+                    match event {
+                        media::MediaEvent::Audio(audio) => {
+                            log::trace!("produce audio {}", audio.len());
+                            let peer_controls = peer_controls.lock().await;
+                            for (_, control) in peer_controls.iter() {
+                                util::send(
+                                    "produce to peer audio",
+                                    &control,
+                                    PeerControl::Audio(audio.clone()),
+                                )
+                                .await?;
+                            }
+                        }
+                        media::MediaEvent::Video(video) => {
+                            // log::debug!("throwing video");
+                            log::trace!("produce video {}", video.data.len());
+                            let peer_controls = peer_controls.lock().await;
+                            for (_, control) in peer_controls.iter() {
+                                util::send(
+                                    "produce to peer video",
+                                    &control,
+                                    PeerControl::Video(video.clone()),
+                                )
+                                .await?;
+                            }
                         }
                     }
-                    media::MediaEvent::Video(video) => {
-                        // log::debug!("throwing video");
-                        log::trace!("produce video {}", video.data.len());
-                        let peer_controls = peer_controls.lock().await;
-                        for (_, control) in peer_controls.iter() {
-                            util::send(
-                                "produce to peer video",
-                                &control,
-                                PeerControl::Video(video.clone()),
-                            )
-                            .await
-                            .unwrap();
-                        }
-                    }
+                }
+
+                eyre::Ok(())
+            })
+            .await
+            .unwrap()
+            {
+                Ok(_) => {
+                    log::info!("produce down ok")
+                }
+                Err(err) => {
+                    log::error!("produce down err {err}")
                 }
             }
 

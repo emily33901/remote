@@ -257,31 +257,9 @@ pub(crate) mod video {
     };
 
     use crate::{
-        media::dx::{
-            self, copy_texture, create_device_and_swapchain, create_texture, create_texture_sync,
-        },
+        media::dx::{self, compile_shader, copy_texture, create_device_and_swapchain},
         ARBITRARY_CHANNEL_LIMIT,
     };
-
-    fn compile_shader(data: &str, entry_point: PCSTR, target: PCSTR) -> Result<ID3DBlob> {
-        unsafe {
-            let mut blob: MaybeUninit<Option<ID3DBlob>> = MaybeUninit::uninit();
-            D3DCompile(
-                data.as_ptr() as *const std::ffi::c_void,
-                data.len(),
-                None,
-                None,
-                None,
-                entry_point,
-                target,
-                0,
-                0,
-                &mut blob as *mut _ as *mut _,
-                None,
-            )?;
-            Ok(unsafe { blob.assume_init().unwrap() })
-        }
-    }
 
     extern "system" fn wndproc(
         window: HWND,
@@ -345,8 +323,12 @@ pub(crate) mod video {
         }
     }
 
-    pub(crate) fn sink(width: u32, height: u32) -> Result<mpsc::Sender<ID3D11Texture2D>> {
-        let (tx, mut rx) = mpsc::channel::<ID3D11Texture2D>(ARBITRARY_CHANNEL_LIMIT);
+    pub(crate) fn sink(
+        width: u32,
+        height: u32,
+    ) -> Result<mpsc::Sender<(ID3D11Texture2D, std::time::SystemTime)>> {
+        let (tx, mut rx) =
+            mpsc::channel::<(ID3D11Texture2D, std::time::SystemTime)>(ARBITRARY_CHANNEL_LIMIT);
 
         tokio::spawn({
             let tx = tx.clone();
@@ -661,7 +643,13 @@ pub(crate) mod video {
                             }
                         }
 
-                        if let Some(video) = last_video {
+                        if let Some((video, time)) = last_video {
+                            if let Ok(elapsed) = time.elapsed() {
+                                log::warn!(
+                                    "player playing video frame from {:.2}ms in the past",
+                                    elapsed.as_millis()
+                                );
+                            }
                             copy_texture(&texture, &video, None)?;
                         } else {
                             // log::warn!("no frame for player");

@@ -114,7 +114,7 @@ impl FromStr for Api {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "webrtc-rs" | "WebrtcRs" => Ok(Self::WebrtcRs),
-            "DataChannel" | "datachannel" => Ok(Self::DataChannel),
+            "datachannel" | "DataChannel" => Ok(Self::DataChannel),
             _ => Err(ApiParseError),
         }
     }

@@ -1,13 +1,18 @@
+use std::mem::MaybeUninit;
+
 use eyre::{eyre, Result};
 use windows::{
-    core::ComInterface,
+    core::{ComInterface, PCSTR},
     Win32::{
         Foundation::{HWND, TRUE},
         Graphics::{
-            Direct3D::*,
+            Direct3D::{Fxc::D3DCompile, *},
             Direct3D11::*,
             Dxgi::{
-                Common::{DXGI_FORMAT, DXGI_FORMAT_NV12, DXGI_FORMAT_R8G8B8A8_UNORM},
+                Common::{
+                    DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12,
+                    DXGI_FORMAT_R8G8B8A8_UNORM,
+                },
                 IDXGIKeyedMutex, IDXGISwapChain, DXGI_SWAP_CHAIN_DESC,
                 DXGI_USAGE_RENDER_TARGET_OUTPUT,
             },
@@ -119,7 +124,7 @@ impl From<TextureFormat> for DXGI_FORMAT {
     fn from(value: TextureFormat) -> Self {
         match value {
             TextureFormat::NV12 => DXGI_FORMAT_NV12,
-            TextureFormat::BGRA => DXGI_FORMAT_R8G8B8A8_UNORM,
+            TextureFormat::BGRA => DXGI_FORMAT_B8G8R8A8_UNORM,
         }
     }
 }
@@ -131,6 +136,8 @@ pub(crate) struct TextureBuilder<'a> {
     keyed_mutex: bool,
     nt_handle: bool,
     bind_shader_resource: bool,
+    bind_render_target: bool,
+    bind_unordered_access: bool,
     width: u32,
     height: u32,
     format: TextureFormat,
@@ -148,10 +155,17 @@ impl<'a> TextureBuilder<'a> {
             bind_shader_resource: false,
             keyed_mutex: false,
             nt_handle: false,
+            bind_render_target: false,
+            bind_unordered_access: false,
             width,
             height,
             format,
         }
+    }
+
+    pub(crate) fn bind_render_target(mut self) -> Self {
+        self.bind_render_target = true;
+        self
     }
 
     pub(crate) fn keyed_mutex(mut self) -> Self {
@@ -170,11 +184,16 @@ impl<'a> TextureBuilder<'a> {
     }
 
     pub(crate) fn build(self) -> Result<ID3D11Texture2D> {
-        let bind_flags = 0 | if self.bind_shader_resource {
-            D3D11_BIND_SHADER_RESOURCE.0 as u32
-        } else {
-            0
-        };
+        let bind_flags =
+            0 | if self.bind_shader_resource {
+                D3D11_BIND_SHADER_RESOURCE.0 as u32
+            } else {
+                0
+            } | if self.bind_render_target {
+                D3D11_BIND_RENDER_TARGET.0 as u32
+            } else {
+                0
+            };
 
         let misc_flags = if self.keyed_mutex {
             D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX.0 as u32
@@ -294,4 +313,35 @@ pub(crate) fn copy_texture(
     }
 
     Ok(())
+}
+
+pub(crate) fn compile_shader(data: &str, entry_point: PCSTR, target: PCSTR) -> Result<ID3DBlob> {
+    unsafe {
+        let mut blob: MaybeUninit<Option<ID3DBlob>> = MaybeUninit::uninit();
+        let mut err_blob: Option<ID3DBlob> = None;
+        match D3DCompile(
+            data.as_ptr() as *const std::ffi::c_void,
+            data.len(),
+            None,
+            None,
+            None,
+            entry_point,
+            target,
+            0,
+            0,
+            &mut blob as *mut _ as *mut _,
+            Some(&mut err_blob),
+        ) {
+            Ok(_) => Ok(unsafe { blob.assume_init().unwrap() }),
+            Err(_) => {
+                let err_blob = err_blob.unwrap();
+                let errors = err_blob.GetBufferPointer();
+                let len = err_blob.GetBufferSize();
+                let error_slice = std::slice::from_raw_parts(errors as *const u8, len);
+                let err_string = String::from_utf8_lossy(error_slice);
+
+                Err(eyre!("Failed to compile because: {}", err_string))
+            }
+        }
+    }
 }

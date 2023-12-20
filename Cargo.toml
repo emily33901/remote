@@ -63,7 +63,8 @@ features = [
     "Win32_System_WindowsProgramming",
     "Win32_UI_WindowsAndMessaging",
     "Win32_Media_MediaFoundation",
-    "Win32_UI_Shell_PropertiesSystem"
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_System_Performance"
 ]
 
 [profile.release]

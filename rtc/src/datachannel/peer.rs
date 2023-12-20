@@ -93,13 +93,19 @@ impl DataChannelHandler for DCH {
 
                             sent_counter.update(len);
 
-                            channel = tokio::task::spawn_blocking(move || {
+                            match tokio::task::spawn_blocking(move || {
                                 // TODO(emily): Don't unwrap here please thank you
-                                channel.send(&bytes::Bytes::from(data)).unwrap();
-                                channel
+                                channel.send(&bytes::Bytes::from(data)).map(|_| channel)
                             })
                             .await
-                            .unwrap();
+                            .unwrap()
+                            {
+                                Ok(c) => channel = c,
+                                Err(err) => {
+                                    log::error!("failed to send data to channel, assuming dead");
+                                    break;
+                                }
+                            }
 
                             // match channel.send(&bytes::Bytes::from(data)).await {
                             //     Ok(_) => {
@@ -185,9 +191,9 @@ impl datachannel::PeerConnectionHandler for PCH {
         Self::DCH {
             our_label: info.label,
             channel_rx: channel_rx.take(),
-            event_tx: event_tx.clone(),
+            event_tx: event_tx.take().unwrap(),
             control_rx_holder: control_rx.clone(),
-            control_tx: control_tx.clone(),
+            control_tx: control_tx.take().unwrap(),
             runtime: self.runtime.clone(),
             recv_counter: Default::default(),
             more_can_be_sent_tx: more_can_be_sent_tx,
@@ -271,8 +277,8 @@ pub(crate) struct DatachannelStorage(
                     Option<oneshot::Sender<Box<datachannel::RtcDataChannel<DCH>>>>,
                     Option<oneshot::Receiver<Box<datachannel::RtcDataChannel<DCH>>>>,
                     Arc<Mutex<Option<mpsc::Receiver<ChannelControl>>>>,
-                    mpsc::Sender<ChannelEvent>,
-                    mpsc::Sender<ChannelControl>,
+                    Option<mpsc::Sender<ChannelEvent>>,
+                    Option<mpsc::Sender<ChannelControl>>,
                 ),
             >,
         >,
