@@ -67,11 +67,13 @@ features = [
     "Win32_System_Performance"
 ]
 
+[patch.crates-io]
+ring = { git = "https://github.com/awakecoding/ring", branch = "0.16.20_alpha" }
+webrtc = { git = "https://github.com/emily33901/webrtc/" }
+
 [profile.release]
 panic = "abort"
 debug = true
-
-
 
 [profile.dev]
 panic = "abort"

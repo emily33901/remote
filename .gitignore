@@ -1,3 +1,4 @@
 /target
 *.log
 *.h264
+.env

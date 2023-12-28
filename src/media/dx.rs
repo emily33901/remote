@@ -131,6 +131,15 @@ impl From<TextureFormat> for DXGI_FORMAT {
 
 // TODO(emily): Staging textures
 
+pub(crate) enum TextureUsage {
+    Staging,
+}
+
+pub(crate) enum TextureCPUAccess {
+    Write,
+    Read,
+}
+
 pub(crate) struct TextureBuilder<'a> {
     device: &'a ID3D11Device,
     keyed_mutex: bool,
@@ -141,6 +150,8 @@ pub(crate) struct TextureBuilder<'a> {
     width: u32,
     height: u32,
     format: TextureFormat,
+    usage: Option<TextureUsage>,
+    cpu_access: Option<TextureCPUAccess>,
 }
 
 impl<'a> TextureBuilder<'a> {
@@ -160,6 +171,8 @@ impl<'a> TextureBuilder<'a> {
             width,
             height,
             format,
+            usage: None,
+            cpu_access: None,
         }
     }
 
@@ -180,6 +193,16 @@ impl<'a> TextureBuilder<'a> {
 
     pub(crate) fn bind_shader_resource(mut self) -> Self {
         self.bind_shader_resource = true;
+        self
+    }
+
+    pub(crate) fn usage(mut self, usage: TextureUsage) -> Self {
+        self.usage = Some(usage);
+        self
+    }
+
+    pub(crate) fn cpu_access(mut self, cpu_access: TextureCPUAccess) -> Self {
+        self.cpu_access = Some(cpu_access);
         self
     }
 
@@ -205,6 +228,17 @@ impl<'a> TextureBuilder<'a> {
             0
         };
 
+        let usage = match self.usage {
+            Some(TextureUsage::Staging) => D3D11_USAGE_STAGING,
+            None => D3D11_USAGE_DEFAULT,
+        };
+
+        let cpu_access_flags = match self.cpu_access {
+            Some(TextureCPUAccess::Read) => D3D11_CPU_ACCESS_READ.0 as u32,
+            Some(TextureCPUAccess::Write) => D3D11_CPU_ACCESS_WRITE.0 as u32,
+            None => 0,
+        };
+
         let description = D3D11_TEXTURE2D_DESC {
             Width: self.width,
             Height: self.height,
@@ -215,9 +249,9 @@ impl<'a> TextureBuilder<'a> {
                 Count: 1,
                 Quality: 0,
             },
-            Usage: D3D11_USAGE_DEFAULT,
+            Usage: usage,
             BindFlags: bind_flags,
-            CPUAccessFlags: 0,
+            CPUAccessFlags: cpu_access_flags,
             MiscFlags: misc_flags,
         };
 

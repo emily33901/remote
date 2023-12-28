@@ -140,7 +140,7 @@ pub(crate) async fn produce(
             .unwrap()
             {
                 Ok(_) => log::warn!("media::produce exit Ok"),
-                Err(err) => log::error!("media::produce exit err {err} {err:?}"),
+                Err(err) => log::error!("media::produce exit err {err:?}"),
             }
         }
     });
