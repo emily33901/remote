@@ -412,13 +412,11 @@ unsafe fn software(
             let sample = unsafe { MFCreateSample() }?;
 
             sample.AddBuffer(&media_buffer)?;
-            sample.SetSampleTime(time.duration_since(UNIX_EPOCH)?.as_nanos() as i64 / 100)?;
+            sample.SetSampleTime(time.duration_since(UNIÌX_EPOCH)?.as_nanos() as i64 / 100)?;
             sample.SetSampleDuration(100_000_000 / target_framerate as i64)?;
 
             let process_output = || {
                 let output_stream_info = transform.GetOutputStreamInfo(output_stream_id)?;
-
-                log::info!("output_stream_info is {output_stream_info:?}");
 
                 let mut output_buffer = MFT_OUTPUT_DATA_BUFFER::default();
 

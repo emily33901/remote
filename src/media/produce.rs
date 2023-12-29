@@ -83,11 +83,8 @@ pub(crate) fn open_media(
 
     let video_type = unsafe { MFCreateMediaType() }?;
     unsafe {
-        video_type.SetGUID(
-            &MF_MT_MAJOR_TYPE as *const _,
-            &MFMediaType_Video as *const _,
-        )?;
-        video_type.SetGUID(&MF_MT_SUBTYPE as *const _, &MFVideoFormat_NV12 as *const _)?;
+        video_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+        video_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
 
         let width_height = (width as u64) << 32 | (height as u64);
 
@@ -108,11 +105,8 @@ pub(crate) fn open_media(
     let audio_type = unsafe { MFCreateMediaType() }?;
 
     unsafe {
-        audio_type.SetGUID(
-            &MF_MT_MAJOR_TYPE as *const _,
-            &MFMediaType_Audio as *const _,
-        )?;
-        audio_type.SetGUID(&MF_MT_SUBTYPE as *const _, &MFAudioFormat_PCM as *const _)?;
+        audio_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
+        audio_type.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_PCM)?;
     }
 
     unsafe {
@@ -133,15 +127,13 @@ pub(crate) fn open_media(
             &MF_MT_MAJOR_TYPE as *const _,
             &MFMediaType_Audio as *const _,
         )?;
-        resampler_output_type
-            .SetGUID(&MF_MT_SUBTYPE as *const _, &MFAudioFormat_PCM as *const _)?;
-        resampler_output_type.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS as *const _, 2)?;
-        resampler_output_type.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND as *const _, 44100)?;
-        resampler_output_type.SetUINT32(&MF_MT_AUDIO_BLOCK_ALIGNMENT as *const _, 4)?;
-        resampler_output_type
-            .SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND as *const _, 44100 * 4)?;
-        resampler_output_type.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE as *const _, 16)?;
-        resampler_output_type.SetUINT32(&MF_MT_ALL_SAMPLES_INDEPENDENT as *const _, 1)?;
+        resampler_output_type.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_PCM)?;
+        resampler_output_type.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, 2)?;
+        resampler_output_type.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, 44100)?;
+        resampler_output_type.SetUINT32(&MF_MT_AUDIO_BLOCK_ALIGNMENT, 4)?;
+        resampler_output_type.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 44100 * 4)?;
+        resampler_output_type.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16)?;
+        resampler_output_type.SetUINT32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
     }
 
     let resampler: IMFTransform = unsafe {

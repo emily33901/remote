@@ -54,6 +54,8 @@ pub(crate) async fn produce(
 
                     let texture =
                         dx::TextureBuilder::new(&device, width, height, dx::TextureFormat::NV12)
+                            .keyed_mutex()
+                            .nt_handle()
                             .build()?;
 
                     let path = path.to_owned();
@@ -92,9 +94,11 @@ pub(crate) async fn produce(
                                 height,
                                 dx::TextureFormat::NV12,
                             )
+                            .nt_handle()
+                            .keyed_mutex()
                             .build()?;
 
-                            unsafe { context.CopyResource(&new_texture, &texture) };
+                            dx::copy_texture(&new_texture, &texture, None)?;
 
                             match h264_control.try_send(encoder::EncoderControl::Frame(
                                 new_texture,

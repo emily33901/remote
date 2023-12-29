@@ -13,8 +13,8 @@ use windows::{
                     DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12,
                     DXGI_FORMAT_R8G8B8A8_UNORM,
                 },
-                IDXGIKeyedMutex, IDXGISwapChain, DXGI_SWAP_CHAIN_DESC,
-                DXGI_USAGE_RENDER_TARGET_OUTPUT,
+                IDXGIKeyedMutex, IDXGIResource1, IDXGISwapChain, DXGI_ERROR_DEVICE_REMOVED,
+                DXGI_SHARED_RESOURCE_READ, DXGI_SWAP_CHAIN_DESC, DXGI_USAGE_RENDER_TARGET_OUTPUT,
             },
         },
     },
@@ -41,11 +41,18 @@ pub(crate) fn create_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
         let mut device: Option<ID3D11Device> = None;
         let mut context: Option<ID3D11DeviceContext> = None;
 
+        let mut flags = FLAGS;
+
+        #[cfg(debug_assertions)]
+        {
+            flags |= D3D11_CREATE_DEVICE_DEBUG;
+        }
+
         D3D11CreateDevice(
             None,
             D3D_DRIVER_TYPE_HARDWARE,
             None,
-            FLAGS,
+            flags,
             Some(&FEATURE_LEVELS),
             D3D11_SDK_VERSION,
             Some(&mut device as *mut _),
@@ -257,13 +264,24 @@ impl<'a> TextureBuilder<'a> {
 
         let mut texture: Option<ID3D11Texture2D> = None;
 
-        unsafe {
+        match unsafe {
             self.device.CreateTexture2D(
                 &description as *const _,
                 None,
                 Some(&mut texture as *mut _),
-            )?
-        };
+            )
+        } {
+            Ok(texture) => Ok(texture),
+            Err(err) => match err.code() {
+                DXGI_ERROR_DEVICE_REMOVED => {
+                    log::error!("device removed while trying to get texture {:?}", unsafe {
+                        self.device.GetDeviceRemovedReason()
+                    });
+                    Err(err)
+                }
+                _code => Err(err),
+            },
+        }?;
 
         texture.ok_or(eyre!("Unable to create texture"))
     }
@@ -274,12 +292,56 @@ pub(crate) fn copy_texture(
     in_texture: &ID3D11Texture2D,
     subresource_index: Option<u32>,
 ) -> windows::core::Result<()> {
+    let in_device = unsafe { in_texture.GetDevice() }?;
+    let out_device = unsafe { out_texture.GetDevice() }?;
+
     let mut in_desc = D3D11_TEXTURE2D_DESC::default();
     let mut out_desc = D3D11_TEXTURE2D_DESC::default();
     unsafe {
-        in_texture.GetDesc(&mut in_desc as *mut _);
-        out_texture.GetDesc(&mut out_desc as *mut _);
+        in_texture.GetDesc(&mut in_desc);
+        out_texture.GetDesc(&mut out_desc);
     }
+
+    let (in_texture, out_texture) = if in_device != out_device {
+        let in_flags = D3D11_RESOURCE_MISC_FLAG(in_desc.MiscFlags as i32);
+        let out_flags = D3D11_RESOURCE_MISC_FLAG(out_desc.MiscFlags as i32);
+
+        // Figure out which device to move textures to
+        // make sure that atleast 1 texture is nt shared handle
+        assert!(
+            in_flags.contains(D3D11_RESOURCE_MISC_SHARED_NTHANDLE)
+                || out_flags.contains(D3D11_RESOURCE_MISC_SHARED_NTHANDLE)
+        );
+
+        // Try and use in_texture first
+        if in_flags.contains(D3D11_RESOURCE_MISC_SHARED_NTHANDLE) {
+            let dxgi_resource: IDXGIResource1 = in_texture.cast()?;
+            let shared_handle =
+                unsafe { dxgi_resource.CreateSharedHandle(None, DXGI_SHARED_RESOURCE_READ, None) }?;
+
+            let out_device: ID3D11Device1 = unsafe { out_texture.GetDevice()? }.cast()?;
+
+            let in_texture: ID3D11Texture2D =
+                unsafe { out_device.OpenSharedResource1(shared_handle) }?;
+
+            (in_texture, out_texture.clone())
+        } else if out_flags.contains(D3D11_RESOURCE_MISC_SHARED_NTHANDLE) {
+            let dxgi_resource: IDXGIResource1 = out_texture.cast()?;
+            let shared_handle =
+                unsafe { dxgi_resource.CreateSharedHandle(None, DXGI_SHARED_RESOURCE_READ, None) }?;
+
+            let in_device: ID3D11Device1 = unsafe { in_texture.GetDevice()? }.cast()?;
+
+            let out_texture: ID3D11Texture2D =
+                unsafe { in_device.OpenSharedResource1(shared_handle) }?;
+
+            (in_texture.clone(), out_texture)
+        } else {
+            panic!("Whilst copying texture, neither input nor output texture are shared nt handle, and are from different devices.")
+        }
+    } else {
+        (in_texture.clone(), out_texture.clone())
+    };
 
     // If keyed mutex then lock keyed muticies
 
@@ -307,7 +369,7 @@ pub(crate) fn copy_texture(
         None
     };
 
-    let device = unsafe { in_texture.GetDevice() }?;
+    let device = unsafe { out_texture.GetDevice() }?;
     let context = unsafe { device.GetImmediateContext() }?;
 
     let region = D3D11_BOX {
@@ -323,12 +385,12 @@ pub(crate) fn copy_texture(
 
     unsafe {
         context.CopySubresourceRegion(
-            out_texture,
+            &out_texture,
             0,
             0,
             0,
             0,
-            in_texture,
+            &in_texture,
             subresource_index,
             Some(&region),
         )

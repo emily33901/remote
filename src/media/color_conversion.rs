@@ -252,7 +252,7 @@ pub(crate) async fn converter(
 
                         let stream_output = transform.GetOutputStreamInfo(0)?;
 
-                        log::info!("{stream_output:?}");
+                        // log::info!("{stream_output:?}");
 
                         let mut output_buffers = [output_buffer];
 
