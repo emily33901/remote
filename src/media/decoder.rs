@@ -168,7 +168,7 @@ pub(crate) async fn h264_decoder(
                         duration,
                     }) = control_rx
                         .blocking_recv()
-                        .ok_or(eyre::eyre!("encoder control closed"))?;
+                        .ok_or(eyre::eyre!("decoder control closed"))?;
 
                     if let Some(sequence_header) = sequence_header {
                         let input_type = transform.GetInputCurrentType(0)?;

@@ -364,15 +364,16 @@ impl Media {
         unsafe { sample.AddBuffer(&buffer) }?;
 
         let mut output_buffer = MFT_OUTPUT_DATA_BUFFER::default();
-        output_buffer.pSample = ManuallyDrop::new(Some(sample.clone()));
+        output_buffer.pSample = ManuallyDrop::new(Some(sample));
         output_buffer.dwStatus = 0;
         output_buffer.dwStreamID = 0;
 
+        let output_buffers = &mut [output_buffer];
+
         let mut status = 0_u32;
-        unsafe {
-            self.resampler
-                .ProcessOutput(0, &mut [output_buffer], &mut status)
-        }?;
+        unsafe { self.resampler.ProcessOutput(0, output_buffers, &mut status) }?;
+
+        let sample = output_buffers[0].pSample.take().unwrap();
 
         self.audio_timestamp = unsafe { sample.GetSampleTime()? };
 

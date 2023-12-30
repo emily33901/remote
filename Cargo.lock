@@ -2394,6 +2394,7 @@ dependencies = [
  "parking_lot",
  "rodio",
  "rtc",
+ "scopeguard",
  "serde",
  "serde_json",
  "telemetry",

@@ -4,7 +4,7 @@ use eyre::{eyre, Result};
 use windows::{
     core::{ComInterface, PCSTR},
     Win32::{
-        Foundation::{HWND, TRUE},
+        Foundation::{CloseHandle, HWND, TRUE},
         Graphics::{
             Direct3D::{Fxc::D3DCompile, *},
             Direct3D11::*,
@@ -319,6 +319,8 @@ pub(crate) fn copy_texture(
             let shared_handle =
                 unsafe { dxgi_resource.CreateSharedHandle(None, DXGI_SHARED_RESOURCE_READ, None) }?;
 
+            scopeguard::defer! {  unsafe { CloseHandle(shared_handle).unwrap() } };
+
             let out_device: ID3D11Device1 = unsafe { out_texture.GetDevice()? }.cast()?;
 
             let in_texture: ID3D11Texture2D =
@@ -329,6 +331,8 @@ pub(crate) fn copy_texture(
             let dxgi_resource: IDXGIResource1 = out_texture.cast()?;
             let shared_handle =
                 unsafe { dxgi_resource.CreateSharedHandle(None, DXGI_SHARED_RESOURCE_READ, None) }?;
+
+            scopeguard::defer! {  unsafe { CloseHandle(shared_handle).unwrap() } };
 
             let in_device: ID3D11Device1 = unsafe { in_texture.GetDevice()? }.cast()?;
 
@@ -439,5 +443,48 @@ pub(crate) fn compile_shader(data: &str, entry_point: PCSTR, target: PCSTR) -> R
                 Err(eyre!("Failed to compile because: {}", err_string))
             }
         }
+    }
+}
+
+pub(crate) trait MapTextureExt {
+    fn map<F: Fn(&[u8]) -> Result<()>>(&self, context: &ID3D11DeviceContext, f: F) -> Result<()>;
+}
+
+impl MapTextureExt for ID3D11Texture2D {
+    fn map<F: Fn(&[u8]) -> Result<()>>(&self, context: &ID3D11DeviceContext, f: F) -> Result<()> {
+        unsafe {
+            let mut desc = D3D11_TEXTURE2D_DESC::default();
+            self.GetDesc(&mut desc);
+
+            assert!(
+                D3D11_CPU_ACCESS_FLAG(desc.CPUAccessFlags as i32).contains(D3D11_CPU_ACCESS_READ)
+            );
+
+            let len = match desc.Format {
+                DXGI_FORMAT_NV12 => desc.Width * desc.Height * 2,
+                DXGI_FORMAT_B8G8R8A8_UNORM => desc.Width * desc.Height * 4,
+                _ => todo!("Unknown format"),
+            } as usize;
+
+            let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
+
+            context.Map(
+                self,
+                0,
+                D3D11_MAP_READ,
+                0,
+                Some(&mut mapped_resource as *mut _),
+            )?;
+
+            scopeguard::defer! {
+                context.Unmap(self, 0);
+            };
+
+            let s = std::slice::from_raw_parts(mapped_resource.pData as *const u8, len);
+
+            f(s)?;
+        }
+
+        Ok(())
     }
 }

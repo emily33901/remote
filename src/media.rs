@@ -11,6 +11,7 @@ pub(crate) mod encoder;
 mod color_conversion;
 mod desktop_duplication;
 pub(crate) mod file_sink;
+mod mf;
 
 use eyre::Result;
 

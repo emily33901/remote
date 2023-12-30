@@ -35,6 +35,7 @@ thiserror = "1.0"
 telemetry = { path = "telemetry" }
 rtc = { path = "rtc" }
 openh264 = "0.4.4"
+scopeguard = "1.2.0"
 
 [dependencies.windows]
 version = "0.52.0"

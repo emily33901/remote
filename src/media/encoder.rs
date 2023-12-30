@@ -16,6 +16,8 @@ use crate::media::dx::{TextureCPUAccess, TextureUsage};
 
 use crate::{media::produce::debug_video_format, video::VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
 
+use super::dx::MapTextureExt;
+
 use windows::Win32::{
     Foundation::{HWND, TRUE},
     Graphics::{
@@ -293,8 +295,8 @@ unsafe fn hardware(
 
                             media_buffer.Lock(
                                 &mut begin as *mut _ as *mut *mut u8,
-                                Some(&mut len),
                                 Some(&mut max_len),
+                                Some(&mut len),
                             )?;
                             // log::info!(
                             //     "h264 buffer len is {len} (max len is {max_len})"
@@ -377,42 +379,21 @@ unsafe fn software(
             // Map frame to memory and write to buffer
             super::dx::copy_texture(&staging_texture, &frame, None)?;
 
-            let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
-
-            context.Map(
-                &staging_texture,
-                0,
-                D3D11_MAP_READ,
-                0,
-                Some(&mut mapped_resource as *mut _),
-            )?;
-
             let media_buffer = MFCreateMemoryBuffer(width * height * 2)?;
+            staging_texture.map(context, |texture_data| {
+                super::mf::with_locked_media_buffer(&media_buffer, |data, len| {
+                    data.copy_from_slice(texture_data);
+                    *len = texture_data.len();
+                    Ok(())
+                })?;
 
-            let mut begin: MaybeUninit<*mut u8> = MaybeUninit::uninit();
-            let mut len = media_buffer.GetCurrentLength()?;
-            let mut max_len = media_buffer.GetMaxLength()?;
-
-            media_buffer.Lock(
-                &mut begin as *mut _ as *mut *mut u8,
-                Some(&mut len),
-                Some(&mut max_len),
-            )?;
-
-            std::ptr::copy(
-                mapped_resource.pData as *const u8,
-                begin.assume_init(),
-                (width * height * 2) as usize,
-            );
-
-            media_buffer.SetCurrentLength(max_len)?;
-
-            media_buffer.Unlock()?;
+                Ok(())
+            })?;
 
             let sample = unsafe { MFCreateSample() }?;
 
             sample.AddBuffer(&media_buffer)?;
-            sample.SetSampleTime(time.duration_since(UNIÌX_EPOCH)?.as_nanos() as i64 / 100)?;
+            sample.SetSampleTime(time.duration_since(UNIX_EPOCH)?.as_nanos() as i64 / 100)?;
             sample.SetSampleDuration(100_000_000 / target_framerate as i64)?;
 
             let process_output = || {
@@ -465,8 +446,8 @@ unsafe fn software(
 
                             media_buffer.Lock(
                                 &mut begin as *mut _ as *mut *mut u8,
-                                Some(&mut len),
                                 Some(&mut max_len),
+                                Some(&mut len),
                             )?;
                             // log::info!(
                             //     "h264 buffer len is {len} (max len is {max_len})"
