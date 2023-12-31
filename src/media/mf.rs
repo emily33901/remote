@@ -4,7 +4,7 @@ use windows::Win32::Media::MediaFoundation::IMFMediaBuffer;
 
 use eyre::Result;
 
-pub(crate) fn with_locked_media_buffer<F: Fn(&mut [u8], &mut usize) -> Result<()>>(
+pub(crate) fn with_locked_media_buffer<F: FnOnce(&mut [u8], &mut usize) -> Result<()>>(
     buffer: &IMFMediaBuffer,
     f: F,
 ) -> Result<()> {

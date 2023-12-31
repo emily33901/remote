@@ -448,6 +448,11 @@ pub(crate) fn compile_shader(data: &str, entry_point: PCSTR, target: PCSTR) -> R
 
 pub(crate) trait MapTextureExt {
     fn map<F: Fn(&[u8]) -> Result<()>>(&self, context: &ID3D11DeviceContext, f: F) -> Result<()>;
+    fn map_mut<F: Fn(&mut [u8]) -> Result<()>>(
+        &self,
+        context: &ID3D11DeviceContext,
+        f: F,
+    ) -> Result<()>;
 }
 
 impl MapTextureExt for ID3D11Texture2D {
@@ -481,6 +486,47 @@ impl MapTextureExt for ID3D11Texture2D {
             };
 
             let s = std::slice::from_raw_parts(mapped_resource.pData as *const u8, len);
+
+            f(s)?;
+        }
+
+        Ok(())
+    }
+
+    fn map_mut<F: Fn(&mut [u8]) -> Result<()>>(
+        &self,
+        context: &ID3D11DeviceContext,
+        f: F,
+    ) -> Result<()> {
+        unsafe {
+            let mut desc = D3D11_TEXTURE2D_DESC::default();
+            self.GetDesc(&mut desc);
+
+            assert!(
+                D3D11_CPU_ACCESS_FLAG(desc.CPUAccessFlags as i32).contains(D3D11_CPU_ACCESS_WRITE)
+            );
+
+            let len = match desc.Format {
+                DXGI_FORMAT_NV12 => desc.Width * desc.Height * 2,
+                DXGI_FORMAT_B8G8R8A8_UNORM => desc.Width * desc.Height * 4,
+                _ => todo!("Unknown format"),
+            } as usize;
+
+            let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
+
+            context.Map(
+                self,
+                0,
+                D3D11_MAP_READ,
+                0,
+                Some(&mut mapped_resource as *mut _),
+            )?;
+
+            scopeguard::defer! {
+                context.Unmap(self, 0);
+            };
+
+            let s = std::slice::from_raw_parts_mut(mapped_resource.pData as *mut u8, len);
 
             f(s)?;
         }

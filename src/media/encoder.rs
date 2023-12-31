@@ -279,6 +279,11 @@ unsafe fn hardware(
                         let sample_time;
                         let duration;
 
+                        super::mf::with_locked_media_buffer(&media_buffer, |data, len| {
+                            output.extend_from_slice(&data[..*len]);
+                            Ok(())
+                        })?;
+
                         unsafe {
                             let is_keyframe = sample.GetUINT32(&MFSampleExtension_CleanPoint)? == 1;
                             // let is_keyframe = false;
@@ -288,22 +293,6 @@ unsafe fn hardware(
                             duration = std::time::Duration::from_nanos(
                                 sample.GetSampleDuration()? as u64 * 100,
                             );
-
-                            let mut begin: MaybeUninit<*mut u8> = MaybeUninit::uninit();
-                            let mut len = media_buffer.GetCurrentLength()?;
-                            let mut max_len = media_buffer.GetMaxLength()?;
-
-                            media_buffer.Lock(
-                                &mut begin as *mut _ as *mut *mut u8,
-                                Some(&mut max_len),
-                                Some(&mut len),
-                            )?;
-                            // log::info!(
-                            //     "h264 buffer len is {len} (max len is {max_len})"
-                            // );
-
-                            output.resize(len as usize, 0);
-                            let begin = begin.assume_init();
 
                             sequence_header = if is_keyframe {
                                 // log::info!("keyframe!");
@@ -324,10 +313,6 @@ unsafe fn hardware(
                             } else {
                                 None
                             };
-
-                            std::ptr::copy(begin, output.as_mut_ptr(), len as usize);
-
-                            media_buffer.Unlock()?;
                         };
 
                         event_tx.blocking_send(EncoderEvent::Data(VideoBuffer {
@@ -430,31 +415,20 @@ unsafe fn software(
                         let sample_time;
                         let duration;
 
+                        super::mf::with_locked_media_buffer(&media_buffer, |data, len| {
+                            output.extend_from_slice(&data[..*len]);
+                            Ok(())
+                        })
+                        .unwrap();
+
                         unsafe {
                             let is_keyframe = sample.GetUINT32(&MFSampleExtension_CleanPoint)? == 1;
-                            // let is_keyframe = false;
 
                             sample_time = sample.GetUINT64(&MFSampleExtension_DecodeTimestamp)?;
 
                             duration = std::time::Duration::from_nanos(
                                 sample.GetSampleDuration()? as u64 * 100,
                             );
-
-                            let mut begin: MaybeUninit<*mut u8> = MaybeUninit::uninit();
-                            let mut len = media_buffer.GetCurrentLength()?;
-                            let mut max_len = media_buffer.GetMaxLength()?;
-
-                            media_buffer.Lock(
-                                &mut begin as *mut _ as *mut *mut u8,
-                                Some(&mut max_len),
-                                Some(&mut len),
-                            )?;
-                            // log::info!(
-                            //     "h264 buffer len is {len} (max len is {max_len})"
-                            // );
-
-                            output.resize(len as usize, 0);
-                            let begin = begin.assume_init();
 
                             sequence_header = if is_keyframe {
                                 // log::info!("keyframe!");
@@ -475,10 +449,6 @@ unsafe fn software(
                             } else {
                                 None
                             };
-
-                            std::ptr::copy(begin, output.as_mut_ptr(), len as usize);
-
-                            media_buffer.Unlock()?;
                         };
 
                         event_tx
