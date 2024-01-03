@@ -181,8 +181,16 @@ pub(crate) async fn duplicate_desktop(
 
     let (h264_control, mut h264_event) = encoder::h264_encoder(width, height, 30, bitrate).await?;
 
-    let (convert_control, mut convert_event) =
-        color_conversion::convert_bgra_to_nv12(width, height).await?;
+    // let (convert_control, mut convert_event) =
+    //     color_conversion::convert_bgra_to_nv12(width, height).await?;
+
+    let (convert_control, mut convert_event) = color_conversion::converter(
+        width,
+        height,
+        color_conversion::Format::BGRA,
+        color_conversion::Format::NV12,
+    )
+    .await?;
 
     let (dd_control, mut dd_event) = desktop_duplication::desktop_duplication()?;
 

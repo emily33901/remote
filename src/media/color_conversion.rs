@@ -89,7 +89,7 @@ pub(crate) async fn converter(
     tokio::spawn({
         async move {
             match tokio::task::spawn_blocking(move || unsafe {
-                CoInitializeEx(None, COINIT_DISABLE_OLE1DDE | COINIT_APARTMENTTHREADED)?;
+                CoInitializeEx(None, COINIT_DISABLE_OLE1DDE)?;
                 unsafe { MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)? }
 
                 let mut reset_token = 0_u32;
@@ -111,20 +111,17 @@ pub(crate) async fn converter(
                 let mut count = 0_u32;
                 let mut activates: *mut Option<IMFActivate> = std::ptr::null_mut();
 
-                // Some(&MFT_REGISTER_TYPE_INFO {
-                //         guidMajorType: MFMediaType_Video,
-                //         guidSubtype: input_format.into(),
-                //     }),
-                //     Some(&MFT_REGISTER_TYPE_INFO {
-                //         guidMajorType: MFMediaType_Video,
-                //         guidSubtype: output_format.into(),
-                //     })
-
                 MFTEnumEx(
                     MFT_CATEGORY_VIDEO_PROCESSOR,
-                    MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_LOCALMFT | MFT_ENUM_FLAG_SORTANDFILTER,
-                    None,
-                    None,
+                    MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SORTANDFILTER,
+                    Some(&MFT_REGISTER_TYPE_INFO {
+                        guidMajorType: MFMediaType_Video,
+                        guidSubtype: input_format.into(),
+                    }),
+                    Some(&MFT_REGISTER_TYPE_INFO {
+                        guidMajorType: MFMediaType_Video,
+                        guidSubtype: output_format.into(),
+                    }),
                     &mut activates,
                     &mut count,
                 )?;
@@ -154,15 +151,11 @@ pub(crate) async fn converter(
                     std::mem::transmute(device_manager),
                 )?;
 
-                let pvc: IMFVideoProcessorControl3 = transform.cast()?;
-
-                pvc.EnableHardwareEffects(true)?;
-
                 // attributes.SetUINT32(&MF_LOW_LATENCY as *const _, 1)?;
 
                 {
-                    let input_type = MFCreateMediaType()?;
-                    // let input_type = transform.GetInputAvailableType(0, 0)?;
+                    // let input_type = MFCreateMediaType()?;
+                    let input_type = transform.GetInputAvailableType(0, 0)?;
 
                     input_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
                     input_type.SetGUID(&MF_MT_SUBTYPE, &input_format.into())?;
@@ -170,7 +163,7 @@ pub(crate) async fn converter(
                     let width_height = (width as u64) << 32 | (height as u64);
                     input_type.SetUINT64(&MF_MT_FRAME_SIZE, width_height)?;
 
-                    input_type.SetUINT64(&MF_MT_FRAME_RATE, (5 << 32) | (1))?;
+                    input_type.SetUINT64(&MF_MT_FRAME_RATE, (30 << 32) | (1))?;
 
                     input_type
                         .SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
@@ -191,7 +184,7 @@ pub(crate) async fn converter(
                             let width_height = (width as u64) << 32 | (height as u64);
                             output_type.SetUINT64(&MF_MT_FRAME_SIZE, width_height)?;
 
-                            output_type.SetUINT64(&MF_MT_FRAME_RATE, (5 << 32) | (1))?;
+                            output_type.SetUINT64(&MF_MT_FRAME_RATE, (30 << 32) | (1))?;
 
                             output_type.SetUINT32(
                                 &MF_MT_INTERLACE_MODE,
@@ -234,15 +227,18 @@ pub(crate) async fn converter(
                         .blocking_recv()
                         .ok_or(eyre::eyre!("convert control closed"))?;
 
-                    let dxgi_buffer =
-                        MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &frame, 0, FALSE)?;
+                    // let dxgi_buffer =
+                    //     MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &frame, 0, FALSE)?;
 
-                    let sample = unsafe { MFCreateSample() }?;
+                    // let sample = unsafe { MFCreateSample() }?;
 
-                    sample.AddBuffer(&dxgi_buffer)?;
+                    // sample.AddBuffer(&dxgi_buffer)?;
+
+                    let sample = MFCreateVideoSampleFromSurface(&frame)?;
+
                     sample
                         .SetSampleTime(time.duration_since(UNIX_EPOCH)?.as_nanos() as i64 / 100)?;
-                    // sample.SetSampleDuration(100_000_000 / target_framerate as i64)?;
+                    sample.SetSampleDuration(100_000_000 / 30 as i64)?;
 
                     let process_output = || {
                         let mut output_buffer = MFT_OUTPUT_DATA_BUFFER::default();

@@ -81,6 +81,8 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
                                 1080,
                                 dx::TextureFormat::BGRA,
                             )
+                            .keyed_mutex()
+                            .nt_handle()
                             .build()?;
 
                             {
