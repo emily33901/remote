@@ -146,7 +146,6 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
                         }
                     }
                 }
-                
                 eyre::Ok(())
             })
             .await

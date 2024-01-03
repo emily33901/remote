@@ -248,56 +248,61 @@ pub(crate) async fn server(address: &str) -> Result<()> {
         let peers = peers.clone();
         let connection_requests = connection_requests.clone();
         tokio::spawn(async move {
-            println!("Incoming TCP connection from: {}", addr);
+            match async move {
+                println!("Incoming TCP connection from: {}", addr);
 
-            let ws_stream = tokio_tungstenite::accept_async(conn)
+                let ws_stream = tokio_tungstenite::accept_async(conn).await?;
+
+                let peer_id = make_id();
+
+                println!("WebSocket connection established: {} {}", peer_id, addr);
+
+                let (mut outgoing, mut incoming) = ws_stream.split();
+                let (tx, mut rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
+
+                peers.lock().await.insert(peer_id, tx.clone());
+
+                tx.send(ServerToPeerMessage {
+                    job_id: 0,
+                    inner: ServerToPeer::Id(peer_id),
+                })
                 .await
-                .expect("Error during the websocket handshake occurred");
+                .unwrap();
 
-            let peer_id = make_id();
-
-            println!("WebSocket connection established: {} {}", peer_id, addr);
-
-            let (mut outgoing, mut incoming) = ws_stream.split();
-            let (tx, mut rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
-
-            peers.lock().await.insert(peer_id, tx.clone());
-
-            tx.send(ServerToPeerMessage {
-                job_id: 0,
-                inner: ServerToPeer::Id(peer_id),
-            })
-            .await
-            .unwrap();
-
-            loop {
-                let peers = peers.clone();
-                let connection_requests = connection_requests.clone();
-                match futures::select! {
-                    msg = incoming.next().fuse() => {
-                        match msg {
-                            Some(Ok(msg)) => {
-                                handle_incoming_message(peer_id, connection_requests, peers, msg).await
+                loop {
+                    let peers = peers.clone();
+                    let connection_requests = connection_requests.clone();
+                    match futures::select! {
+                        msg = incoming.next().fuse() => {
+                            match msg {
+                                Some(Ok(msg)) => {
+                                    handle_incoming_message(peer_id, connection_requests, peers, msg).await
+                                }
+                                None | Some(Err(_)) => break,
                             }
-                            None | Some(Err(_)) => break,
-                        }
-                    },
-                    msg = rx.recv().fuse() => {
-                        match msg {
-                            Some(msg) => {
-                                handle_outgoing(&mut outgoing, msg).await
+                        },
+                        msg = rx.recv().fuse() => {
+                            match msg {
+                                Some(msg) => {
+                                    handle_outgoing(&mut outgoing, msg).await
+                                }
+                                None => break,
                             }
-                            None => break,
                         }
+                    } {
+                        Ok(_) => {}
+                        Err(_) => break,
                     }
-                } {
-                    Ok(_) => {}
-                    Err(_) => break,
                 }
-            }
 
-            println!("{} {} disconnected", peer_id, &addr);
-            peers.lock().await.remove(&peer_id);
+                println!("{} {} disconnected", peer_id, &addr);
+                peers.lock().await.remove(&peer_id);
+
+                eyre::Ok(())
+            }.await {
+                Ok(_) => {}
+                Err(err) => {}
+            }
         });
     }
 

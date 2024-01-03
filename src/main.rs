@@ -339,10 +339,10 @@ async fn peer(address: &str, _name: &str) -> Result<()> {
         let peer_controls = peer_controls.clone();
         async move {
             match tokio::spawn(async move {
-                let (tx, mut rx) = media::duplicate_desktop(width, height, bitrate).await?;
-                // let (_tx, mut rx) =
-                //     media::produce(&std::env::var("media_filename")?, width, height, bitrate)
-                //         .await?;
+                // let (tx, mut rx) = media::duplicate_desktop(width, height, bitrate).await?;
+                let (_tx, mut rx) =
+                    media::produce(&std::env::var("media_filename")?, width, height, bitrate)
+                        .await?;
 
                 while let Some(event) = rx.recv().await {
                     match event {

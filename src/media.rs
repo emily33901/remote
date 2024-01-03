@@ -11,6 +11,7 @@ pub(crate) mod encoder;
 mod color_conversion;
 mod desktop_duplication;
 pub(crate) mod file_sink;
+mod mf;
 
 use eyre::Result;
 
@@ -54,6 +55,8 @@ pub(crate) async fn produce(
 
                     let texture =
                         dx::TextureBuilder::new(&device, width, height, dx::TextureFormat::NV12)
+                            .keyed_mutex()
+                            .nt_handle()
                             .build()?;
 
                     let path = path.to_owned();
@@ -92,9 +95,11 @@ pub(crate) async fn produce(
                                 height,
                                 dx::TextureFormat::NV12,
                             )
+                            .nt_handle()
+                            .keyed_mutex()
                             .build()?;
 
-                            unsafe { context.CopyResource(&new_texture, &texture) };
+                            dx::copy_texture(&new_texture, &texture, None)?;
 
                             match h264_control.try_send(encoder::EncoderControl::Frame(
                                 new_texture,
@@ -140,7 +145,7 @@ pub(crate) async fn produce(
             .unwrap()
             {
                 Ok(_) => log::warn!("media::produce exit Ok"),
-                Err(err) => log::error!("media::produce exit err {err} {err:?}"),
+                Err(err) => log::error!("media::produce exit err {err:?}"),
             }
         }
     });

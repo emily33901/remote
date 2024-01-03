@@ -35,6 +35,7 @@ thiserror = "1.0"
 telemetry = { path = "telemetry" }
 rtc = { path = "rtc" }
 openh264 = "0.4.4"
+scopeguard = "1.2.0"
 
 [dependencies.windows]
 version = "0.52.0"
@@ -67,11 +68,13 @@ features = [
     "Win32_System_Performance"
 ]
 
+[patch.crates-io]
+ring = { git = "https://github.com/awakecoding/ring", branch = "0.16.20_alpha" }
+webrtc = { git = "https://github.com/emily33901/webrtc/" }
+
 [profile.release]
 panic = "abort"
 debug = true
-
-
 
 [profile.dev]
 panic = "abort"

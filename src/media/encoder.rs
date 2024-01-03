@@ -12,7 +12,26 @@ use windows::{
     },
 };
 
+use crate::media::dx::{TextureCPUAccess, TextureUsage};
+
 use crate::{media::produce::debug_video_format, video::VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
+
+use super::dx::MapTextureExt;
+
+use windows::Win32::{
+    Foundation::{HWND, TRUE},
+    Graphics::{
+        Direct3D::{Fxc::D3DCompile, *},
+        Direct3D11::*,
+        Dxgi::{
+            Common::{
+                DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12,
+                DXGI_FORMAT_R8G8B8A8_UNORM,
+            },
+            IDXGIKeyedMutex, IDXGISwapChain, DXGI_SWAP_CHAIN_DESC, DXGI_USAGE_RENDER_TARGET_OUTPUT,
+        },
+    },
+};
 
 pub(crate) enum EncoderControl {
     Frame(ID3D11Texture2D, std::time::SystemTime),
@@ -39,7 +58,7 @@ pub(crate) async fn h264_encoder(
                 let mut reset_token = 0_u32;
                 let mut device_manager: Option<IMFDXGIDeviceManager> = None;
 
-                let (device, _context) = super::dx::create_device()?;
+                let (device, context) = super::dx::create_device()?;
 
                 unsafe {
                     MFCreateDXGIDeviceManager(
@@ -52,43 +71,65 @@ pub(crate) async fn h264_encoder(
 
                 unsafe { device_manager.ResetDevice(&device, reset_token) }?;
 
-                let mut count = 0_u32;
-                let mut activates: *mut Option<IMFActivate> = std::ptr::null_mut();
+                // TODO(emily): Its not quite this easy because hardware -> async and non-hardware -> sync
+                // so we need different code paths here
 
-                MFTEnumEx(
-                    MFT_CATEGORY_VIDEO_ENCODER,
-                    MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SORTANDFILTER,
-                    None,
-                    Some(&MFT_REGISTER_TYPE_INFO {
-                        guidMajorType: MFMediaType_Video,
-                        guidSubtype: MFVideoFormat_H264,
-                    } as *const _),
-                    &mut activates,
-                    &mut count,
-                )?;
+                let find_encoder = |hardware| {
+                    let mut count = 0_u32;
+                    let mut activates: *mut Option<IMFActivate> = std::ptr::null_mut();
 
-                // TODO(emily): CoTaskMemFree activates
+                    MFTEnumEx(
+                        MFT_CATEGORY_VIDEO_ENCODER,
+                        if hardware {
+                            MFT_ENUM_FLAG_HARDWARE
+                        } else {
+                            MFT_ENUM_FLAG(0)
+                        } | MFT_ENUM_FLAG_SORTANDFILTER,
+                        None,
+                        Some(&MFT_REGISTER_TYPE_INFO {
+                            guidMajorType: MFMediaType_Video,
+                            guidSubtype: MFVideoFormat_H264,
+                        } as *const _),
+                        &mut activates,
+                        &mut count,
+                    )?;
 
-                let activates = std::slice::from_raw_parts_mut(activates, count as usize);
-                let activate = activates.first().unwrap().as_ref().unwrap();
+                    // TODO(emily): CoTaskMemFree activates
 
-                let transform: IMFTransform = activate.ActivateObject()?;
+                    let activates = std::slice::from_raw_parts_mut(activates, count as usize);
+                    let activate = activates.first().ok_or_else(|| eyre::eyre!("No encoders"))?;
+
+                    // NOTE(emily): If there is an activate then it should be real
+                    let activate = activate.as_ref().unwrap();
+
+                    let transform: IMFTransform = activate.ActivateObject()?;
+
+                    eyre::Ok(transform)
+                };
+
+                let transform = match find_encoder(true) {
+                    Ok(encoder) => encoder,
+                    Err(err) => {
+                        log::warn!("unable to find a hardware h264 encoder {err}, falling back to a software encoder");
+                        find_encoder(false)?
+                    }
+                };
 
                 let attributes = transform.GetAttributes()?;
 
                 attributes.SetUINT32(&MF_TRANSFORM_ASYNC_UNLOCK, 1)?;
 
-                let event_gen: IMFMediaEventGenerator = transform.cast()?;
-
                 let mut input_stream_ids = [0];
                 let mut output_stream_ids = [0];
 
-                transform.GetStreamIDs(&mut input_stream_ids, &mut output_stream_ids)?;
+                // NOTE(emily): If this fails then stream ids are 0, 0 anyway
+                let _ = transform.GetStreamIDs(&mut input_stream_ids, &mut output_stream_ids);
 
-                transform.ProcessMessage(
+                // NOTE(emily): If this fails then this is a sofware encoder
+                let is_hardware_transform = transform.ProcessMessage(
                     MFT_MESSAGE_SET_D3D_MANAGER,
                     std::mem::transmute(device_manager),
-                )?;
+                ).map(|_| true).unwrap_or_default();
 
                 attributes.SetUINT32(&MF_LOW_LATENCY as *const _, 1)?;
 
@@ -143,10 +184,6 @@ pub(crate) async fn h264_encoder(
                     transform.SetInputType(input_stream_ids[0], &input_type, 0)?;
                 }
 
-                transform.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
-                transform.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
-                transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
-
                 // let output_sample = unsafe { MFCreateSample() }?;
 
                 // let output_media_buffer = unsafe { MFCreateMemoryBuffer(width * height * 4) }?;
@@ -154,135 +191,15 @@ pub(crate) async fn h264_encoder(
 
                 let _status = 0;
 
-                loop {
-                    let event = event_gen.GetEvent(MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS(0))?;
-                    let event_type = event.GetType()?;
+                let input_stream_id = input_stream_ids[0];
+                let output_stream_id = output_stream_ids[0];
 
-                    match event_type {
-                        601 => {
-                            let EncoderControl::Frame(frame, time) = control_rx
-                                .blocking_recv()
-                                .ok_or(eyre::eyre!("encoder control closed"))?;
-
-                            {
-                                let dxgi_buffer = MFCreateDXGISurfaceBuffer(
-                                    &ID3D11Texture2D::IID,
-                                    &frame,
-                                    0,
-                                    FALSE,
-                                )?;
-
-                                let sample = unsafe { MFCreateSample() }?;
-
-                                sample.AddBuffer(&dxgi_buffer)?;
-                                sample.SetSampleTime(
-                                    time.duration_since(UNIX_EPOCH)?.as_nanos() as i64 / 100,
-                                )?;
-                                sample.SetSampleDuration(100_000_000 / target_framerate as i64)?;
-
-                                transform.ProcessInput(input_stream_ids[0], &sample, 0)?;
-                            }
-                        }
-
-                        // METransformHaveOutput
-                        602 => {
-                            let mut output_buffer = MFT_OUTPUT_DATA_BUFFER::default();
-                            // output_buffer.pSample =
-                            // ManuallyDrop::new(Some(output_sample.clone())); //  ManuallyDrop::new(Some(sample.clone()));
-                            output_buffer.dwStatus = 0;
-                            output_buffer.dwStreamID = output_stream_ids[0];
-
-                            let mut output_buffers = [output_buffer];
-
-                            let mut status = 0_u32;
-                            match transform.ProcessOutput(0, &mut output_buffers, &mut status) {
-                                Ok(_ok) => {
-                                    // let timestamp = unsafe { sample.GetSampleTime()? };
-                                    let sample = output_buffers[0].pSample.take().unwrap();
-                                    let media_buffer =
-                                        unsafe { sample.ConvertToContiguousBuffer() }?;
-
-                                    // let sample = &output_sample;
-                                    // let media_buffer = &output_media_buffer;
-
-                                    let mut output = vec![];
-                                    let mut sequence_header = None;
-
-                                    let sample_time;
-                                    let duration;
-
-                                    unsafe {
-                                        let is_keyframe =
-                                            sample.GetUINT32(&MFSampleExtension_CleanPoint)? == 1;
-                                        // let is_keyframe = false;
-
-                                        sample_time =
-                                            sample.GetUINT64(&MFSampleExtension_DecodeTimestamp)?;
-
-                                        duration = std::time::Duration::from_nanos(
-                                            sample.GetSampleDuration()? as u64 * 100,
-                                        );
-
-                                        let mut begin: MaybeUninit<*mut u8> = MaybeUninit::uninit();
-                                        let mut len = media_buffer.GetCurrentLength()?;
-                                        let mut max_len = media_buffer.GetMaxLength()?;
-
-                                        media_buffer.Lock(
-                                            &mut begin as *mut _ as *mut *mut u8,
-                                            Some(&mut len),
-                                            Some(&mut max_len),
-                                        )?;
-                                        // log::info!(
-                                        //     "h264 buffer len is {len} (max len is {max_len})"
-                                        // );
-
-                                        output.resize(len as usize, 0);
-                                        let begin = begin.assume_init();
-
-                                        sequence_header = if is_keyframe {
-                                            // log::info!("keyframe!");
-                                            let output_type = transform
-                                                .GetOutputCurrentType(output_stream_ids[0])?;
-                                            let extra_data_size = output_type
-                                                .GetBlobSize(&MF_MT_MPEG_SEQUENCE_HEADER)?
-                                                as usize;
-
-                                            let mut sequence_header = vec![0; extra_data_size];
-
-                                            output_type.GetBlob(
-                                                &MF_MT_MPEG_SEQUENCE_HEADER,
-                                                &mut sequence_header.as_mut_slice()
-                                                    [..extra_data_size],
-                                                None,
-                                            )?;
-
-                                            Some(sequence_header)
-                                        } else {
-                                            None
-                                        };
-
-                                        std::ptr::copy(begin, output.as_mut_ptr(), len as usize);
-
-                                        media_buffer.Unlock()?;
-                                    };
-
-                                    event_tx.blocking_send(EncoderEvent::Data(VideoBuffer {
-                                        data: output,
-                                        sequence_header: sequence_header,
-                                        time: std::time::UNIX_EPOCH
-                                            + std::time::Duration::from_nanos(sample_time * 100),
-                                        duration: duration,
-                                    }))?;
-                                }
-                                Err(_) => {}
-                            }
-                        }
-
-                        _ => {
-                            log::warn!("unknown event {event_type}")
-                        }
-                    }
+                if let Ok(event_gen) = transform.cast::<IMFMediaEventGenerator>() {
+                    hardware(event_gen, transform, control_rx, event_tx, target_framerate, output_stream_id, input_stream_id)?;
+                } else {
+                    software(&device, &context, transform, control_rx, event_tx, target_framerate, output_stream_id, input_stream_id, width, height)?;
                 }
+
 
                 eyre::Ok(())
             })
@@ -296,4 +213,304 @@ pub(crate) async fn h264_encoder(
     });
 
     Ok((control_tx, event_rx))
+}
+
+unsafe fn hardware(
+    event_gen: IMFMediaEventGenerator,
+    transform: IMFTransform,
+    mut control_rx: mpsc::Receiver<EncoderControl>,
+    event_tx: mpsc::Sender<EncoderEvent>,
+    target_framerate: u32,
+    output_stream_id: u32,
+    input_stream_id: u32,
+) -> eyre::Result<()> {
+    transform.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
+    transform.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
+    transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
+
+    loop {
+        let event = event_gen.GetEvent(MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS(0))?;
+        let event_type = event.GetType()?;
+
+        match event_type {
+            601 => {
+                let EncoderControl::Frame(frame, time) = control_rx
+                    .blocking_recv()
+                    .ok_or(eyre::eyre!("encoder control closed"))?;
+
+                {
+                    let dxgi_buffer =
+                        MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &frame, 0, FALSE)?;
+
+                    let sample = unsafe { MFCreateSample() }?;
+
+                    sample.AddBuffer(&dxgi_buffer)?;
+                    sample
+                        .SetSampleTime(time.duration_since(UNIX_EPOCH)?.as_nanos() as i64 / 100)?;
+                    sample.SetSampleDuration(100_000_000 / target_framerate as i64)?;
+
+                    transform.ProcessInput(input_stream_id, &sample, 0)?;
+                }
+            }
+
+            // METransformHaveOutput
+            602 => {
+                let mut output_buffer = MFT_OUTPUT_DATA_BUFFER::default();
+                // output_buffer.pSample =
+                // ManuallyDrop::new(Some(output_sample.clone())); //  ManuallyDrop::new(Some(sample.clone()));
+                output_buffer.dwStatus = 0;
+                output_buffer.dwStreamID = output_stream_id;
+
+                let mut output_buffers = [output_buffer];
+
+                let mut status = 0_u32;
+                match transform.ProcessOutput(0, &mut output_buffers, &mut status) {
+                    Ok(_ok) => {
+                        // let timestamp = unsafe { sample.GetSampleTime()? };
+                        let sample = output_buffers[0].pSample.take().unwrap();
+                        let media_buffer = unsafe { sample.ConvertToContiguousBuffer() }?;
+
+                        // let sample = &output_sample;
+                        // let media_buffer = &output_media_buffer;
+
+                        let mut output = vec![];
+                        let mut sequence_header = None;
+
+                        let sample_time;
+                        let duration;
+
+                        super::mf::with_locked_media_buffer(&media_buffer, |data, len| {
+                            output.extend_from_slice(&data[..*len]);
+                            Ok(())
+                        })?;
+
+                        unsafe {
+                            let is_keyframe = sample.GetUINT32(&MFSampleExtension_CleanPoint)? == 1;
+                            // let is_keyframe = false;
+
+                            sample_time = sample.GetUINT64(&MFSampleExtension_DecodeTimestamp)?;
+
+                            duration = std::time::Duration::from_nanos(
+                                sample.GetSampleDuration()? as u64 * 100,
+                            );
+
+                            sequence_header = if is_keyframe {
+                                // log::info!("keyframe!");
+                                let output_type =
+                                    transform.GetOutputCurrentType(output_stream_id)?;
+                                let extra_data_size =
+                                    output_type.GetBlobSize(&MF_MT_MPEG_SEQUENCE_HEADER)? as usize;
+
+                                let mut sequence_header = vec![0; extra_data_size];
+
+                                output_type.GetBlob(
+                                    &MF_MT_MPEG_SEQUENCE_HEADER,
+                                    &mut sequence_header.as_mut_slice()[..extra_data_size],
+                                    None,
+                                )?;
+
+                                Some(sequence_header)
+                            } else {
+                                None
+                            };
+                        };
+
+                        event_tx.blocking_send(EncoderEvent::Data(VideoBuffer {
+                            data: output,
+                            sequence_header: sequence_header,
+                            time: std::time::UNIX_EPOCH
+                                + std::time::Duration::from_nanos(sample_time * 100),
+                            duration: duration,
+                        }))?;
+                    }
+                    Err(_) => {}
+                }
+            }
+
+            _ => {
+                log::warn!("unknown event {event_type}")
+            }
+        }
+    }
+}
+
+unsafe fn software(
+    device: &ID3D11Device,
+    context: &ID3D11DeviceContext,
+    transform: IMFTransform,
+    mut control_rx: mpsc::Receiver<EncoderControl>,
+    event_tx: mpsc::Sender<EncoderEvent>,
+    target_framerate: u32,
+    output_stream_id: u32,
+    input_stream_id: u32,
+    width: u32,
+    height: u32,
+) -> eyre::Result<()> {
+    let staging_texture =
+        super::dx::TextureBuilder::new(device, width, height, super::dx::TextureFormat::NV12)
+            .usage(TextureUsage::Staging)
+            .cpu_access(TextureCPUAccess::Read)
+            .build()?;
+
+    transform.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
+    transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
+
+    loop {
+        let EncoderControl::Frame(frame, time) = control_rx
+            .blocking_recv()
+            .ok_or(eyre::eyre!("encoder control closed"))?;
+
+        {
+            // Map frame to memory and write to buffer
+            super::dx::copy_texture(&staging_texture, &frame, None)?;
+
+            let media_buffer = MFCreateMemoryBuffer(width * height * 2)?;
+            staging_texture.map(context, |texture_data| {
+                super::mf::with_locked_media_buffer(&media_buffer, |data, len| {
+                    data.copy_from_slice(texture_data);
+                    *len = texture_data.len();
+                    Ok(())
+                })?;
+
+                Ok(())
+            })?;
+
+            let sample = unsafe { MFCreateSample() }?;
+
+            sample.AddBuffer(&media_buffer)?;
+            sample.SetSampleTime(time.duration_since(UNIX_EPOCH)?.as_nanos() as i64 / 100)?;
+            sample.SetSampleDuration(100_000_000 / target_framerate as i64)?;
+
+            let process_output = || {
+                let output_stream_info = transform.GetOutputStreamInfo(output_stream_id)?;
+
+                let mut output_buffer = MFT_OUTPUT_DATA_BUFFER::default();
+
+                let output_sample = MFCreateSample()?;
+                let media_buffer = MFCreateMemoryBuffer(output_stream_info.cbSize)?;
+                output_sample.AddBuffer(&media_buffer)?;
+
+                output_buffer.pSample = std::mem::ManuallyDrop::new(Some(output_sample));
+                output_buffer.dwStatus = 0;
+                output_buffer.dwStreamID = output_stream_id;
+
+                let mut output_buffers = [output_buffer];
+
+                let mut status = 0_u32;
+
+                // TODO(emily): Copy pasted from above please roll up!
+
+                match transform.ProcessOutput(0, &mut output_buffers, &mut status) {
+                    Ok(ok) => {
+                        // let timestamp = unsafe { sample.GetSampleTime()? };
+                        let sample = output_buffers[0].pSample.take().unwrap();
+                        let media_buffer = unsafe { sample.ConvertToContiguousBuffer() }?;
+
+                        // let sample = &output_sample;
+                        // let media_buffer = &output_media_buffer;
+
+                        let mut output = vec![];
+                        let sequence_header;
+
+                        let sample_time;
+                        let duration;
+
+                        super::mf::with_locked_media_buffer(&media_buffer, |data, len| {
+                            output.extend_from_slice(&data[..*len]);
+                            Ok(())
+                        })
+                        .unwrap();
+
+                        unsafe {
+                            let is_keyframe = sample.GetUINT32(&MFSampleExtension_CleanPoint)? == 1;
+
+                            sample_time = sample.GetUINT64(&MFSampleExtension_DecodeTimestamp)?;
+
+                            duration = std::time::Duration::from_nanos(
+                                sample.GetSampleDuration()? as u64 * 100,
+                            );
+
+                            sequence_header = if is_keyframe {
+                                // log::info!("keyframe!");
+                                let output_type =
+                                    transform.GetOutputCurrentType(output_stream_id)?;
+                                let extra_data_size =
+                                    output_type.GetBlobSize(&MF_MT_MPEG_SEQUENCE_HEADER)? as usize;
+
+                                let mut sequence_header = vec![0; extra_data_size];
+
+                                output_type.GetBlob(
+                                    &MF_MT_MPEG_SEQUENCE_HEADER,
+                                    &mut sequence_header.as_mut_slice()[..extra_data_size],
+                                    None,
+                                )?;
+
+                                Some(sequence_header)
+                            } else {
+                                None
+                            };
+                        };
+
+                        event_tx
+                            .blocking_send(EncoderEvent::Data(VideoBuffer {
+                                data: output,
+                                sequence_header: sequence_header,
+                                time: std::time::UNIX_EPOCH
+                                    + std::time::Duration::from_nanos(sample_time * 100),
+                                duration: duration,
+                            }))
+                            .unwrap();
+
+                        Ok(ok)
+                    }
+
+                    Err(err) => Err(err),
+                }
+            };
+
+            match transform
+                .ProcessInput(input_stream_id, &sample, 0)
+                .map_err(|err| err.code())
+            {
+                Ok(()) => loop {
+                    match process_output().map_err(|err| err.code()) {
+                        Ok(_) => {}
+                        Err(MF_E_TRANSFORM_NEED_MORE_INPUT) => {
+                            log::debug!("need more input");
+                            break;
+                        }
+                        Err(MF_E_TRANSFORM_STREAM_CHANGE) => {
+                            log::warn!("stream change");
+
+                            {
+                                for i in 0.. {
+                                    if let Ok(output_type) = transform.GetOutputAvailableType(0, i)
+                                    {
+                                        let subtype = output_type.GetGUID(&MF_MT_SUBTYPE)?;
+
+                                        super::produce::debug_video_format(&output_type)?;
+
+                                        if subtype == MFVideoFormat_NV12 {
+                                            transform.SetOutputType(0, &output_type, 0)?;
+                                            break;
+                                        }
+                                    } else {
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        Err(err) => todo!("encoder process_output: No idea what to do with {err}"),
+                    }
+                },
+                Err(MF_E_NOTACCEPTING) => {
+                    log::warn!("encoder is not accepting frames something has gone horribly wrong")
+                }
+                Err(err) => todo!("No idea what to do with {err}"),
+            }
+        }
+    }
+
+    eyre::Ok(())
 }
