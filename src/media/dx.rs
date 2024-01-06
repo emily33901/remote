@@ -45,7 +45,7 @@ pub(crate) fn create_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
 
         #[cfg(debug_assertions)]
         {
-            flags |= D3D11_CREATE_DEVICE_DEBUG;
+            // flags |= D3D11_CREATE_DEVICE_DEBUG;
         }
 
         D3D11CreateDevice(

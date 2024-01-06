@@ -71,7 +71,7 @@ pub(crate) async fn h264_decoder(
                     MFTEnumEx(
                         MFT_CATEGORY_VIDEO_DECODER,
                         if hardware {
-                            MFT_ENUM_FLAG_HARDWARE
+                            MFT_ENUM_FLAG_SYNCMFT
                         } else {
                             MFT_ENUM_FLAG(0)
                         } | MFT_ENUM_FLAG_SORTANDFILTER,
@@ -98,9 +98,9 @@ pub(crate) async fn h264_decoder(
                 };
 
                 let transform = match find_decoder(true) {
-                    Ok(encoder) => encoder,
+                    Ok(decoder) => decoder,
                     Err(err) => {
-                        log::warn!("unable to find a hardware h264 encoder {err}, falling back to a software encoder");
+                        log::warn!("unable to find a hardware h264 decoder {err}, falling back to a software encoder");
                         find_decoder(false)?
                     }
                 };
@@ -261,6 +261,7 @@ unsafe fn hardware(
                         super::dx::TextureFormat::NV12,
                     )
                     .keyed_mutex()
+                    .nt_handle()
                     .build()
                     .unwrap();
 
