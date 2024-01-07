@@ -51,7 +51,7 @@ pub(crate) async fn produce(
                         CoInitializeEx(None, COINIT_DISABLE_OLE1DDE)?;
                     }
 
-                    let (device, context) = dx::create_device()?;
+                    let (device, _context) = dx::create_device()?;
 
                     let texture =
                         dx::TextureBuilder::new(&device, width, height, dx::TextureFormat::NV12)
@@ -197,9 +197,9 @@ pub(crate) async fn duplicate_desktop(
     )
     .await?;
 
-    let (dd_control, mut dd_event) = desktop_duplication::desktop_duplication()?;
+    let (_dd_control, mut dd_event) = desktop_duplication::desktop_duplication()?;
 
-    tokio::spawn(async move { while let Some(control) = control_rx.recv().await {} });
+    tokio::spawn(async move { while let Some(_control) = control_rx.recv().await {} });
 
     tokio::spawn(async move {
         while let Some(event) = dd_event.recv().await {

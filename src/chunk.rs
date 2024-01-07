@@ -125,7 +125,7 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
                                         event_tx
                                             .send(AssemblyEvent::Whole(v))
                                             .await
-                                            .map_err(|err| eyre::eyre!("Failed to send"))?;
+                                            .map_err(|_err| eyre::eyre!("Failed to send"))?;
                                     }
                                 }
                             }

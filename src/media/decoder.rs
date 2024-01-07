@@ -7,11 +7,8 @@ use windows::{
     Win32::{
         Graphics::{
             Direct3D11::{
-                ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_BOX,
-                D3D11_RESOURCE_MISC_FLAG, D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX,
-                D3D11_TEXTURE2D_DESC,
+                ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
             },
-            Dxgi::{Common::DXGI_FORMAT_NV12, IDXGIKeyedMutex},
         },
         Media::MediaFoundation::*,
         System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE},
@@ -20,7 +17,7 @@ use windows::{
 
 use crate::{video::VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
 
-use super::dx::{copy_texture, MapTextureExt, TextureCPUAccess, TextureFormat, TextureUsage};
+use super::dx::{copy_texture, MapTextureExt, TextureCPUAccess, TextureUsage};
 
 pub(crate) enum DecoderControl {
     Data(VideoBuffer),
@@ -36,7 +33,7 @@ pub(crate) async fn h264_decoder(
     target_bitrate: u32,
 ) -> Result<(mpsc::Sender<DecoderControl>, mpsc::Receiver<DecoderEvent>)> {
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
-    let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
+    let (control_tx, control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
     telemetry::client::watch_channel(&control_tx, "h264-decoder-control").await;
     telemetry::client::watch_channel(&event_tx, "h264-decoder-event").await;
@@ -210,7 +207,7 @@ unsafe fn hardware(
 
     loop {
         let DecoderControl::Data(VideoBuffer {
-            mut data,
+            data,
             sequence_header,
             time,
             duration,
@@ -371,7 +368,7 @@ unsafe fn software(
 
     loop {
         let DecoderControl::Data(VideoBuffer {
-            mut data,
+            data,
             sequence_header,
             time,
             duration,
@@ -440,7 +437,7 @@ unsafe fn software(
 
                     staging_texture
                         .map_mut(context, |texture_data| {
-                            super::mf::with_locked_media_buffer(&media_buffer, |buffer, len| {
+                            super::mf::with_locked_media_buffer(&media_buffer, |buffer, _len| {
                                 texture_data.copy_from_slice(buffer);
                                 Ok(())
                             })

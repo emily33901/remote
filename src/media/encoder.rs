@@ -1,4 +1,4 @@
-use std::{mem::MaybeUninit, time::UNIX_EPOCH};
+use std::{time::UNIX_EPOCH};
 
 use eyre::Result;
 use tokio::sync::mpsc;
@@ -19,17 +19,8 @@ use crate::{media::produce::debug_video_format, video::VideoBuffer, ARBITRARY_CH
 use super::dx::MapTextureExt;
 
 use windows::Win32::{
-    Foundation::{HWND, TRUE},
     Graphics::{
-        Direct3D::{Fxc::D3DCompile, *},
         Direct3D11::*,
-        Dxgi::{
-            Common::{
-                DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12,
-                DXGI_FORMAT_R8G8B8A8_UNORM,
-            },
-            IDXGIKeyedMutex, IDXGISwapChain, DXGI_SWAP_CHAIN_DESC, DXGI_USAGE_RENDER_TARGET_OUTPUT,
-        },
     },
 };
 
@@ -53,7 +44,7 @@ pub(crate) async fn h264_encoder(
     target_bitrate: u32,
 ) -> Result<(mpsc::Sender<EncoderControl>, mpsc::Receiver<EncoderEvent>)> {
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
-    let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
+    let (control_tx, control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
     tokio::spawn({
         async move {
@@ -132,7 +123,7 @@ pub(crate) async fn h264_encoder(
                 let _ = transform.GetStreamIDs(&mut input_stream_ids, &mut output_stream_ids);
 
                 // NOTE(emily): If this fails then this is a sofware encoder
-                let is_hardware_transform = transform.ProcessMessage(
+                let _is_hardware_transform = transform.ProcessMessage(
                     MFT_MESSAGE_SET_D3D_MANAGER,
                     std::mem::transmute(device_manager),
                 ).map(|_| true).unwrap_or_default();
@@ -305,7 +296,7 @@ unsafe fn hardware(
 
                             sample_time = match sample.GetSampleTime() {
                                 Ok(sample_time) => sample_time as u64,
-                                Err(err) => {
+                                Err(_err) => {
                                     // No sample time, but thats fine! we can just throw this sample
                                     log::info!("throwing encoder output sample with not sample time attached");
                                     return Ok(());

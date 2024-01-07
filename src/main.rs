@@ -336,7 +336,7 @@ async fn peer(address: &str, _name: &str, produce: &bool) -> Result<()> {
                 match tokio::spawn(async move {
                     let maybe_file = std::env::var("media_filename").ok();
 
-                    let (tx, mut rx) = if let Some(file) = maybe_file {
+                    let (_tx, mut rx) = if let Some(file) = maybe_file {
                         media::produce(&file, width, height, bitrate).await?
                     } else {
                         media::duplicate_desktop(width, height, bitrate).await?

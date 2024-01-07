@@ -11,7 +11,6 @@ use windows::{
             Dxgi::{
                 IDXGIAdapter, IDXGIDevice2, IDXGIKeyedMutex, IDXGIOutput1, IDXGIResource,
                 DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_DESC, DXGI_OUTDUPL_FRAME_INFO,
-                DXGI_OUTPUT_DESC,
             },
         },
         System::Performance::QueryPerformanceCounter,
@@ -30,13 +29,13 @@ pub(crate) enum DDEvent {
 }
 
 pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Receiver<DDEvent>)> {
-    let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
+    let (control_tx, _control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
     tokio::spawn(async move {
         match tokio::task::spawn_blocking(move || {
-            let (device, context) = dx::create_device()?;
-            let (device2, context2) = dx::create_device()?;
+            let (device, _context) = dx::create_device()?;
+            let (_device2, _context2) = dx::create_device()?;
 
             let dxgi_device: IDXGIDevice2 = device.cast()?;
 
@@ -50,13 +49,13 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
             let mut desc = DXGI_OUTDUPL_DESC::default();
             unsafe { duplicated.GetDesc(&mut desc) };
 
-            let (width, height) = (desc.ModeDesc.Width, desc.ModeDesc.Height);
+            let (_width, _height) = (desc.ModeDesc.Width, desc.ModeDesc.Height);
 
             event_tx.blocking_send(DDEvent::Size(desc.ModeDesc.Height, desc.ModeDesc.Height))?;
 
             let mut start = 0;
             unsafe { QueryPerformanceCounter(&mut start) }?;
-            let start_time = std::time::SystemTime::now();
+            let _start_time = std::time::SystemTime::now();
 
             loop {
                 let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();

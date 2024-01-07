@@ -6,10 +6,8 @@ use windows::{
     Win32::{
         Graphics::{
             Direct3D11::{
-                ID3D11Device, ID3D11Texture2D, D3D11_BOX, D3D11_RESOURCE_MISC_FLAG,
-                D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX, D3D11_TEXTURE2D_DESC,
+                ID3D11Device, ID3D11Texture2D,
             },
-            Dxgi::IDXGIKeyedMutex,
         },
         Media::MediaFoundation::*,
         System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER},

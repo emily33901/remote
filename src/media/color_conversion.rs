@@ -1,45 +1,27 @@
 use std::{
-    mem::{ManuallyDrop, MaybeUninit},
+    mem::{MaybeUninit},
     time::UNIX_EPOCH,
 };
 
 use eyre::Result;
 use tokio::sync::{
     mpsc,
-    mpsc::error::{TryRecvError, TrySendError},
 };
 use windows::{
-    core::{s, ComInterface, PWSTR},
+    core::{ComInterface},
     Win32::{
         Foundation::FALSE,
-        Foundation::S_OK,
         Graphics::{
-            Direct3D::{D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST, D3D11_SRV_DIMENSION_TEXTURE2D},
             Direct3D11::{
-                ID3D11Buffer, ID3D11InputLayout, ID3D11PixelShader, ID3D11RenderTargetView,
-                ID3D11SamplerState, ID3D11ShaderResourceView, ID3D11Texture2D, ID3D11VertexShader,
-                D3D11_APPEND_ALIGNED_ELEMENT, D3D11_BIND_VERTEX_BUFFER, D3D11_BOX,
-                D3D11_BUFFER_DESC, D3D11_COMPARISON_NEVER, D3D11_FILTER_MIN_MAG_MIP_LINEAR,
-                D3D11_INPUT_ELEMENT_DESC, D3D11_INPUT_PER_VERTEX_DATA, D3D11_RESOURCE_MISC_FLAG,
-                D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX, D3D11_SAMPLER_DESC,
-                D3D11_SHADER_RESOURCE_VIEW_DESC, D3D11_SUBRESOURCE_DATA, D3D11_TEX2D_SRV,
-                D3D11_TEXTURE2D_DESC, D3D11_TEXTURE_ADDRESS_CLAMP, D3D11_USAGE_DEFAULT,
-                D3D11_VIEWPORT,
-            },
-            Dxgi::{
-                Common::{
-                    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_FORMAT_R32G32_FLOAT,
-                    DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8_UNORM,
-                },
-                IDXGIKeyedMutex,
+                ID3D11Texture2D,
             },
         },
         Media::MediaFoundation::*,
-        System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE},
+        System::Com::{CoInitializeEx, COINIT_DISABLE_OLE1DDE},
     },
 };
 
-use crate::{media::dx::compile_shader, video::VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
+use crate::{ARBITRARY_CHANNEL_LIMIT};
 
 use super::dx::copy_texture;
 
@@ -222,7 +204,7 @@ pub(crate) async fn converter(
                 .build()
                 .unwrap();
 
-                let output_sample = MFCreateVideoSampleFromSurface(&output_sample_texture)?;
+                let _output_sample = MFCreateVideoSampleFromSurface(&output_sample_texture)?;
 
                 loop {
                     let ConvertControl::Frame(frame, time) = control_rx

@@ -225,25 +225,22 @@ pub(crate) mod audio {
 }
 
 pub(crate) mod video {
-    use std::mem::MaybeUninit;
+    
 
-    use eyre::{eyre, Result};
+    use eyre::{Result};
     use tokio::sync::{mpsc, mpsc::error::TryRecvError};
 
     use windows::{
-        core::{s, ComInterface, PCSTR},
+        core::{s},
         Win32::{
-            Foundation::{HWND, LPARAM, LRESULT, S_OK, TRUE, WPARAM},
+            Foundation::{HWND, LPARAM, LRESULT, S_OK, WPARAM},
             Graphics::{
-                Direct3D::{Fxc::D3DCompile, *},
+                Direct3D::{*},
                 Direct3D11::*,
                 Dxgi::{
                     Common::{
-                        DXGI_FORMAT, DXGI_FORMAT_NV12, DXGI_FORMAT_R32G32_FLOAT,
-                        DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8_UNORM,
+                        DXGI_FORMAT_R32G32_FLOAT, DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8_UNORM,
                     },
-                    IDXGIKeyedMutex, IDXGISwapChain, DXGI_SWAP_CHAIN_DESC,
-                    DXGI_USAGE_RENDER_TARGET_OUTPUT,
                 },
             },
             System::LibraryLoader::GetModuleHandleA,
