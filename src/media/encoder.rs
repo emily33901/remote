@@ -33,6 +33,12 @@ use windows::Win32::{
     },
 };
 
+pub(crate) enum FrameIsKeyframe {
+    Yes,
+    No,
+    Perhaps,
+}
+
 pub(crate) enum EncoderControl {
     Frame(ID3D11Texture2D, std::time::SystemTime),
 }
@@ -285,16 +291,32 @@ unsafe fn hardware(
                         })?;
 
                         unsafe {
-                            let is_keyframe = sample.GetUINT32(&MFSampleExtension_CleanPoint)? == 1;
+                            // let is_keyframe = match sample.GetUINT32(&MFSampleExtension_CleanPoint)
+                            // {
+                            //     Ok(1) => FrameIsKeyframe::Yes,
+                            //     Ok(0) => FrameIsKeyframe::No,
+                            //     _ => FrameIsKeyframe::Perhaps,
+                            // };
+
+                            let is_keyframe = FrameIsKeyframe::No;
+
+                            // let is_keyframe = sample.GetUINT32(&MFSampleExtension_CleanPoint)? == 1;
                             // let is_keyframe = false;
 
-                            sample_time = sample.GetUINT64(&MFSampleExtension_DecodeTimestamp)?;
+                            sample_time = match sample.GetSampleTime() {
+                                Ok(sample_time) => sample_time as u64,
+                                Err(err) => {
+                                    // No sample time, but thats fine! we can just throw this sample
+                                    log::info!("throwing encoder output sample with not sample time attached");
+                                    return Ok(());
+                                }
+                            };
 
                             duration = std::time::Duration::from_nanos(
                                 sample.GetSampleDuration()? as u64 * 100,
                             );
 
-                            sequence_header = if is_keyframe {
+                            sequence_header = if let FrameIsKeyframe::Yes = is_keyframe {
                                 // log::info!("keyframe!");
                                 let output_type =
                                     transform.GetOutputCurrentType(output_stream_id)?;

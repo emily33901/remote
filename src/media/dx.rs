@@ -45,7 +45,7 @@ pub(crate) fn create_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
 
         #[cfg(debug_assertions)]
         {
-            // flags |= D3D11_CREATE_DEVICE_DEBUG;
+            flags |= D3D11_CREATE_DEVICE_DEBUG;
         }
 
         D3D11CreateDevice(
@@ -347,6 +347,9 @@ pub(crate) fn copy_texture(
         (in_texture.clone(), out_texture.clone())
     };
 
+    let device = unsafe { out_texture.GetDevice() }?;
+    let context = unsafe { device.GetImmediateContext() }?;
+
     // If keyed mutex then lock keyed muticies
 
     let keyed_in = if D3D11_RESOURCE_MISC_FLAG(in_desc.MiscFlags as i32)
@@ -372,9 +375,6 @@ pub(crate) fn copy_texture(
     } else {
         None
     };
-
-    let device = unsafe { out_texture.GetDevice() }?;
-    let context = unsafe { device.GetImmediateContext() }?;
 
     let region = D3D11_BOX {
         left: 0,

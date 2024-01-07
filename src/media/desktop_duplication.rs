@@ -78,7 +78,7 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
                             let duplication_texture: ID3D11Texture2D = frame_resource.cast()?;
 
                             let output_texture = dx::TextureBuilder::new(
-                                &device2,
+                                &device,
                                 1920,
                                 1080,
                                 dx::TextureFormat::BGRA,

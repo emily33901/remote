@@ -227,14 +227,14 @@ pub(crate) async fn converter(
                         .blocking_recv()
                         .ok_or(eyre::eyre!("convert control closed"))?;
 
-                    // let dxgi_buffer =
-                    //     MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &frame, 0, FALSE)?;
+                    let dxgi_buffer =
+                        MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &frame, 0, FALSE)?;
 
-                    // let sample = unsafe { MFCreateSample() }?;
+                    let sample = unsafe { MFCreateSample() }?;
 
-                    // sample.AddBuffer(&dxgi_buffer)?;
+                    sample.AddBuffer(&dxgi_buffer)?;
 
-                    let sample = MFCreateVideoSampleFromSurface(&frame)?;
+                    // let sample = MFCreateVideoSampleFromSurface(&frame)?;
 
                     sample
                         .SetSampleTime(time.duration_since(UNIX_EPOCH)?.as_nanos() as i64 / 100)?;
@@ -245,9 +245,7 @@ pub(crate) async fn converter(
                         output_buffer.dwStatus = 0;
                         output_buffer.dwStreamID = 0;
                         // output_buffer.pSample = ManuallyDrop::new(Some(output_sample.clone()));
-
-                        let stream_output = transform.GetOutputStreamInfo(0)?;
-
+                        // let stream_output = transform.GetOutputStreamInfo(0)?;
                         // log::info!("{stream_output:?}");
 
                         let mut output_buffers = [output_buffer];
@@ -262,6 +260,7 @@ pub(crate) async fn converter(
                                     super::dx::TextureFormat::NV12,
                                 )
                                 .keyed_mutex()
+                                .nt_handle()
                                 .build()
                                 .unwrap();
 
@@ -300,7 +299,7 @@ pub(crate) async fn converter(
                                 Ok(ok)
                             }
                             Err(err) => {
-                                log::warn!("output flags {}", output_buffers[0].dwStatus);
+                                // log::warn!("output flags {}", output_buffers[0].dwStatus);
                                 Err(err)
                             }
                         }
@@ -320,11 +319,11 @@ pub(crate) async fn converter(
                                     // break;
                                 }
                                 Err(MF_E_TRANSFORM_NEED_MORE_INPUT) => {
-                                    log::debug!("need more input");
+                                    log::info!("cc need more input");
                                     break;
                                 }
                                 Err(MF_E_TRANSFORM_STREAM_CHANGE) => {
-                                    log::warn!("stream change");
+                                    log::warn!("cc stream change");
 
                                     {
                                         for i in 0.. {

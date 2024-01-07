@@ -339,10 +339,13 @@ async fn peer(address: &str, _name: &str) -> Result<()> {
         let peer_controls = peer_controls.clone();
         async move {
             match tokio::spawn(async move {
-                // let (tx, mut rx) = media::duplicate_desktop(width, height, bitrate).await?;
-                let (_tx, mut rx) =
-                    media::produce(&std::env::var("media_filename")?, width, height, bitrate)
-                        .await?;
+                let maybe_file = std::env::var("media_filename").ok();
+
+                let (tx, mut rx) = if let Some(file) = maybe_file {
+                    media::produce(&file, width, height, bitrate).await?
+                } else {
+                    media::duplicate_desktop(width, height, bitrate).await?
+                };
 
                 while let Some(event) = rx.recv().await {
                     match event {
@@ -459,6 +462,9 @@ async fn peer(address: &str, _name: &str) -> Result<()> {
                                     control.send(PeerControl::Die).await.unwrap();
                                 }
                             });
+                        }
+                        "quit" | "exit" | "q" => {
+                            std::process::exit(0);
                         }
 
                         command => log::info!("Unknown command {command}"),
