@@ -1,27 +1,18 @@
-use std::{
-    mem::{MaybeUninit},
-    time::UNIX_EPOCH,
-};
+use std::{mem::MaybeUninit, time::UNIX_EPOCH};
 
 use eyre::Result;
-use tokio::sync::{
-    mpsc,
-};
+use tokio::sync::mpsc;
 use windows::{
-    core::{ComInterface},
+    core::ComInterface,
     Win32::{
         Foundation::FALSE,
-        Graphics::{
-            Direct3D11::{
-                ID3D11Texture2D,
-            },
-        },
+        Graphics::Direct3D11::ID3D11Texture2D,
         Media::MediaFoundation::*,
         System::Com::{CoInitializeEx, COINIT_DISABLE_OLE1DDE},
     },
 };
 
-use crate::{ARBITRARY_CHANNEL_LIMIT};
+use crate::ARBITRARY_CHANNEL_LIMIT;
 
 use super::dx::copy_texture;
 
