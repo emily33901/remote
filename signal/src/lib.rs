@@ -13,10 +13,13 @@ use uuid::Uuid;
 
 use eyre::{eyre, Result};
 
-use crate::{ConnectionId, PeerId, ARBITRARY_CHANNEL_LIMIT};
+pub type PeerId = Uuid;
+pub type ConnectionId = Uuid;
+
+pub(crate) const ARBITRARY_CHANNEL_LIMIT: usize = 5;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) enum SignallingError {
+pub enum SignallingError {
     NoSuchPeer(PeerId),
 }
 
@@ -239,7 +242,7 @@ async fn handle_outgoing(
     eyre::Ok(())
 }
 
-pub(crate) async fn server(address: &str) -> Result<()> {
+pub async fn server(address: &str) -> Result<()> {
     let peers: PeerMap = Default::default();
     let connection_requests: ConnectionRequestMap = Default::default();
     let listener = tokio::net::TcpListener::bind(address).await?;
@@ -310,7 +313,7 @@ pub(crate) async fn server(address: &str) -> Result<()> {
 }
 
 #[derive(Debug)]
-pub(crate) enum SignallingControl {
+pub enum SignallingControl {
     IceCandidate(PeerId, String),
     Offer(PeerId, String),
     Answer(PeerId, String),
@@ -320,7 +323,7 @@ pub(crate) enum SignallingControl {
 }
 
 #[derive(Debug)]
-pub(crate) enum SignallingEvent {
+pub enum SignallingEvent {
     Id(PeerId),
     ConectionRequest(PeerId, ConnectionId),
     Offer(PeerId, String),
@@ -404,7 +407,7 @@ async fn handle_message(event_tx: mpsc::Sender<SignallingEvent>, msg: Message) -
     }
 }
 
-pub(crate) async fn client(
+pub async fn client(
     address: &str,
 ) -> Result<(
     mpsc::Sender<SignallingControl>,

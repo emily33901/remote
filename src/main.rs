@@ -4,7 +4,6 @@ mod logic;
 mod media;
 mod peer;
 mod player;
-mod signalling;
 mod util;
 mod video;
 
@@ -16,19 +15,16 @@ use clap::Parser;
 use eyre::Result;
 use peer::PeerControl;
 use rtc;
-use signalling::SignallingControl;
+use signal::SignallingControl;
+use signal::{ConnectionId, PeerId};
 
 use tokio::sync::{mpsc, Mutex};
 use uuid::Uuid;
-
-pub(crate) type PeerId = Uuid;
-pub(crate) type ConnectionId = Uuid;
 
 const ARBITRARY_CHANNEL_LIMIT: usize = 10;
 
 #[derive(Debug, Clone)]
 enum Command {
-    SignallingServer,
     Peer,
 }
 
@@ -61,7 +57,6 @@ impl FromStr for Command {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "server" => Ok(Self::SignallingServer),
             "peer" => Ok(Self::Peer),
             _ => Err(CommandParseError),
         }
@@ -75,6 +70,9 @@ struct Args {
     address: String,
     #[arg(short, long)]
     name: String,
+    #[arg(short, long, action)]
+    produce: bool,
+
     command: String,
 }
 
@@ -126,12 +124,9 @@ async fn main() -> Result<()> {
 
     dotenv::dotenv()?;
 
-    log::info!(
-        "remote - '{}' '{}' '{}'",
-        args.command,
-        args.address,
-        args.name
-    );
+    let name = &args.name;
+
+    log::info!("remote - '{}' '{}' '{}'", args.command, args.address, name);
 
     std::panic::set_hook(Box::new(|info| {
         println!("thread panicked {info}");
@@ -140,8 +135,7 @@ async fn main() -> Result<()> {
     let command = args.command.as_str().parse()?;
 
     match command {
-        Command::SignallingServer => signalling::server(args.address.as_str()).await,
-        Command::Peer => Ok(peer(&args.address, &args.name).await?),
+        Command::Peer => Ok(peer(&args.address, &name, &args.produce).await?),
     }
 }
 
@@ -228,14 +222,14 @@ async fn peer_inner(
     Ok(())
 }
 
-async fn peer(address: &str, _name: &str) -> Result<()> {
+async fn peer(address: &str, _name: &str, produce: &bool) -> Result<()> {
     telemetry::client::sink().await;
 
     let width = u32::from_str(&std::env::var("width")?)?;
     let height = u32::from_str(&std::env::var("height")?)?;
     let bitrate = u32::from_str(&std::env::var("bitrate")?)?;
 
-    let (tx, mut rx) = signalling::client(address).await?;
+    let (tx, mut rx) = signal::client(address).await?;
 
     let our_peer_id = Arc::new(Mutex::new(None));
     let last_connection_request = Arc::new(Mutex::new(None));
@@ -254,12 +248,12 @@ async fn peer(address: &str, _name: &str) -> Result<()> {
         async move {
             while let Some(event) = rx.recv().await {
                 match event {
-                    signalling::SignallingEvent::Id(id) => {
+                    signal::SignallingEvent::Id(id) => {
                         log::info!("id {id}");
                         println!("{id}");
                         *our_peer_id.lock().await = Some(id);
                     }
-                    signalling::SignallingEvent::ConectionRequest(peer_id, connection_id) => {
+                    signal::SignallingEvent::ConectionRequest(peer_id, connection_id) => {
                         log::info!("connection request p:{peer_id} c:{connection_id}");
                         *last_connection_request.lock().await = Some(connection_id);
                         connection_peer_id
@@ -267,7 +261,7 @@ async fn peer(address: &str, _name: &str) -> Result<()> {
                             .await
                             .insert(connection_id, peer_id);
                     }
-                    signalling::SignallingEvent::Offer(peer_id, offer) => {
+                    signal::SignallingEvent::Offer(peer_id, offer) => {
                         log::info!("offer p:{peer_id} {offer}");
                         let peer_controls = peer_controls.lock().await;
                         if let Some(peer_control) = peer_controls.get(&peer_id) {
@@ -277,7 +271,7 @@ async fn peer(address: &str, _name: &str) -> Result<()> {
                             log::debug!("peer_controls is {:?}", *peer_controls);
                         }
                     }
-                    signalling::SignallingEvent::Answer(peer_id, answer) => {
+                    signal::SignallingEvent::Answer(peer_id, answer) => {
                         log::info!("answer p:{peer_id} {answer}");
                         let peer_controls = peer_controls.lock().await;
                         if let Some(peer_control) = peer_controls.get(&peer_id) {
@@ -290,7 +284,7 @@ async fn peer(address: &str, _name: &str) -> Result<()> {
                             log::debug!("peer_controls is {:?}", *peer_controls);
                         }
                     }
-                    signalling::SignallingEvent::IceCandidate(peer_id, ice_candidate) => {
+                    signal::SignallingEvent::IceCandidate(peer_id, ice_candidate) => {
                         log::info!("ice candidate p:{peer_id} {ice_candidate}");
                         let peer_controls = peer_controls.lock().await;
                         if let Some(peer_control) = peer_controls.get(&peer_id) {
@@ -305,7 +299,7 @@ async fn peer(address: &str, _name: &str) -> Result<()> {
                             log::debug!("peer_controls is {:?}", *peer_controls);
                         }
                     }
-                    signalling::SignallingEvent::ConnectionAccepted(peer_id, connection_id) => {
+                    signal::SignallingEvent::ConnectionAccepted(peer_id, connection_id) => {
                         // NOTE(emily): We sent the request so we are controlling
                         log::info!("connection accepted p:{peer_id} c:{connection_id}");
 
@@ -321,7 +315,7 @@ async fn peer(address: &str, _name: &str) -> Result<()> {
                             peer_inner(our_peer_id, peer_id, tx.clone(), peer_controls, true)
                         });
                     }
-                    signalling::SignallingEvent::Error(error) => {
+                    signal::SignallingEvent::Error(error) => {
                         log::info!("signalling error {error:?}");
                     }
                 }
@@ -331,68 +325,70 @@ async fn peer(address: &str, _name: &str) -> Result<()> {
         }
     });
 
-    tokio::task::spawn({
-        let _our_name = _name.to_owned();
-        let _tx = tx.clone();
-        let _our_peer_id = our_peer_id.clone();
-        let _last_connection_request = last_connection_request.clone();
-        let peer_controls = peer_controls.clone();
-        async move {
-            match tokio::spawn(async move {
-                let maybe_file = std::env::var("media_filename").ok();
+    if *produce {
+        tokio::task::spawn({
+            let _our_name = _name.to_owned();
+            let _tx = tx.clone();
+            let _our_peer_id = our_peer_id.clone();
+            let _last_connection_request = last_connection_request.clone();
+            let peer_controls = peer_controls.clone();
+            async move {
+                match tokio::spawn(async move {
+                    let maybe_file = std::env::var("media_filename").ok();
 
-                let (tx, mut rx) = if let Some(file) = maybe_file {
-                    media::produce(&file, width, height, bitrate).await?
-                } else {
-                    media::duplicate_desktop(width, height, bitrate).await?
-                };
+                    let (tx, mut rx) = if let Some(file) = maybe_file {
+                        media::produce(&file, width, height, bitrate).await?
+                    } else {
+                        media::duplicate_desktop(width, height, bitrate).await?
+                    };
 
-                while let Some(event) = rx.recv().await {
-                    match event {
-                        media::MediaEvent::Audio(audio) => {
-                            log::trace!("produce audio {}", audio.len());
-                            let peer_controls = peer_controls.lock().await;
-                            for (_, control) in peer_controls.iter() {
-                                util::send(
-                                    "produce to peer audio",
-                                    &control,
-                                    PeerControl::Audio(audio.clone()),
-                                )
-                                .await?;
+                    while let Some(event) = rx.recv().await {
+                        match event {
+                            media::MediaEvent::Audio(audio) => {
+                                log::trace!("produce audio {}", audio.len());
+                                let peer_controls = peer_controls.lock().await;
+                                for (_, control) in peer_controls.iter() {
+                                    util::send(
+                                        "produce to peer audio",
+                                        &control,
+                                        PeerControl::Audio(audio.clone()),
+                                    )
+                                    .await?;
+                                }
+                            }
+                            media::MediaEvent::Video(video) => {
+                                // log::debug!("throwing video");
+                                log::trace!("produce video {}", video.data.len());
+                                let peer_controls = peer_controls.lock().await;
+                                for (_, control) in peer_controls.iter() {
+                                    util::send(
+                                        "produce to peer video",
+                                        &control,
+                                        PeerControl::Video(video.clone()),
+                                    )
+                                    .await?;
+                                }
                             }
                         }
-                        media::MediaEvent::Video(video) => {
-                            // log::debug!("throwing video");
-                            log::trace!("produce video {}", video.data.len());
-                            let peer_controls = peer_controls.lock().await;
-                            for (_, control) in peer_controls.iter() {
-                                util::send(
-                                    "produce to peer video",
-                                    &control,
-                                    PeerControl::Video(video.clone()),
-                                )
-                                .await?;
-                            }
-                        }
+                    }
+
+                    eyre::Ok(())
+                })
+                .await
+                .unwrap()
+                {
+                    Ok(_) => {
+                        log::info!("produce down ok")
+                    }
+                    Err(err) => {
+                        log::error!("produce down err {err}")
                     }
                 }
 
                 eyre::Ok(())
-            })
-            .await
-            .unwrap()
-            {
-                Ok(_) => {
-                    log::info!("produce down ok")
-                }
-                Err(err) => {
-                    log::error!("produce down err {err}")
-                }
             }
-
-            eyre::Ok(())
-        }
-    });
+        });
+    }
 
     tokio::task::spawn_blocking({
         let tx = tx.clone();
@@ -419,7 +415,7 @@ async fn peer(address: &str, _name: &str) -> Result<()> {
                     match command {
                         "connect" => {
                             let peer_id = Uuid::from_str(arg)?;
-                            tx.blocking_send(signalling::SignallingControl::RequestConnection(
+                            tx.blocking_send(signal::SignallingControl::RequestConnection(
                                 peer_id,
                             ))?;
                         }
@@ -452,7 +448,7 @@ async fn peer(address: &str, _name: &str) -> Result<()> {
                                 }
                             });
 
-                            tx.blocking_send(signalling::SignallingControl::AcceptConnection(
+                            tx.blocking_send(signal::SignallingControl::AcceptConnection(
                                 connection_id,
                             ))?;
                         }

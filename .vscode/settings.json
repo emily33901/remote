@@ -1,7 +1,8 @@
 {
-    "rust-analyzer.linkedProjects": [
-        ".\\Cargo.toml",
-        ".\\telemetry\\Cargo.toml",
-        ".\\telemetry\\dash\\Cargo.toml",
-    ]
+    // "rust-analyzer.linkedProjects": [
+    //     ".\\Cargo.toml",
+    //     ".\\signal\\Cargo.toml",
+    //     ".\\telemetry\\Cargo.toml",
+    //     ".\\telemetry\\dash\\Cargo.toml",
+    // ]
 }

@@ -1,3 +1,4 @@
+workspace = { members = ["signal"] }
 [package]
 name = "remote"
 version = "0.1.0"
@@ -14,7 +15,7 @@ once_cell = { version = "1.18.0", features = ["parking_lot"] }
 derive_more = "0.99.17"
 serde_json = "1.0.108"
 serde = { version = "1.0", features = ["derive"] }
-uuid = {version = "1.6.1", features = [
+uuid = { version = "1.6.1", features = [
     "v4",                # Lets you generate random UUIDs
     "fast-rng",          # Use a faster (but still sufficiently random) RNG
     "macro-diagnostics", # Enable better diagnostics for compile-time UUIDs
@@ -36,6 +37,7 @@ telemetry = { path = "telemetry" }
 rtc = { path = "rtc" }
 openh264 = "0.4.4"
 scopeguard = "1.2.0"
+signal = { path = "signal" }
 
 [dependencies.windows]
 version = "0.52.0"
@@ -46,7 +48,7 @@ features = [
     "Win32_System_Com",
     "Win32_System_Ole",
     "Win32_System_Memory",
-    "Win32_Graphics_Gdi", 
+    "Win32_Graphics_Gdi",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_SystemServices",
     "Win32_UI_Shell_Common",
@@ -65,7 +67,7 @@ features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Media_MediaFoundation",
     "Win32_UI_Shell_PropertiesSystem",
-    "Win32_System_Performance"
+    "Win32_System_Performance",
 ]
 
 # [patch.crates-io]

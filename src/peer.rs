@@ -1,9 +1,9 @@
 use crate::audio::audio_channel;
 use crate::logic::logic_channel;
 use crate::rtc::{self};
-use crate::signalling::SignallingControl;
 use crate::video::{video_channel, VideoBuffer};
 use crate::{PeerId, ARBITRARY_CHANNEL_LIMIT};
+use signal::SignallingControl;
 
 use eyre::Result;
 use tokio::sync::mpsc;
