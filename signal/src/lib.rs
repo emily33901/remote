@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use eyre::{eyre, Result};
 
-pub type PeerId = Uuid;
+pub type PeerId = String;
 pub type ConnectionId = Uuid;
 
 pub(crate) const ARBITRARY_CHANNEL_LIMIT: usize = 5;
@@ -55,11 +55,23 @@ enum ServerToPeer {
     Error(SignallingError),
 }
 
-fn make_id() -> Uuid {
+fn make_id() -> PeerId {
+    use rand::Rng;
+    use std::iter;
+
+    const LEN: usize = 5;
+
+    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let mut rng = rand::thread_rng();
+    let one_char = || CHARSET[rng.gen_range(0..CHARSET.len())] as char;
+    iter::repeat_with(one_char).take(LEN).collect()
+}
+
+fn make_connection_id() -> ConnectionId {
     Uuid::new_v4()
 }
 
-type PeerMap = Arc<Mutex<HashMap<Uuid, mpsc::Sender<ServerToPeerMessage>>>>;
+type PeerMap = Arc<Mutex<HashMap<PeerId, mpsc::Sender<ServerToPeerMessage>>>>;
 
 #[derive(Debug)]
 struct ConnectionRequest {
@@ -69,7 +81,7 @@ struct ConnectionRequest {
     requestee: PeerId,
 }
 
-type ConnectionRequestMap = Arc<Mutex<HashMap<Uuid, ConnectionRequest>>>;
+type ConnectionRequestMap = Arc<Mutex<HashMap<ConnectionId, ConnectionRequest>>>;
 
 async fn handle_incoming_message_inner(
     our_peer_id: PeerId,
@@ -120,40 +132,47 @@ async fn handle_incoming_message_inner(
                 log::debug!("ignoring self connection {peer_id}");
                 Ok(())
             } else if let Some(peer) = peers.lock().await.get(&peer_id) {
-                let connection_id = make_id();
+                let connection_id = make_connection_id();
 
                 let (accept_tx, accept_rx) = tokio::sync::oneshot::channel();
                 let (reject_tx, reject_rx) = tokio::sync::oneshot::channel();
 
                 let a_peers = peers.clone();
 
-                tokio::spawn(async move {
-                    let peers = a_peers;
-                    if let Ok(_) = accept_rx.await {
-                        let peers = peers.lock().await;
-                        let requester = peers.get(&our_peer_id);
-                        let requestee = peers.get(&peer_id);
+                tokio::spawn({
+                    let peer_id = peer_id.clone();
+                    let our_peer_id = our_peer_id.clone();
+                    async move {
+                        let peers = a_peers;
+                        if let Ok(_) = accept_rx.await {
+                            let peers = peers.lock().await;
+                            let requester = peers.get(&our_peer_id);
+                            let requestee = peers.get(&peer_id);
 
-                        if requester.is_none() || requestee.is_none() {
-                            log::debug!("while accepting connection, peer disapeared {our_peer_id} {peer_id}");
-                        } else {
-                            log::debug!("accepting connection {connection_id} {peer_id}");
-                            requester
-                                .unwrap()
-                                .send(ServerToPeerMessage {
-                                    job_id: 0,
-                                    inner: ServerToPeer::ConnectionAccepted(peer_id, connection_id),
-                                })
-                                .await
-                                .unwrap();
-                            // requestee
-                            //     .unwrap()
-                            //     .send(ServerToPeerMessage {
-                            //         job_id: 0,
-                            //         inner: ServerToPeer::ConnectionAccepted(peer_id, connection_id),
-                            //     })
-                            //     .await
-                            //     .unwrap();
+                            if requester.is_none() || requestee.is_none() {
+                                log::debug!("while accepting connection, peer disapeared {our_peer_id} {peer_id}");
+                            } else {
+                                log::debug!("accepting connection {connection_id} {peer_id}");
+                                requester
+                                    .unwrap()
+                                    .send(ServerToPeerMessage {
+                                        job_id: 0,
+                                        inner: ServerToPeer::ConnectionAccepted(
+                                            peer_id,
+                                            connection_id,
+                                        ),
+                                    })
+                                    .await
+                                    .unwrap();
+                                // requestee
+                                //     .unwrap()
+                                //     .send(ServerToPeerMessage {
+                                //         job_id: 0,
+                                //         inner: ServerToPeer::ConnectionAccepted(peer_id, connection_id),
+                                //     })
+                                //     .await
+                                //     .unwrap();
+                            }
                         }
                     }
                 });
@@ -172,8 +191,8 @@ async fn handle_incoming_message_inner(
                     ConnectionRequest {
                         accept: accept_tx,
                         reject: reject_tx,
-                        requester: our_peer_id,
-                        requestee: peer_id,
+                        requester: our_peer_id.clone(),
+                        requestee: peer_id.clone(),
                     },
                 );
 
@@ -263,11 +282,11 @@ pub async fn server(address: &str) -> Result<()> {
                 let (mut outgoing, mut incoming) = ws_stream.split();
                 let (tx, mut rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
-                peers.lock().await.insert(peer_id, tx.clone());
+                peers.lock().await.insert(peer_id.clone(), tx.clone());
 
                 tx.send(ServerToPeerMessage {
                     job_id: 0,
-                    inner: ServerToPeer::Id(peer_id),
+                    inner: ServerToPeer::Id(peer_id.clone()),
                 })
                 .await
                 .unwrap();
@@ -279,7 +298,7 @@ pub async fn server(address: &str) -> Result<()> {
                         msg = incoming.next().fuse() => {
                             match msg {
                                 Some(Ok(msg)) => {
-                                    handle_incoming_message(peer_id, connection_requests, peers, msg).await
+                                    handle_incoming_message(peer_id.clone(), connection_requests, peers, msg).await
                                 }
                                 None | Some(Err(_)) => break,
                             }

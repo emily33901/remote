@@ -170,6 +170,7 @@ pub(crate) async fn peer(
     });
 
     tokio::spawn({
+        let their_peer_id = their_peer_id.clone();
         let signalling_control = signalling_control.clone();
         let event_tx = event_tx.clone();
         async move {
@@ -178,7 +179,10 @@ pub(crate) async fn peer(
                     match event {
                         rtc::RtcPeerEvent::IceCandidate(candidate) => {
                             signalling_control
-                                .send(SignallingControl::IceCandidate(their_peer_id, candidate))
+                                .send(SignallingControl::IceCandidate(
+                                    their_peer_id.clone(),
+                                    candidate,
+                                ))
                                 .await?;
                         }
                         rtc::RtcPeerEvent::StateChange(state_change) => {
@@ -190,12 +194,12 @@ pub(crate) async fn peer(
                         }
                         rtc::RtcPeerEvent::Offer(offer) => {
                             signalling_control
-                                .send(SignallingControl::Offer(their_peer_id, offer))
+                                .send(SignallingControl::Offer(their_peer_id.clone(), offer))
                                 .await?;
                         }
                         rtc::RtcPeerEvent::Answer(answer) => {
                             signalling_control
-                                .send(SignallingControl::Answer(their_peer_id, answer))
+                                .send(SignallingControl::Answer(their_peer_id.clone(), answer))
                                 .await?;
                         }
                     }

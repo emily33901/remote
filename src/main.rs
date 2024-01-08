@@ -140,8 +140,8 @@ async fn main() -> Result<()> {
 }
 
 async fn peer_inner(
-    our_peer_id: Uuid,
-    their_peer_id: Uuid,
+    our_peer_id: PeerId,
+    their_peer_id: PeerId,
     tx: mpsc::Sender<SignallingControl>,
     peer_controls: Arc<Mutex<HashMap<PeerId, mpsc::Sender<PeerControl>>>>,
     controlling: bool,
@@ -154,8 +154,14 @@ async fn peer_inner(
 
     let mut peer_controls = peer_controls.lock().await;
 
-    let (control, mut event) =
-        peer::peer(api, our_peer_id, their_peer_id, tx.clone(), controlling).await?;
+    let (control, mut event) = peer::peer(
+        api,
+        our_peer_id,
+        their_peer_id.clone(),
+        tx.clone(),
+        controlling,
+    )
+    .await?;
 
     peer_controls.insert(their_peer_id, control);
 
@@ -414,7 +420,8 @@ async fn peer(address: &str, _name: &str, produce: &bool) -> Result<()> {
 
                     match command {
                         "connect" => {
-                            let peer_id = Uuid::from_str(arg)?;
+                            // let peer_id = Uuid::from_str(arg)?;
+                            let peer_id = arg.into();
                             tx.blocking_send(signal::SignallingControl::RequestConnection(
                                 peer_id,
                             ))?;

@@ -49,7 +49,7 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
             let mut desc = DXGI_OUTDUPL_DESC::default();
             unsafe { duplicated.GetDesc(&mut desc) };
 
-            let (_width, _height) = (desc.ModeDesc.Width, desc.ModeDesc.Height);
+            let (device_width, device_height) = (desc.ModeDesc.Width, desc.ModeDesc.Height);
 
             event_tx.blocking_send(DDEvent::Size(desc.ModeDesc.Height, desc.ModeDesc.Height))?;
 
@@ -78,8 +78,8 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
 
                             let output_texture = dx::TextureBuilder::new(
                                 &device,
-                                1920,
-                                1080,
+                                device_width,
+                                device_height,
                                 dx::TextureFormat::BGRA,
                             )
                             .keyed_mutex()
