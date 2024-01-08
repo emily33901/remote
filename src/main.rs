@@ -81,12 +81,6 @@ async fn main() -> Result<()> {
     // Configure logger at runtime
     let args = Args::parse();
 
-    let log_level = if "peer" == args.command {
-        log::LevelFilter::Info
-    } else {
-        log::LevelFilter::Debug
-    };
-
     fern::Dispatch::new()
         // Perform allocation-free log formatting
         .format(|out, message, record| {
@@ -98,7 +92,7 @@ async fn main() -> Result<()> {
             ))
         })
         // Add blanket level filter -
-        .level(log_level)
+        .level(log::LevelFilter::Info)
         // .level_for("remote", log::LevelFilter::Debug)
         .level_for("webrtc_sctp::association", log::LevelFilter::Info)
         .level_for("webrtc_sctp::stream", log::LevelFilter::Info)
@@ -139,7 +133,7 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn peer_inner(
+async fn peer_connected(
     our_peer_id: PeerId,
     their_peer_id: PeerId,
     tx: mpsc::Sender<SignallingControl>,
@@ -318,7 +312,7 @@ async fn peer(address: &str, _name: &str, produce: &bool) -> Result<()> {
                             let tx = tx.clone();
                             let peer_controls = peer_controls.clone();
 
-                            peer_inner(our_peer_id, peer_id, tx.clone(), peer_controls, true)
+                            peer_connected(our_peer_id, peer_id, tx.clone(), peer_controls, true)
                         });
                     }
                     signal::SignallingEvent::Error(error) => {
@@ -446,9 +440,15 @@ async fn peer(address: &str, _name: &str, produce: &bool) -> Result<()> {
 
                                         assert!(peer_id != our_peer_id);
 
-                                        peer_inner(our_peer_id, peer_id, tx, peer_controls, false)
-                                            .await
-                                            .unwrap();
+                                        peer_connected(
+                                            our_peer_id,
+                                            peer_id,
+                                            tx,
+                                            peer_controls,
+                                            false,
+                                        )
+                                        .await
+                                        .unwrap();
                                     } else {
                                         log::debug!("Unknown connection id {connection_id}");
                                     }

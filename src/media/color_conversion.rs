@@ -14,7 +14,7 @@ use windows::{
 
 use crate::ARBITRARY_CHANNEL_LIMIT;
 
-use super::dx::copy_texture;
+use super::{dx::copy_texture, mf::IMFAttributesExt};
 
 pub(crate) enum ConvertControl {
     Frame(ID3D11Texture2D, std::time::SystemTime),
@@ -113,11 +113,7 @@ pub(crate) async fn converter(
 
                 let attributes = transform.GetAttributes()?;
 
-                // attributes.SetUINT32(&CODECAPI_AVLowLatencyMode, 1)?;
-                // attributes.SetUINT32(&CODECAPI_AVDecNumWorkerThreads, 8)?;
-                // attributes.SetUINT32(&CODECAPI_AVDecVideoAcceleration_H264, 1)?;
-                // attributes.SetUINT32(&CODECAPI_AVDecVideoThumbnailGenerationMode, 0)?;
-                if attributes.GetUINT32(&MF_SA_D3D11_AWARE)? != 1 {
+                if attributes.get_u32(&MF_SA_D3D11_AWARE)? != 1 {
                     panic!("Not D3D11 aware");
                 }
 
@@ -132,8 +128,8 @@ pub(crate) async fn converter(
                     // let input_type = MFCreateMediaType()?;
                     let input_type = transform.GetInputAvailableType(0, 0)?;
 
-                    input_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-                    input_type.SetGUID(&MF_MT_SUBTYPE, &input_format.into())?;
+                    input_type.set_guid(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+                    input_type.set_guid(&MF_MT_SUBTYPE, &input_format.into())?;
 
                     let width_height = (width as u64) << 32 | (height as u64);
                     input_type.SetUINT64(&MF_MT_FRAME_SIZE, width_height)?;
@@ -141,8 +137,8 @@ pub(crate) async fn converter(
                     input_type.SetUINT64(&MF_MT_FRAME_RATE, (30 << 32) | (1))?;
 
                     input_type
-                        .SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
-                    input_type.SetUINT32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
+                        .set_u32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
+                    input_type.set_u32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
                     // input_type.SetUINT32(&MF_MT_FIXED_SIZE_SAMPLES, 1)?;
 
                     let pixel_aspect_ratio = (1_u64) << 32 | 1_u64;
@@ -154,19 +150,19 @@ pub(crate) async fn converter(
 
                 for i in 0.. {
                     if let Ok(output_type) = transform.GetOutputAvailableType(0, i) {
-                        let subtype = output_type.GetGUID(&MF_MT_SUBTYPE)?;
+                        let subtype = output_type.get_guid(&MF_MT_SUBTYPE)?;
                         if subtype == output_format.into() {
                             let width_height = (width as u64) << 32 | (height as u64);
                             output_type.SetUINT64(&MF_MT_FRAME_SIZE, width_height)?;
 
                             output_type.SetUINT64(&MF_MT_FRAME_RATE, (30 << 32) | (1))?;
 
-                            output_type.SetUINT32(
+                            output_type.set_u32(
                                 &MF_MT_INTERLACE_MODE,
                                 MFVideoInterlace_Progressive.0 as u32,
                             )?;
-                            output_type.SetUINT32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
-                            output_type.SetUINT32(&MF_MT_FIXED_SIZE_SAMPLES, 1)?;
+                            output_type.set_u32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
+                            output_type.set_u32(&MF_MT_FIXED_SIZE_SAMPLES, 1)?;
 
                             let pixel_aspect_ratio = (1_u64) << 32 | 1_u64;
                             output_type.SetUINT64(
@@ -308,7 +304,7 @@ pub(crate) async fn converter(
                                                 let subtype =
                                                     output_type.GetGUID(&MF_MT_SUBTYPE)?;
 
-                                                super::produce::debug_video_format(&output_type)?;
+                                                // super::produce::debug_video_format(&output_type)?;
 
                                                 if subtype == MFVideoFormat_NV12 {
                                                     transform.SetOutputType(0, &output_type, 0)?;

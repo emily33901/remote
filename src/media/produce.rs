@@ -4,15 +4,13 @@ use eyre::Result;
 use windows::{
     core::{ComInterface, IUnknown, HSTRING},
     Win32::{
-        Graphics::{
-            Direct3D11::{
-                ID3D11Device, ID3D11Texture2D,
-            },
-        },
+        Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D},
         Media::MediaFoundation::*,
         System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER},
     },
 };
+
+use super::mf::{debug_video_format, IMFAttributesExt};
 
 pub(crate) fn open_media(
     device: &ID3D11Device,
@@ -45,34 +43,16 @@ pub(crate) fn open_media(
 
     let media_source: IMFMediaSource = media_source_unknown.unwrap().cast()?;
 
-    let mut reset_token = 0_u32;
-    let mut device_manager: Option<IMFDXGIDeviceManager> = None;
+    let device_manager = super::mf::create_dxgi_manager(device)?;
 
-    unsafe {
-        MFCreateDXGIDeviceManager(&mut reset_token as *mut _, &mut device_manager as *mut _)
-    }?;
+    let source_attributes = super::mf::create_attributes()?;
 
-    let device_manager = device_manager.unwrap();
+    source_attributes.set_unknown(&MF_SOURCE_READER_D3D_MANAGER, &device_manager)?;
+    source_attributes.set_u32(&MF_SA_D3D11_SHARED_WITHOUT_MUTEX, 1)?;
 
-    unsafe { device_manager.ResetDevice(device, reset_token) }?;
-
-    let mut source_attributes: Option<IMFAttributes> = None;
-
-    unsafe { MFCreateAttributes(&mut source_attributes as *mut _, 2) }?;
-
-    let source_attributes = source_attributes.unwrap();
-
-    unsafe {
-        source_attributes.SetUnknown(&MF_SOURCE_READER_D3D_MANAGER as *const _, &device_manager)?;
-        source_attributes.SetUINT32(&MF_SA_D3D11_SHARED_WITHOUT_MUTEX as *const _, 1)?;
-
-        source_attributes.SetUINT32(
-            &MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING as *const _,
-            1,
-        )?;
-        source_attributes.SetUINT32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS as *const _, 1)?;
-        source_attributes.SetGUID(&MF_MT_SUBTYPE as *const _, &MFVideoFormat_NV12 as *const _)?;
-    }
+    source_attributes.set_u32(&MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, 1)?;
+    source_attributes.set_u32(&MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, 1)?;
+    source_attributes.set_guid(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
 
     // let mut source_reader: Option<IMFSourceReader> = None;
 
@@ -80,17 +60,12 @@ pub(crate) fn open_media(
         unsafe { MFCreateSourceReaderFromMediaSource(&media_source, &source_attributes) }?;
 
     let video_type = unsafe { MFCreateMediaType() }?;
-    unsafe {
-        video_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-        video_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
 
-        let width_height = (width as u64) << 32 | (height as u64);
+    video_type.set_guid(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+    video_type.set_guid(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
 
-        video_type.SetUINT64(&MF_MT_FRAME_SIZE, width_height)?;
-
-        let fps = (30 as u64) << 32 | (1_u64);
-        video_type.SetUINT64(&MF_MT_FRAME_RATE, fps)?;
-    }
+    video_type.set_fraction(&MF_MT_FRAME_SIZE, width, height)?;
+    video_type.set_fraction(&MF_MT_FRAME_RATE, 30, 1)?;
 
     unsafe {
         source_reader.SetCurrentMediaType(
@@ -102,10 +77,8 @@ pub(crate) fn open_media(
 
     let audio_type = unsafe { MFCreateMediaType() }?;
 
-    unsafe {
-        audio_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
-        audio_type.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_PCM)?;
-    }
+    audio_type.set_guid(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
+    audio_type.set_guid(&MF_MT_SUBTYPE, &MFAudioFormat_PCM)?;
 
     unsafe {
         source_reader.SetCurrentMediaType(
@@ -120,19 +93,15 @@ pub(crate) fn open_media(
 
     // Set up resamplers' output type
     let resampler_output_type = unsafe { MFCreateMediaType() }?;
-    unsafe {
-        resampler_output_type.SetGUID(
-            &MF_MT_MAJOR_TYPE as *const _,
-            &MFMediaType_Audio as *const _,
-        )?;
-        resampler_output_type.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_PCM)?;
-        resampler_output_type.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, 2)?;
-        resampler_output_type.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, 44100)?;
-        resampler_output_type.SetUINT32(&MF_MT_AUDIO_BLOCK_ALIGNMENT, 4)?;
-        resampler_output_type.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 44100 * 4)?;
-        resampler_output_type.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16)?;
-        resampler_output_type.SetUINT32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
-    }
+
+    resampler_output_type.set_guid(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
+    resampler_output_type.set_guid(&MF_MT_SUBTYPE, &MFAudioFormat_PCM)?;
+    resampler_output_type.set_u32(&MF_MT_AUDIO_NUM_CHANNELS, 2)?;
+    resampler_output_type.set_u32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, 44100)?;
+    resampler_output_type.set_u32(&MF_MT_AUDIO_BLOCK_ALIGNMENT, 4)?;
+    resampler_output_type.set_u32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 44100 * 4)?;
+    resampler_output_type.set_u32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16)?;
+    resampler_output_type.set_u32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
 
     let resampler: IMFTransform = unsafe {
         CoCreateInstance(
@@ -157,22 +126,6 @@ pub(crate) fn open_media(
     }
 
     Ok((media_source, source_reader, resampler, device_manager))
-}
-
-pub(crate) fn debug_video_format(typ: &IMFMediaType) -> Result<()> {
-    let width_height = unsafe { typ.GetUINT64(&MF_MT_FRAME_SIZE as *const _) }?;
-
-    let width = width_height >> 32 & 0xFFFF_FFFF;
-    let height = width_height & 0xFFFF_FFFF;
-
-    let fps_num_denom = unsafe { typ.GetUINT64(&MF_MT_FRAME_RATE) }?;
-    let numerator = fps_num_denom >> 32 & 0xFFFF_FFFF;
-    let denominator = fps_num_denom & 0xFFFF_FFFF;
-    let fps = (numerator as f32) / (denominator as f32);
-
-    log::info!("Media::debug_media_format: VO: {width}x{height} @ {fps} fps");
-
-    Ok(())
 }
 
 pub(crate) struct Media {
@@ -221,15 +174,11 @@ impl Media {
         }
 
         let debug_audio_type = |output: IMFMediaType, typ: &str| -> eyre::Result<()> {
-            let channels = unsafe { output.GetUINT32(&MF_MT_AUDIO_NUM_CHANNELS as *const _) }?;
-            let samples_per_sec =
-                unsafe { output.GetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND as *const _) }?;
-            let bits_per_sample =
-                unsafe { output.GetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE as *const _) }?;
-            let block_align =
-                unsafe { output.GetUINT32(&MF_MT_AUDIO_BLOCK_ALIGNMENT as *const _) }?;
-            let avg_per_sec =
-                unsafe { output.GetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND as *const _) }?;
+            let channels = output.get_u32(&MF_MT_AUDIO_NUM_CHANNELS)?;
+            let samples_per_sec = output.get_u32(&MF_MT_AUDIO_SAMPLES_PER_SECOND)?;
+            let bits_per_sample = output.get_u32(&MF_MT_AUDIO_BITS_PER_SAMPLE)?;
+            let block_align = output.get_u32(&MF_MT_AUDIO_BLOCK_ALIGNMENT)?;
+            let avg_per_sec = output.get_u32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND)?;
 
             log::debug!("Media::debug_media_format: {typ}: c:{channels} sps:{samples_per_sec} bps:{bits_per_sample} ba:{block_align} aps:{avg_per_sec}");
 

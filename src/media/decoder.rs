@@ -13,7 +13,10 @@ use windows::{
 
 use crate::{video::VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
 
-use super::dx::{copy_texture, MapTextureExt, TextureCPUAccess, TextureUsage};
+use super::{
+    dx::{copy_texture, MapTextureExt, TextureCPUAccess, TextureUsage},
+    mf::IMFAttributesExt,
+};
 
 pub(crate) enum DecoderControl {
     Data(VideoBuffer),
@@ -100,11 +103,26 @@ pub(crate) async fn h264_decoder(
 
                 let attributes = transform.GetAttributes()?;
 
-                attributes.SetUINT32(&CODECAPI_AVLowLatencyMode, 1)?;
-                attributes.SetUINT32(&CODECAPI_AVDecNumWorkerThreads, 8)?;
-                attributes.SetUINT32(&CODECAPI_AVDecVideoAcceleration_H264, 1)?;
-                attributes.SetUINT32(&CODECAPI_AVDecVideoThumbnailGenerationMode, 0)?;
-                if attributes.GetUINT32(&MF_SA_D3D11_AWARE)? != 1 {
+                attributes.set_u32(&CODECAPI_AVLowLatencyMode, 1)?;
+                attributes.set_u32(&CODECAPI_AVDecNumWorkerThreads, 8)?;
+                attributes.set_u32(&CODECAPI_AVDecVideoAcceleration_H264, 1)?;
+                attributes.set_u32(&CODECAPI_AVDecVideoThumbnailGenerationMode, 0)?;
+
+                // TODO(emily): NOTE from MSDN:
+                // This attribute applies only to video MFTs. To query this attribute, call IMFTransform::GetAttributes 
+                // to get the MFT attribute store. If GetAttributes succeeds, call IMFAttributes::GetUINT32.
+
+                // * If the attribute is nonzero, the client can give the MFT a pointer to the IMFDXGIDeviceManager 
+                //   interface before streaming starts. To do so, the client sends the MFT_MESSAGE_SET_D3D_MANAGER 
+                //   message to the MFT. The client is not required to send this message.
+                // * If this attribute is zero (FALSE), the MFT does not support Direct3D 11, and the client should not 
+                //   send the MFT_MESSAGE_SET_D3D_MANAGER message to the MFT.
+
+                // The default value of this attribute is FALSE. Treat this attribute as read-only. 
+                // Do not change the value; the MFT will ignore any changes to the value. 
+                
+
+                if attributes.get_u32(&MF_SA_D3D11_AWARE)? != 1 {
                     panic!("Not D3D11 aware");
                 }
 
@@ -114,29 +132,23 @@ pub(crate) async fn h264_decoder(
                     std::mem::transmute(device_manager),
                 ).map(|_| true).unwrap_or_default();
 
-                attributes.SetUINT32(&MF_LOW_LATENCY, 1)?;
+                attributes.set_u32(&MF_LOW_LATENCY, 1)?;
 
                 {
                     // let input_type = MFCreateMediaType()?;
                     let input_type = transform.GetInputAvailableType(0, 0)?;
 
-                    input_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-                    input_type.SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_H264_ES)?;
+                    input_type.set_guid(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+                    input_type.set_guid(&MF_MT_SUBTYPE, &MFVideoFormat_H264_ES)?;
 
-                    let width_height = (width as u64) << 32 | (height as u64);
-                    input_type.SetUINT64(&MF_MT_FRAME_SIZE, width_height)?;
+                    input_type.set_fraction(&MF_MT_FRAME_SIZE, width, height)?;
+                    input_type.set_fraction(&MF_MT_FRAME_RATE, target_framerate, 1)?;
+                    input_type.set_fraction(&MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
 
-                    let frame_rate = (target_framerate as u64) << 32 | 1_u64;
-                    input_type.SetUINT64(&MF_MT_FRAME_RATE, frame_rate)?;
-
-                    input_type.SetUINT32(&MF_MT_AVG_BITRATE, target_bitrate)?;
-
-                    // let pixel_aspect_ratio = (1_u64) << 32 | 1_u64;
-                    // input_type
-                    //     .SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO as *const _, pixel_aspect_ratio)?;
+                    input_type.set_u32(&MF_MT_AVG_BITRATE, target_bitrate)?;
 
                     input_type
-                        .SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
+                        .set_u32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
 
                     // input_type.SetUINT32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
 
@@ -146,24 +158,18 @@ pub(crate) async fn h264_decoder(
                 {
                     let output_type = transform.GetOutputAvailableType(0, 0)?;
                     // let output_type = MFCreateMediaType()?;
-                    output_type.SetGUID(
+                    output_type.set_guid(
                         &MF_MT_MAJOR_TYPE,
                         &MFMediaType_Video,
                     )?;
                     output_type
-                        .SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
+                        .set_guid(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
 
-                    output_type.SetUINT32(&MF_MT_AVG_BITRATE, target_bitrate)?;
+                    output_type.set_u32(&MF_MT_AVG_BITRATE, target_bitrate)?;
 
-                    let width_height = (width as u64) << 32 | (height as u64);
-                    output_type.SetUINT64(&MF_MT_FRAME_SIZE, width_height)?;
-
-                    let frame_rate = (target_framerate as u64) << 32 | 1_u64;
-                    output_type.SetUINT64(&MF_MT_FRAME_RATE, frame_rate)?;
-
-                    let pixel_aspect_ratio = (1_u64) << 32 | 1_u64;
-                    output_type
-                        .SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, pixel_aspect_ratio)?;
+                    output_type.set_fraction(&MF_MT_FRAME_SIZE, width, height)?;
+                    output_type.set_fraction(&MF_MT_FRAME_RATE, target_framerate, 1)?;
+                    output_type.set_fraction(&MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
 
                     transform.SetOutputType(0, &output_type, 0)?;
                 }
@@ -316,9 +322,9 @@ unsafe fn hardware(
                         {
                             for i in 0.. {
                                 if let Ok(output_type) = transform.GetOutputAvailableType(0, i) {
-                                    let subtype = output_type.GetGUID(&MF_MT_SUBTYPE)?;
+                                    let subtype = output_type.get_guid(&MF_MT_SUBTYPE)?;
 
-                                    super::produce::debug_video_format(&output_type)?;
+                                    // super::produce::debug_video_format(&output_type)?;
 
                                     if subtype == MFVideoFormat_NV12 {
                                         transform.SetOutputType(0, &output_type, 0)?;
@@ -482,8 +488,6 @@ unsafe fn software(
                             for i in 0.. {
                                 if let Ok(output_type) = transform.GetOutputAvailableType(0, i) {
                                     let subtype = output_type.GetGUID(&MF_MT_SUBTYPE)?;
-
-                                    super::produce::debug_video_format(&output_type)?;
 
                                     if subtype == MFVideoFormat_NV12 {
                                         transform.SetOutputType(0, &output_type, 0)?;

@@ -1,4 +1,3 @@
-workspace = { members = ["signal"] }
 [package]
 name = "remote"
 version = "0.1.0"
@@ -81,3 +80,5 @@ debug = true
 
 [profile.dev]
 panic = "abort"
+
+workspace = { members = ["media", "signal", "telemetry"] }
