@@ -364,6 +364,14 @@ pub(crate) fn copy_texture(
         None
     };
 
+    scopeguard::defer! {
+        if let Some(keyed) = keyed_in {
+            unsafe {
+                let _ = keyed.ReleaseSync(0);
+            }
+        }
+    }
+
     let keyed_out = if D3D11_RESOURCE_MISC_FLAG(out_desc.MiscFlags as i32)
         .contains(D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX)
     {
@@ -375,6 +383,14 @@ pub(crate) fn copy_texture(
     } else {
         None
     };
+
+    scopeguard::defer! {
+        if let Some(keyed) = keyed_out {
+            unsafe {
+                let _ = keyed.ReleaseSync(0);
+            }
+        }
+    }
 
     let region = D3D11_BOX {
         left: 0,
@@ -399,18 +415,6 @@ pub(crate) fn copy_texture(
             Some(&region),
         )
     };
-
-    if let Some(keyed) = keyed_out {
-        unsafe {
-            keyed.ReleaseSync(0)?;
-        }
-    }
-
-    if let Some(keyed) = keyed_in {
-        unsafe {
-            keyed.ReleaseSync(0)?;
-        }
-    }
 
     Ok(())
 }

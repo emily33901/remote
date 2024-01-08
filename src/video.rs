@@ -5,6 +5,7 @@ use tokio::sync::mpsc;
 
 use crate::{
     chunk::{assembly, chunk, AssemblyControl, Chunk},
+    media::encoder::FrameIsKeyframe,
     rtc::{ChannelControl, ChannelEvent, ChannelOptions, PeerConnection},
     util, ARBITRARY_CHANNEL_LIMIT,
 };
@@ -18,6 +19,7 @@ pub(crate) struct VideoBuffer {
     pub(crate) sequence_header: Option<Vec<u8>>,
     pub(crate) time: std::time::SystemTime,
     pub(crate) duration: std::time::Duration,
+    pub(crate) key_frame: FrameIsKeyframe,
 }
 
 pub(crate) enum VideoEvent {

@@ -91,6 +91,7 @@ pub(crate) fn file_sink(
                         sequence_header: _,
                         time,
                         duration,
+                        key_frame,
                     }) => {
                         let len = data.len();
                         let media_buffer = MFCreateMemoryBuffer(len as u32)?;

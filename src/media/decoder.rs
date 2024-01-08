@@ -5,11 +5,7 @@ use tokio::sync::mpsc;
 use windows::{
     core::ComInterface,
     Win32::{
-        Graphics::{
-            Direct3D11::{
-                ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
-            },
-        },
+        Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D},
         Media::MediaFoundation::*,
         System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE},
     },
@@ -131,9 +127,9 @@ pub(crate) async fn h264_decoder(
                     input_type.SetUINT64(&MF_MT_FRAME_SIZE, width_height)?;
 
                     let frame_rate = (target_framerate as u64) << 32 | 1_u64;
-                    input_type.SetUINT64(&MF_MT_FRAME_RATE as *const _, frame_rate)?;
+                    input_type.SetUINT64(&MF_MT_FRAME_RATE, frame_rate)?;
 
-                    input_type.SetUINT32(&MF_MT_AVG_BITRATE as *const _, target_bitrate)?;
+                    input_type.SetUINT32(&MF_MT_AVG_BITRATE, target_bitrate)?;
 
                     // let pixel_aspect_ratio = (1_u64) << 32 | 1_u64;
                     // input_type
@@ -151,23 +147,23 @@ pub(crate) async fn h264_decoder(
                     let output_type = transform.GetOutputAvailableType(0, 0)?;
                     // let output_type = MFCreateMediaType()?;
                     output_type.SetGUID(
-                        &MF_MT_MAJOR_TYPE as *const _,
-                        &MFMediaType_Video as *const _,
+                        &MF_MT_MAJOR_TYPE,
+                        &MFMediaType_Video,
                     )?;
                     output_type
-                        .SetGUID(&MF_MT_SUBTYPE as *const _, &MFVideoFormat_NV12 as *const _)?;
+                        .SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
 
-                    output_type.SetUINT32(&MF_MT_AVG_BITRATE as *const _, target_bitrate)?;
+                    output_type.SetUINT32(&MF_MT_AVG_BITRATE, target_bitrate)?;
 
                     let width_height = (width as u64) << 32 | (height as u64);
                     output_type.SetUINT64(&MF_MT_FRAME_SIZE, width_height)?;
 
                     let frame_rate = (target_framerate as u64) << 32 | 1_u64;
-                    output_type.SetUINT64(&MF_MT_FRAME_RATE as *const _, frame_rate)?;
+                    output_type.SetUINT64(&MF_MT_FRAME_RATE, frame_rate)?;
 
                     let pixel_aspect_ratio = (1_u64) << 32 | 1_u64;
                     output_type
-                        .SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO as *const _, pixel_aspect_ratio)?;
+                        .SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, pixel_aspect_ratio)?;
 
                     transform.SetOutputType(0, &output_type, 0)?;
                 }
@@ -211,6 +207,7 @@ unsafe fn hardware(
             sequence_header,
             time,
             duration,
+            key_frame,
         }) = control_rx
             .blocking_recv()
             .ok_or(eyre::eyre!("decoder control closed"))?;
@@ -372,6 +369,7 @@ unsafe fn software(
             sequence_header,
             time,
             duration,
+            key_frame,
         }) = control_rx
             .blocking_recv()
             .ok_or(eyre::eyre!("decoder control closed"))?;

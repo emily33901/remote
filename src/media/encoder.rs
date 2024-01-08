@@ -1,6 +1,7 @@
-use std::{time::UNIX_EPOCH};
+use std::time::UNIX_EPOCH;
 
 use eyre::Result;
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use windows::{
     core::ComInterface,
@@ -18,12 +19,9 @@ use crate::{media::produce::debug_video_format, video::VideoBuffer, ARBITRARY_CH
 
 use super::dx::MapTextureExt;
 
-use windows::Win32::{
-    Graphics::{
-        Direct3D11::*,
-    },
-};
+use windows::Win32::Graphics::Direct3D11::*;
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) enum FrameIsKeyframe {
     Yes,
     No,
@@ -133,19 +131,19 @@ pub(crate) async fn h264_encoder(
                 {
                     let output_type = MFCreateMediaType()?;
                     output_type.SetGUID(
-                        &MF_MT_MAJOR_TYPE as *const _,
-                        &MFMediaType_Video as *const _,
+                        &MF_MT_MAJOR_TYPE,
+                        &MFMediaType_Video,
                     )?;
                     output_type
-                        .SetGUID(&MF_MT_SUBTYPE as *const _, &MFVideoFormat_H264 as *const _)?;
+                        .SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_H264)?;
 
-                    output_type.SetUINT32(&MF_MT_AVG_BITRATE as *const _, target_bitrate)?;
+                    output_type.SetUINT32(&MF_MT_AVG_BITRATE, target_bitrate)?;
 
                     let width_height = (width as u64) << 32 | (height as u64);
                     output_type.SetUINT64(&MF_MT_FRAME_SIZE, width_height)?;
 
                     let frame_rate = (target_framerate as u64) << 32 | 1_u64;
-                    output_type.SetUINT64(&MF_MT_FRAME_RATE as *const _, frame_rate)?;
+                    output_type.SetUINT64(&MF_MT_FRAME_RATE, frame_rate)?;
 
                     output_type
                         .SetUINT32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
@@ -157,7 +155,7 @@ pub(crate) async fn h264_encoder(
 
                     let pixel_aspect_ratio = (1_u64) << 32 | 1_u64;
                     output_type
-                        .SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO as *const _, pixel_aspect_ratio)?;
+                        .SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, pixel_aspect_ratio)?;
 
                     debug_video_format(&output_type)?;
 
@@ -174,7 +172,7 @@ pub(crate) async fn h264_encoder(
                     input_type.SetUINT64(&MF_MT_FRAME_SIZE, width_height)?;
 
                     let frame_rate = (target_framerate as u64) << 32 | 1_u64;
-                    input_type.SetUINT64(&MF_MT_FRAME_RATE as *const _, frame_rate)?;
+                    input_type.SetUINT64(&MF_MT_FRAME_RATE, frame_rate)?;
 
                     debug_video_format(&input_type)?;
 
@@ -271,7 +269,6 @@ unsafe fn hardware(
                         // let media_buffer = &output_media_buffer;
 
                         let mut output = vec![];
-                        let mut sequence_header = None;
 
                         let sample_time;
                         let duration;
@@ -281,24 +278,22 @@ unsafe fn hardware(
                             Ok(())
                         })?;
 
+                        let is_keyframe = match sample.GetUINT32(&MFSampleExtension_CleanPoint) {
+                            Ok(1) => FrameIsKeyframe::Yes,
+                            Ok(0) => FrameIsKeyframe::No,
+                            _ => FrameIsKeyframe::Perhaps,
+                        };
+
+                        // log::info!("is_keyframe {is_keyframe:?}");
+
+                        // let is_keyframe = sample.GetUINT32(&MFSampleExtension_CleanPoint)? == 1;
+                        // let is_keyframe = false;
                         unsafe {
-                            // let is_keyframe = match sample.GetUINT32(&MFSampleExtension_CleanPoint)
-                            // {
-                            //     Ok(1) => FrameIsKeyframe::Yes,
-                            //     Ok(0) => FrameIsKeyframe::No,
-                            //     _ => FrameIsKeyframe::Perhaps,
-                            // };
-
-                            let is_keyframe = FrameIsKeyframe::No;
-
-                            // let is_keyframe = sample.GetUINT32(&MFSampleExtension_CleanPoint)? == 1;
-                            // let is_keyframe = false;
-
                             sample_time = match sample.GetSampleTime() {
                                 Ok(sample_time) => sample_time as u64,
                                 Err(_err) => {
                                     // No sample time, but thats fine! we can just throw this sample
-                                    log::info!("throwing encoder output sample with not sample time attached");
+                                    log::info!("throwing encoder output sample with no sample time attached");
                                     return Ok(());
                                 }
                             };
@@ -306,34 +301,15 @@ unsafe fn hardware(
                             duration = std::time::Duration::from_nanos(
                                 sample.GetSampleDuration()? as u64 * 100,
                             );
-
-                            sequence_header = if let FrameIsKeyframe::Yes = is_keyframe {
-                                // log::info!("keyframe!");
-                                let output_type =
-                                    transform.GetOutputCurrentType(output_stream_id)?;
-                                let extra_data_size =
-                                    output_type.GetBlobSize(&MF_MT_MPEG_SEQUENCE_HEADER)? as usize;
-
-                                let mut sequence_header = vec![0; extra_data_size];
-
-                                output_type.GetBlob(
-                                    &MF_MT_MPEG_SEQUENCE_HEADER,
-                                    &mut sequence_header.as_mut_slice()[..extra_data_size],
-                                    None,
-                                )?;
-
-                                Some(sequence_header)
-                            } else {
-                                None
-                            };
                         };
 
                         event_tx.blocking_send(EncoderEvent::Data(VideoBuffer {
                             data: output,
-                            sequence_header: sequence_header,
+                            sequence_header: None,
                             time: std::time::UNIX_EPOCH
                                 + std::time::Duration::from_nanos(sample_time * 100),
                             duration: duration,
+                            key_frame: is_keyframe,
                         }))?;
                     }
                     Err(_) => {}
@@ -434,16 +410,20 @@ unsafe fn software(
                         })
                         .unwrap();
 
-                        unsafe {
-                            let is_keyframe = sample.GetUINT32(&MFSampleExtension_CleanPoint)? == 1;
+                        let is_keyframe = match sample.GetUINT32(&MFSampleExtension_CleanPoint) {
+                            Ok(1) => FrameIsKeyframe::Yes,
+                            Ok(0) => FrameIsKeyframe::No,
+                            _ => FrameIsKeyframe::Perhaps,
+                        };
 
+                        unsafe {
                             sample_time = sample.GetUINT64(&MFSampleExtension_DecodeTimestamp)?;
 
                             duration = std::time::Duration::from_nanos(
                                 sample.GetSampleDuration()? as u64 * 100,
                             );
 
-                            sequence_header = if is_keyframe {
+                            sequence_header = if let FrameIsKeyframe::Yes = is_keyframe {
                                 // log::info!("keyframe!");
                                 let output_type =
                                     transform.GetOutputCurrentType(output_stream_id)?;
@@ -471,6 +451,7 @@ unsafe fn software(
                                 time: std::time::UNIX_EPOCH
                                     + std::time::Duration::from_nanos(sample_time * 100),
                                 duration: duration,
+                                key_frame: is_keyframe,
                             }))
                             .unwrap();
 
