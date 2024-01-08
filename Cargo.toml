@@ -21,7 +21,8 @@ uuid = { version = "1.6.1", features = [
     "macro-diagnostics", # Enable better diagnostics for compile-time UUIDs
     "serde",
 ] }
-tokio-tungstenite = "*"
+tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
+# tungstenite = { version = "0.21", features = ["rustls-tls-native-roots"] }
 futures = "*"
 log = "0.4.20"
 fern = "0.6.2"

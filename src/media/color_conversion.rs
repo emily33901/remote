@@ -294,7 +294,7 @@ pub(crate) async fn converter(
                                     // break;
                                 }
                                 Err(MF_E_TRANSFORM_NEED_MORE_INPUT) => {
-                                    log::info!("cc need more input");
+                                    log::debug!("cc need more input");
                                     break;
                                 }
                                 Err(MF_E_TRANSFORM_STREAM_CHANGE) => {
