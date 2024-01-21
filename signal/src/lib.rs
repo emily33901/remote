@@ -256,7 +256,10 @@ async fn handle_incoming_message(
             )
         }
         Binary(_) | Frame(_) => panic!("No idea what to do with binary"),
-        Close(_) => Err(None),
+        Close(_) => {
+            println!("{} i close", our_peer_id);
+            Err(None)
+        },
         Ping(_data) | Pong(_data) => todo!(),
     }
 }
