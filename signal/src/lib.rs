@@ -244,12 +244,13 @@ async fn handle_incoming_message(
 ) -> core::result::Result<(), Option<ServerToPeerMessage>> {
     match msg {
         Text(text_message) => {
-            let message = serde_json::from_str::<PeerToServerMessage>(&text_message)?;
+            let message = serde_json::from_str::<PeerToServerMessage>(&text_message).unwrap();
+            let job_id = message.job_id;
             Ok(
                 handle_incoming_message_inner(our_peer_id, connection_requests, peers, message)
                     .await
                     .map_err(|err| ServerToPeerMessage {
-                        job_id: message.job_id,
+                        job_id: job_id,
                         inner: ServerToPeer::Error(err),
                     })?,
             )
