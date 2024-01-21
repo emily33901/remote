@@ -21,6 +21,7 @@ pub(crate) const ARBITRARY_CHANNEL_LIMIT: usize = 5;
 #[derive(Debug, Serialize, Deserialize)]
 pub enum SignallingError {
     NoSuchPeer(PeerId),
+    InternalError,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -88,7 +89,7 @@ async fn handle_incoming_message_inner(
     connection_requests: ConnectionRequestMap,
     peers: PeerMap,
     message: PeerToServerMessage,
-) -> Result<()> {
+) -> core::result::Result<(), SignallingError> {
     log::debug!("{message:?}");
     match message.inner {
         PeerToServer::IceCandidate(peer_id, inner) => {
@@ -98,9 +99,10 @@ async fn handle_incoming_message_inner(
                         job_id: 0,
                         inner: ServerToPeer::IceCandidate(our_peer_id, inner),
                     })
-                    .await?)
+                    .await
+                    .map_err(|err| SignallingError::InternalError)?)
             } else {
-                todo!("handle no such peer")
+                Err(SignallingError::NoSuchPeer(peer_id))
             }
         }
         PeerToServer::Offer(peer_id, inner) => {
@@ -110,9 +112,10 @@ async fn handle_incoming_message_inner(
                         job_id: 0,
                         inner: ServerToPeer::Offer(our_peer_id, inner),
                     })
-                    .await?)
+                    .await
+                    .map_err(|err| SignallingError::InternalError)?)
             } else {
-                todo!("handle no such peer")
+                Err(SignallingError::NoSuchPeer(peer_id))
             }
         }
         PeerToServer::Answer(peer_id, inner) => {
@@ -122,9 +125,10 @@ async fn handle_incoming_message_inner(
                         job_id: 0,
                         inner: ServerToPeer::Answer(our_peer_id, inner),
                     })
-                    .await?)
+                    .await
+                    .map_err(|err| SignallingError::InternalError)?)
             } else {
-                todo!("handle no such peer")
+                Err(SignallingError::NoSuchPeer(peer_id))
             }
         }
         PeerToServer::ConnectToPeer(peer_id) => {
@@ -201,9 +205,10 @@ async fn handle_incoming_message_inner(
                         job_id: message.job_id,
                         inner: ServerToPeer::ConnectionRequest(our_peer_id, connection_id),
                     })
-                    .await?)
+                    .await
+                    .map_err(|err| SignallingError::InternalError)?)
             } else {
-                todo!("handle no such peer")
+                Err(SignallingError::NoSuchPeer(peer_id))
             }
         }
         PeerToServer::AcceptConnection(connection_id) => {
@@ -212,12 +217,13 @@ async fn handle_incoming_message_inner(
                 connection_requests.get(&connection_id)
             {
                 if requestee != &our_peer_id {
-                    log::debug!("ignoring acecpt connection from different requestee");
-                    todo!();
+                    log::debug!("ignoring accept connection from different requestee");
+                    return Ok(());
+                    // todo!();
                 }
             } else {
                 log::debug!("ignoring accept connection for unknown connection id");
-                todo!();
+                return Ok(());
             }
 
             let connection_request = connection_requests.remove(&connection_id).unwrap();
@@ -225,7 +231,7 @@ async fn handle_incoming_message_inner(
             Ok(connection_request
                 .accept
                 .send(())
-                .map_err(|_err| eyre!("Unable to accept connection"))?)
+                .map_err(|err| SignallingError::InternalError)?)
         }
     }
 }
@@ -235,17 +241,21 @@ async fn handle_incoming_message(
     connection_requests: ConnectionRequestMap,
     peers: PeerMap,
     msg: Message,
-) -> Result<()> {
+) -> core::result::Result<(), Option<ServerToPeerMessage>> {
     match msg {
         Text(text_message) => {
             let message = serde_json::from_str::<PeerToServerMessage>(&text_message)?;
             Ok(
                 handle_incoming_message_inner(our_peer_id, connection_requests, peers, message)
-                    .await?,
+                    .await
+                    .map_err(|err| ServerToPeerMessage {
+                        job_id: message.job_id,
+                        inner: ServerToPeer::Error(err),
+                    })?,
             )
         }
-        Binary(_) | Frame(_) => Err(eyre!("No idea what to do with binary")),
-        Close(_) => Err(eyre!("Going down")),
+        Binary(_) | Frame(_) => panic!("No idea what to do with binary"),
+        Close(_) => Err(None),
         Ping(_data) | Pong(_data) => todo!(),
     }
 }
@@ -271,13 +281,13 @@ pub async fn server(address: &str) -> Result<()> {
         let connection_requests = connection_requests.clone();
         tokio::spawn(async move {
             match async move {
-                println!("Incoming TCP connection from: {}", addr);
+                println!("i {}", addr);
 
                 let ws_stream = tokio_tungstenite::accept_async(conn).await?;
 
                 let peer_id = make_id();
 
-                println!("WebSocket connection established: {} {}", peer_id, addr);
+                println!("{} {}", peer_id, addr);
 
                 let (mut outgoing, mut incoming) = ws_stream.split();
                 let (tx, mut rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
@@ -294,27 +304,39 @@ pub async fn server(address: &str) -> Result<()> {
                 loop {
                     let peers = peers.clone();
                     let connection_requests = connection_requests.clone();
-                    match futures::select! {
+                    futures::select! {
                         msg = incoming.next().fuse() => {
                             match msg {
                                 Some(Ok(msg)) => {
-                                    handle_incoming_message(peer_id.clone(), connection_requests, peers, msg).await
+                                    if let Err(Some(response)) = handle_incoming_message(peer_id.clone(), connection_requests, peers, msg).await {
+                                        tx.send(response).await?
+                                    } else {
+                                        println!("{} d err None", peer_id);
+                                        break;
+                                    }
                                 }
-                                None | Some(Err(_)) => break,
+                                None => {
+                                    println!("{} d None", peer_id);
+                                    break;
+                                }
+                                Some(Err(err)) => {
+                                    println!("{} d err {err}", peer_id);
+                                    break;
+                                },
                             }
                         },
                         msg = rx.recv().fuse() => {
                             match msg {
                                 Some(msg) => {
-                                    handle_outgoing(&mut outgoing, msg).await
+                                    handle_outgoing(&mut outgoing, msg).await?
                                 }
-                                None => break,
+                                None => {
+                                    println!("{} d outgoing None", peer_id);
+                                    break;
+                                },
                             }
                         }
-                    } {
-                        Ok(_) => {}
-                        Err(_) => break,
-                    }
+                    } 
                 }
 
                 println!("{} {} disconnected", peer_id, &addr);
@@ -432,7 +454,7 @@ pub async fn client(
     mpsc::Sender<SignallingControl>,
     mpsc::Receiver<SignallingEvent>,
 )> {
-    log::debug!("starting client");
+    log::info!("starting signal client");
     let (ws_stream, _) = tokio_tungstenite::connect_async(address)
         .await
         .expect("Error during the websocket handshake occurred");
@@ -442,26 +464,39 @@ pub async fn client(
     let (control_tx, mut control_rx) = mpsc::channel::<SignallingControl>(ARBITRARY_CHANNEL_LIMIT);
     let (event_tx, event_rx) = mpsc::channel::<SignallingEvent>(ARBITRARY_CHANNEL_LIMIT);
 
-    log::debug!("client connected");
+    log::info!("client signal connected");
 
     tokio::spawn(async move {
         loop {
             match futures::select! {
                 control = control_rx.recv().fuse() => {
                     match control {
-                        None => break,
+                        None => {
+                            log::warn!("control_rx None");
+                            break;
+                        },
                         Some(control) => handle_control(&mut write, control).await,
                     }
                 }
                 msg = read.next().fuse() => {
                     match msg {
                         Some(Ok(msg)) => handle_message(event_tx.clone(), msg).await,
-                        None | Some(Err(_)) => break,
+                        None => {
+                            log::warn!("error reading from websocket (None)");
+                            break
+                        },
+                        Some(Err(err)) => {
+                            log::warn!("error reading from websocket ({err})");
+                            break
+                        },
                     }
                 }
             } {
                 Ok(_ok) => {}
-                Err(_err) => break,
+                Err(err) => {
+                    log::error!("err {err}");
+                    break;
+                }
             }
         }
     });
