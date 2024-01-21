@@ -312,11 +312,15 @@ pub async fn server(address: &str) -> Result<()> {
                         msg = incoming.next().fuse() => {
                             match msg {
                                 Some(Ok(msg)) => {
-                                    if let Err(Some(response)) = handle_incoming_message(peer_id.clone(), connection_requests, peers, msg).await {
-                                        tx.send(response).await?
-                                    } else {
-                                        println!("{} d err None", peer_id);
-                                        break;
+                                    match handle_incoming_message(peer_id.clone(), connection_requests, peers, msg).await {
+                                        Err(Some(response)) => {
+                                            tx.send(response).await?
+                                        }
+                                        Err(None) => {
+                                            println!("{} d err None", peer_id);
+                                            break;
+                                        }
+                                        _ => {}
                                     }
                                 }
                                 None => {
