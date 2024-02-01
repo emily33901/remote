@@ -1,4 +1,4 @@
-use std::{mem::MaybeUninit, time::UNIX_EPOCH};
+use std::{mem::{ManuallyDrop, MaybeUninit}, time::UNIX_EPOCH};
 
 use eyre::Result;
 use tokio::sync::mpsc;
@@ -50,6 +50,7 @@ impl From<Format> for super::dx::TextureFormat {
 pub(crate) async fn converter(
     width: u32,
     height: u32,
+    target_framerate: u32,
     input_format: Format,
     output_format: Format,
 ) -> Result<(mpsc::Sender<ConvertControl>, mpsc::Receiver<ConvertEvent>)> {
@@ -125,58 +126,51 @@ pub(crate) async fn converter(
                 // attributes.SetUINT32(&MF_LOW_LATENCY as *const _, 1)?;
 
                 {
-                    // let input_type = MFCreateMediaType()?;
-                    let input_type = transform.GetInputAvailableType(0, 0)?;
+                    let input_type = MFCreateMediaType()?;
+                    // let input_type = transform.GetInputAvailableType(0, 0)?;
 
                     input_type.set_guid(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
                     input_type.set_guid(&MF_MT_SUBTYPE, &input_format.into())?;
 
-                    let width_height = (width as u64) << 32 | (height as u64);
-                    input_type.SetUINT64(&MF_MT_FRAME_SIZE, width_height)?;
-
-                    input_type.SetUINT64(&MF_MT_FRAME_RATE, (30 << 32) | (1))?;
+                    input_type.set_fraction(&MF_MT_FRAME_SIZE, width, height)?;
+                    input_type.set_fraction(&MF_MT_FRAME_RATE, target_framerate, 1)?;
+                    input_type.set_fraction(&MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
 
                     input_type
                         .set_u32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
                     input_type.set_u32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
-                    // input_type.SetUINT32(&MF_MT_FIXED_SIZE_SAMPLES, 1)?;
-
-                    let pixel_aspect_ratio = (1_u64) << 32 | 1_u64;
-                    input_type
-                        .SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO as *const _, pixel_aspect_ratio)?;
+                    input_type.set_u32(&MF_MT_FIXED_SIZE_SAMPLES, 1)?;
 
                     transform.SetInputType(0, &input_type, 0)?;
                 }
 
-                for i in 0.. {
-                    if let Ok(output_type) = transform.GetOutputAvailableType(0, i) {
-                        let subtype = output_type.get_guid(&MF_MT_SUBTYPE)?;
-                        if subtype == output_format.into() {
-                            let width_height = (width as u64) << 32 | (height as u64);
-                            output_type.SetUINT64(&MF_MT_FRAME_SIZE, width_height)?;
+                // for i in 0.. 
+                {
+                    // if let Ok(output_type) = transform.GetOutputAvailableType(0, i) {
+                    //     let subtype = output_type.get_guid(&MF_MT_SUBTYPE)?;
+                    //     if subtype == output_format.into() {
+                    let output_type = MFCreateMediaType()?;
+                    output_type.set_guid(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+                    output_type.set_guid(&MF_MT_SUBTYPE, &output_format.into())?;
 
-                            output_type.SetUINT64(&MF_MT_FRAME_RATE, (30 << 32) | (1))?;
+                    output_type.set_fraction(&MF_MT_FRAME_SIZE, width, height)?;
+                    output_type.set_fraction(&MF_MT_FRAME_RATE, target_framerate, 1)?;
+                    output_type.set_fraction(&MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?; 
 
-                            output_type.set_u32(
-                                &MF_MT_INTERLACE_MODE,
-                                MFVideoInterlace_Progressive.0 as u32,
-                            )?;
-                            output_type.set_u32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
-                            output_type.set_u32(&MF_MT_FIXED_SIZE_SAMPLES, 1)?;
+                    output_type.set_u32(
+                        &MF_MT_INTERLACE_MODE,
+                        MFVideoInterlace_Progressive.0 as u32,
+                    )?;
+                    output_type.set_u32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
+                    output_type.set_u32(&MF_MT_FIXED_SIZE_SAMPLES, 1)?;
 
-                            let pixel_aspect_ratio = (1_u64) << 32 | 1_u64;
-                            output_type.SetUINT64(
-                                &MF_MT_PIXEL_ASPECT_RATIO as *const _,
-                                pixel_aspect_ratio,
-                            )?;
-
-                            transform.SetOutputType(0, &output_type, 0)?;
-                            break;
-                        }
-                    } else {
-                        break;
-                    }
-                }
+                    transform.SetOutputType(0, &output_type, 0)?;
+                            // break;
+                        // }
+                    // } else {
+                        // break;
+                    // }
+                 }
 
                 transform.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
                 transform.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
@@ -191,12 +185,20 @@ pub(crate) async fn converter(
                 .build()
                 .unwrap();
 
-                let _output_sample = MFCreateVideoSampleFromSurface(&output_sample_texture)?;
-
                 loop {
                     let ConvertControl::Frame(frame, time) = control_rx
                         .blocking_recv()
                         .ok_or(eyre::eyre!("convert control closed"))?;
+
+                    
+                    // NOTE(emily): If this frame elapsed then throw it before trying to make a texture,
+                    // do this after getting the sample from the media resource
+                    if let Ok(d) = time.elapsed() {
+                        if d > std::time::Duration::from_millis(10) {
+                            log::info!("cc throwing expired frame (before input) {}ms", d.as_millis());
+                            continue;
+                        }
+                    }
 
                     let dxgi_buffer =
                         MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &frame, 0, FALSE)?;
@@ -209,34 +211,23 @@ pub(crate) async fn converter(
 
                     sample
                         .SetSampleTime(time.duration_since(UNIX_EPOCH)?.as_nanos() as i64 / 100)?;
-                    sample.SetSampleDuration(100_000_000 / 30 as i64)?;
+                    sample.SetSampleDuration(10_000_000 / target_framerate as i64)?;
 
-                    let process_output = || {
+                    let process_output = || -> Result<Option<(ID3D11Texture2D, std::time::SystemTime)>, windows::core::Error> {
                         let mut output_buffer = MFT_OUTPUT_DATA_BUFFER::default();
                         output_buffer.dwStatus = 0;
                         output_buffer.dwStreamID = 0;
-                        // output_buffer.pSample = ManuallyDrop::new(Some(output_sample.clone()));
-                        // let stream_output = transform.GetOutputStreamInfo(0)?;
-                        // log::info!("{stream_output:?}");
 
                         let mut output_buffers = [output_buffer];
 
                         let mut status = 0_u32;
                         match transform.ProcessOutput(0, &mut output_buffers, &mut status) {
                             Ok(ok) => {
-                                let output_texture = super::dx::TextureBuilder::new(
-                                    &device,
-                                    width,
-                                    height,
-                                    super::dx::TextureFormat::NV12,
-                                )
-                                .keyed_mutex()
-                                .nt_handle()
-                                .build()
-                                .unwrap();
-
                                 let sample = output_buffers[0].pSample.take().unwrap();
-                                let timestamp = unsafe { sample.GetSampleTime()? };
+
+                                let timestamp_hns = unsafe { sample.GetSampleTime()? };
+                                let timestamp = std::time::SystemTime::UNIX_EPOCH
+                                    + std::time::Duration::from_nanos(timestamp_hns as u64 * 100);
 
                                 let media_buffer = unsafe { sample.GetBufferByIndex(0) }?;
                                 let dxgi_buffer: IMFDXGIBuffer = media_buffer.cast()?;
@@ -255,19 +246,29 @@ pub(crate) async fn converter(
                                     unsafe { dxgi_buffer.GetSubresourceIndex()? };
                                 let texture = unsafe { texture.assume_init() };
 
+                                // NOTE(emily): If this frame elapsed then throw it before trying to make a texture,
+                                // do this after getting the sample from the media resource
+                                // if let Ok(d) = time.elapsed() {
+                                //     if d > std::time::Duration::from_millis(10) {
+                                //         log::info!("cc throwing expired frame {}ms", d.as_millis());
+                                //         return Ok(None);
+                                //     }
+                                // }
+
+                                let output_texture = super::dx::TextureBuilder::new(
+                                    &device,
+                                    width,
+                                    height,
+                                    super::dx::TextureFormat::NV12,
+                                )
+                                .keyed_mutex()
+                                .nt_handle()
+                                .build()
+                                .unwrap();
+
                                 copy_texture(&output_texture, &texture, Some(subresource_index))?;
 
-                                event_tx
-                                    .blocking_send(ConvertEvent::Frame(
-                                        output_texture,
-                                        std::time::SystemTime::UNIX_EPOCH
-                                            + std::time::Duration::from_nanos(
-                                                timestamp as u64 * 100,
-                                            ),
-                                    ))
-                                    .unwrap();
-
-                                Ok(ok)
+                                Ok(Some((output_texture, timestamp)))
                             }
                             Err(err) => {
                                 // log::warn!("output flags {}", output_buffers[0].dwStatus);
@@ -280,17 +281,18 @@ pub(crate) async fn converter(
                         .ProcessInput(0, &sample, 0)
                         .map_err(|err| err.code())
                     {
-                        Ok(_) => {
-                            log::info!("cc process input OK")
-                        }
-                        Err(MF_E_NOTACCEPTING) => loop {
+                        Ok(_) | Err(MF_E_NOTACCEPTING) => loop {
                             match process_output().map_err(|err| err.code()) {
-                                Ok(_) => {
-                                    // log::info!("process output ok");
-                                    // break;
+                                Ok(Some((output_texture, timestamp))) => {
+                                    event_tx.blocking_send(ConvertEvent::Frame(
+                                        output_texture,
+                                        timestamp,
+                                    )).unwrap()
+                                }
+                                Ok(None) => {
+                                    // Continue trying to get more frames
                                 }
                                 Err(MF_E_TRANSFORM_NEED_MORE_INPUT) => {
-                                    log::debug!("cc need more input");
                                     break;
                                 }
                                 Err(MF_E_TRANSFORM_STREAM_CHANGE) => {
@@ -334,8 +336,8 @@ pub(crate) async fn converter(
             .await
             .unwrap()
             {
-                Ok(_) => log::warn!("h264::decoder exit Ok"),
-                Err(err) => log::error!("h264::decoder exit err {err} {err:?}"),
+                Ok(_) => log::warn!("cc exit Ok"),
+                Err(err) => log::error!("cc exit err {err} {err:?}"),
             }
         }
     });

@@ -43,22 +43,9 @@ pub(crate) async fn h264_decoder(
                 CoInitializeEx(None, COINIT_DISABLE_OLE1DDE | COINIT_APARTMENTTHREADED)?;
                 unsafe { MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)? }
 
-                let mut reset_token = 0_u32;
-                let mut device_manager: Option<IMFDXGIDeviceManager> = None;
-
                 let (device, context) = super::dx::create_device()?;
 
-                unsafe {
-                    MFCreateDXGIDeviceManager(
-                        &mut reset_token as *mut _,
-                        &mut device_manager as *mut _,
-                    )
-                }?;
-
-                let device_manager = device_manager.unwrap();
-
-                unsafe { device_manager.ResetDevice(&device, reset_token) }?;
-
+                let device_manager = super::mf::create_dxgi_manager(&device)?;
 
                 let find_decoder = |hardware| {
                     let mut count = 0_u32;
@@ -120,7 +107,6 @@ pub(crate) async fn h264_decoder(
 
                 // The default value of this attribute is FALSE. Treat this attribute as read-only. 
                 // Do not change the value; the MFT will ignore any changes to the value. 
-                
 
                 if attributes.get_u32(&MF_SA_D3D11_AWARE)? != 1 {
                     panic!("Not D3D11 aware");
@@ -135,7 +121,6 @@ pub(crate) async fn h264_decoder(
                 attributes.set_u32(&MF_LOW_LATENCY, 1)?;
 
                 {
-                    // let input_type = MFCreateMediaType()?;
                     let input_type = transform.GetInputAvailableType(0, 0)?;
 
                     input_type.set_guid(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
@@ -150,14 +135,11 @@ pub(crate) async fn h264_decoder(
                     input_type
                         .set_u32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
 
-                    // input_type.SetUINT32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
-
                     transform.SetInputType(0, &input_type, 0)?;
                 }
 
                 {
                     let output_type = transform.GetOutputAvailableType(0, 0)?;
-                    // let output_type = MFCreateMediaType()?;
                     output_type.set_guid(
                         &MF_MT_MAJOR_TYPE,
                         &MFMediaType_Video,

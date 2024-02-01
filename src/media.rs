@@ -126,7 +126,7 @@ pub(crate) async fn produce(
                             match event_tx.try_send(MediaEvent::Audio(audio_buffer.clone())) {
                                 Ok(_) => {}
                                 Err(mpsc::error::TrySendError::Full(_)) => {
-                                    log::debug!("video backpressured")
+                                    log::debug!("audio backpressured")
                                 }
                                 Err(mpsc::error::TrySendError::Closed(_)) => {
                                     log::error!("produce channel closed, going down");
@@ -179,19 +179,19 @@ pub(crate) async fn produce(
 pub(crate) async fn duplicate_desktop(
     width: u32,
     height: u32,
+    framerate: u32,
     bitrate: u32,
 ) -> Result<(mpsc::Sender<MediaControl>, mpsc::Receiver<MediaEvent>)> {
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
     let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
-    let (h264_control, mut h264_event) = encoder::h264_encoder(width, height, 30, bitrate).await?;
-
-    // let (convert_control, mut convert_event) =
-    //     color_conversion::convert_bgra_to_nv12(width, height).await?;
+    let (h264_control, mut h264_event) =
+        encoder::h264_encoder(width, height, framerate, bitrate).await?;
 
     let (convert_control, mut convert_event) = color_conversion::converter(
         width,
         height,
+        framerate,
         color_conversion::Format::BGRA,
         color_conversion::Format::NV12,
     )
@@ -202,44 +202,28 @@ pub(crate) async fn duplicate_desktop(
     tokio::spawn(async move { while let Some(_control) = control_rx.recv().await {} });
 
     tokio::spawn(async move {
-        while let Some(event) = dd_event.recv().await {
-            match event {
-                desktop_duplication::DDEvent::Size(_, _) => {}
-                desktop_duplication::DDEvent::Frame(texture, time) => {
-                    let _ = convert_control
-                        .send(color_conversion::ConvertControl::Frame(texture, time))
-                        .await;
-                    //         .unwrap();
-                }
-            }
-        }
-    });
-
-    tokio::spawn({
-        let event_tx = event_tx.clone();
-        async move {
-            match tokio::spawn(async move {
-                while let Some(event) = h264_event.recv().await {
-                    match event {
-                        encoder::EncoderEvent::Data(data) => {
-                            event_tx.send(MediaEvent::Video(data)).await?
-                        }
+        match async move {
+            while let Some(event) = dd_event.recv().await {
+                match event {
+                    desktop_duplication::DDEvent::Size(_, _) => {}
+                    desktop_duplication::DDEvent::Frame(texture, time) => {
+                        convert_control
+                            .send(color_conversion::ConvertControl::Frame(texture, time))
+                            .await?
                     }
                 }
-
-                eyre::Ok(())
-            })
-            .await
-            .unwrap()
-            {
-                Ok(_) => {}
-                Err(err) => log::error!("encoder event err {err}"),
             }
+            eyre::Ok(())
+        }
+        .await
+        {
+            Ok(_) => {}
+            Err(err) => log::error!("dd event err {err}"),
         }
     });
 
     tokio::spawn(async move {
-        match tokio::spawn(async move {
+        match async move {
             while let Some(event) = convert_event.recv().await {
                 match event {
                     color_conversion::ConvertEvent::Frame(frame, time) => {
@@ -250,12 +234,33 @@ pub(crate) async fn duplicate_desktop(
                 }
             }
             eyre::Ok(())
-        })
+        }
         .await
-        .unwrap()
         {
             Ok(_) => {}
             Err(err) => log::error!("convert event err {err}"),
+        }
+    });
+
+    tokio::spawn({
+        let event_tx = event_tx.clone();
+        async move {
+            match async move {
+                while let Some(event) = h264_event.recv().await {
+                    match event {
+                        encoder::EncoderEvent::Data(data) => {
+                            event_tx.send(MediaEvent::Video(data)).await?
+                        }
+                    }
+                }
+
+                eyre::Ok(())
+            }
+            .await
+            {
+                Ok(_) => {}
+                Err(err) => log::error!("encoder event err {err}"),
+            }
         }
     });
 

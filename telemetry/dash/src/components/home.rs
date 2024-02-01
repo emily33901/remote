@@ -205,7 +205,7 @@ impl Home {
                     .split(area);
 
                 // TODO(emily): Do this for each chunk instead of for the whole map
-                let max_name_len = client
+                let max_name_len = 3 + client
                     .channels
                     .values()
                     .map(|c| c.name.len())

@@ -14,7 +14,8 @@ use windows::{
                     DXGI_FORMAT_R8G8B8A8_UNORM,
                 },
                 IDXGIKeyedMutex, IDXGIResource1, IDXGISwapChain, DXGI_ERROR_DEVICE_REMOVED,
-                DXGI_SHARED_RESOURCE_READ, DXGI_SWAP_CHAIN_DESC, DXGI_USAGE_RENDER_TARGET_OUTPUT,
+                DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE, DXGI_SWAP_CHAIN_DESC,
+                DXGI_USAGE_RENDER_TARGET_OUTPUT,
             },
         },
     },
@@ -329,8 +330,9 @@ pub(crate) fn copy_texture(
             (in_texture, out_texture.clone())
         } else if out_flags.contains(D3D11_RESOURCE_MISC_SHARED_NTHANDLE) {
             let dxgi_resource: IDXGIResource1 = out_texture.cast()?;
-            let shared_handle =
-                unsafe { dxgi_resource.CreateSharedHandle(None, DXGI_SHARED_RESOURCE_READ, None) }?;
+            let shared_handle = unsafe {
+                dxgi_resource.CreateSharedHandle(None, DXGI_SHARED_RESOURCE_WRITE, None)
+            }?;
 
             scopeguard::defer! {  unsafe { CloseHandle(shared_handle).unwrap() } };
 
@@ -347,6 +349,7 @@ pub(crate) fn copy_texture(
         (in_texture.clone(), out_texture.clone())
     };
 
+    // TODO(emily): I don't think this is correct.
     let device = unsafe { out_texture.GetDevice() }?;
     let context = unsafe { device.GetImmediateContext() }?;
 
@@ -415,6 +418,10 @@ pub(crate) fn copy_texture(
             Some(&region),
         )
     };
+
+    let context3: ID3D11DeviceContext3 = context.cast()?;
+
+    unsafe { context3.Flush1(D3D11_CONTEXT_TYPE_COPY, None) };
 
     Ok(())
 }

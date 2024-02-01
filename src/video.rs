@@ -7,7 +7,7 @@ use crate::{
     chunk::{assembly, chunk, AssemblyControl, Chunk},
     media::encoder::FrameIsKeyframe,
     rtc::{ChannelControl, ChannelEvent, ChannelOptions, PeerConnection},
-    util, ARBITRARY_CHANNEL_LIMIT,
+    ARBITRARY_CHANNEL_LIMIT,
 };
 
 use eyre::Result;
@@ -67,12 +67,7 @@ pub(crate) async fn video_channel(
                         ChannelEvent::Close => {}
                         ChannelEvent::Message(data) => {
                             let chunk: Chunk = bincode::deserialize(&data).unwrap();
-                            util::send(
-                                "video channel event to assembly control",
-                                &assembly_tx,
-                                AssemblyControl::Chunk(chunk),
-                            )
-                            .await?
+                            assembly_tx.send(AssemblyControl::Chunk(chunk)).await?
                         }
                     }
                 }
@@ -102,15 +97,16 @@ pub(crate) async fn video_channel(
                     match control {
                         VideoControl::Video(video) => {
                             let deadline = video.time;
-                            if let Ok(_) = deadline.elapsed() {
-                                log::warn!("throwing expired frame");
-                            } else {
-                                util::send(
-                                    "video control to chunk control",
-                                    &chunk_tx,
-                                    crate::chunk::ChunkControl::Whole(video, deadline),
-                                )
-                                .await?;
+                            // if let Ok(t) = deadline.elapsed() {
+                            //     log::warn!(
+                            //         "throwing expired frame {}ms in the past",
+                            //         t.as_millis()
+                            //     );
+                            // } else
+                            {
+                                chunk_tx
+                                    .send(crate::chunk::ChunkControl::Whole(video, deadline))
+                                    .await?;
                             }
                         }
                     }
@@ -139,8 +135,7 @@ pub(crate) async fn video_channel(
                 while let Some(control) = assembly_rx.recv().await {
                     match control {
                         crate::chunk::AssemblyEvent::Whole(whole) => {
-                            util::send("assembly video event", &event_tx, VideoEvent::Video(whole))
-                                .await?;
+                            event_tx.send(VideoEvent::Video(whole)).await?;
                         }
                     }
                 }
@@ -168,12 +163,8 @@ pub(crate) async fn video_channel(
                 while let Some(control) = chunk_rx.recv().await {
                     match control {
                         crate::chunk::ChunkEvent::Chunk(chunk) => {
-                            util::send(
-                                "chunk event chunk to channel control",
-                                &tx,
-                                ChannelControl::Send(bincode::serialize(&chunk)?),
-                            )
-                            .await?;
+                            tx.send(ChannelControl::Send(bincode::serialize(&chunk)?))
+                                .await?;
                         }
                     }
                 }

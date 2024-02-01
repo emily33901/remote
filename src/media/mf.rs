@@ -102,6 +102,8 @@ pub(crate) trait IMFAttributesExt {
         bottom: u32,
     ) -> windows::core::Result<()>;
 
+    fn get_fraction(&self, key: &windows::core::GUID) -> windows::core::Result<(u32, u32)>;
+
     fn get_guid(&self, key: &windows::core::GUID) -> windows::core::Result<windows::core::GUID>;
     fn set_guid(
         &self,
@@ -179,6 +181,14 @@ impl IMFAttributesExt for IMFAttributes {
     ) -> windows::core::Result<()> {
         unsafe { self.SetUnknown(key, value) }
     }
+
+    fn get_fraction(&self, key: &windows::core::GUID) -> windows::core::Result<(u32, u32)> {
+        let frac = unsafe { self.get_u64(key) }?;
+        let top = frac >> 32 & 0xFFFF_FFFF;
+        let bottom = frac & 0xFFFF_FFFF;
+
+        Ok((top as u32, bottom as u32))
+    }
 }
 
 // TODO(emily): c+p from above, find some better way of doing this similar to impl<T> IMFAttributesExt for T { }
@@ -242,5 +252,13 @@ impl IMFAttributesExt for IMFMediaType {
         value: T,
     ) -> windows::core::Result<()> {
         unsafe { self.SetUnknown(key, value) }
+    }
+
+    fn get_fraction(&self, key: &windows::core::GUID) -> windows::core::Result<(u32, u32)> {
+        let frac = unsafe { self.get_u64(key) }?;
+        let top = frac >> 32 & 0xFFFF_FFFF;
+        let bottom = frac & 0xFFFF_FFFF;
+
+        Ok((top as u32, bottom as u32))
     }
 }

@@ -225,22 +225,19 @@ pub(crate) mod audio {
 }
 
 pub(crate) mod video {
-    
 
-    use eyre::{Result};
+    use eyre::Result;
     use tokio::sync::{mpsc, mpsc::error::TryRecvError};
 
     use windows::{
-        core::{s},
+        core::s,
         Win32::{
             Foundation::{HWND, LPARAM, LRESULT, S_OK, WPARAM},
             Graphics::{
-                Direct3D::{*},
+                Direct3D::*,
                 Direct3D11::*,
-                Dxgi::{
-                    Common::{
-                        DXGI_FORMAT_R32G32_FLOAT, DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8_UNORM,
-                    },
+                Dxgi::Common::{
+                    DXGI_FORMAT_R32G32_FLOAT, DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8_UNORM,
                 },
             },
             System::LibraryLoader::GetModuleHandleA,

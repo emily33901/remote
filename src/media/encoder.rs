@@ -2,7 +2,7 @@ use std::time::UNIX_EPOCH;
 
 use eyre::Result;
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::{self, error::TryRecvError};
 use windows::{
     core::ComInterface,
     Win32::{
@@ -28,6 +28,7 @@ pub(crate) enum FrameIsKeyframe {
     Perhaps,
 }
 
+#[derive(Clone)]
 pub(crate) enum EncoderControl {
     Frame(ID3D11Texture2D, std::time::SystemTime),
 }
@@ -124,28 +125,18 @@ pub(crate) async fn h264_encoder(
 
                     output_type.set_u32(&MF_MT_AVG_BITRATE, target_bitrate)?;
 
-                    // let width_height = (width as u64) << 32 | (height as u64);
-                    // output_type.set_u64(&MF_MT_FRAME_SIZE, width_height)?;
                     output_type.set_fraction(&MF_MT_FRAME_SIZE, width, height)?;
-
                     output_type.set_fraction(&MF_MT_FRAME_RATE, target_framerate, 1)?;
-
-                    // let frame_rate = (target_framerate as u64) << 32 | 1_u64;
-                    // output_type.SetUINT64(&MF_MT_FRAME_RATE, frame_rate)?;
+                    output_type.set_fraction(&MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
 
                     output_type
                         .set_u32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
                     // output_type.SetUINT32(&MF_MT_MAX_KEYFRAME_SPACING, 100)?;
-                    output_type.set_u32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
+                    // output_type.set_u32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
 
                     output_type
                         .set_u32(&MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_High.0 as u32)?;
 
-                    // let pixel_aspect_ratio = (1_u64) << 32 | 1_u64;
-                    // output_type
-                    //     .SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, pixel_aspect_ratio)?;
-
-                    output_type.set_fraction(&MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
 
                     debug_video_format(&output_type)?;
 
@@ -177,7 +168,8 @@ pub(crate) async fn h264_encoder(
                 let output_stream_id = output_stream_ids[0];
 
                 if let Ok(event_gen) = transform.cast::<IMFMediaEventGenerator>() {
-                    hardware(event_gen, transform, control_rx, event_tx, target_framerate, output_stream_id, input_stream_id)?;
+                    log::debug!("starting hardware encoder");
+                    hardware(&device, event_gen, transform, control_rx, event_tx, target_framerate, output_stream_id, input_stream_id, width, height)?;
                 } else {
                     software(&device, &context, transform, control_rx, event_tx, target_framerate, output_stream_id, input_stream_id, width, height)?;
                 }
@@ -198,6 +190,7 @@ pub(crate) async fn h264_encoder(
 }
 
 unsafe fn hardware(
+    device: &ID3D11Device,
     event_gen: IMFMediaEventGenerator,
     transform: IMFTransform,
     mut control_rx: mpsc::Receiver<EncoderControl>,
@@ -205,34 +198,70 @@ unsafe fn hardware(
     target_framerate: u32,
     output_stream_id: u32,
     input_stream_id: u32,
+    width: u32,
+    height: u32,
 ) -> eyre::Result<()> {
     transform.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
     transform.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
     transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
 
+    scopeguard::defer! {
+        log::debug!("h264 encoder going down");
+    };
+
     loop {
         let event = event_gen.GetEvent(MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS(0))?;
         let event_type = event.GetType()?;
 
+        log::trace!("encoder event {event_type}");
+
         match event_type {
             601 => {
-                let EncoderControl::Frame(frame, time) = control_rx
-                    .blocking_recv()
-                    .ok_or(eyre::eyre!("encoder control closed"))?;
+                let EncoderControl::Frame(frame, time) = match control_rx.blocking_recv() {
+                    Some(control) => control,
+                    None => return Err(eyre::eyre!("encoder control closed")),
+                };
 
-                {
-                    let dxgi_buffer =
-                        MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &frame, 0, FALSE)?;
+                log::trace!("encoder got control {time:?}");
 
-                    let sample = unsafe { MFCreateSample() }?;
+                // let EncoderControl::Frame(frame, time) = match control_rx.try_recv() {
+                //     Ok(control) => {
+                //         // last_frame = Some(control.clone());
+                //         control
+                //     }
+                //     Err(TryRecvError::Empty) => last_frame.as_ref().unwrap().clone(),
+                //     Err(TryRecvError::Disconnected) => {
+                //         return Err(eyre::eyre!("encoder control closed"))
+                //     }
+                // };
 
-                    sample.AddBuffer(&dxgi_buffer)?;
-                    sample
-                        .SetSampleTime(time.duration_since(UNIX_EPOCH)?.as_nanos() as i64 / 100)?;
-                    sample.SetSampleDuration(100_000_000 / target_framerate as i64)?;
+                // let texture = frame;
 
-                    transform.ProcessInput(input_stream_id, &sample, 0)?;
-                }
+                let texture = super::dx::TextureBuilder::new(
+                    device,
+                    width,
+                    height,
+                    super::dx::TextureFormat::NV12,
+                )
+                .nt_handle()
+                .keyed_mutex()
+                .build()
+                .unwrap();
+
+                super::dx::copy_texture(&texture, &frame, None)?;
+
+                // NOTE(emily): AMD MF encoder calls Lock2D on this texture
+                // So you CANNOT use MFCreateVideoSampleFromSurface
+
+                let dxgi_buffer =
+                    MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &texture, 0, FALSE)?;
+                let sample = unsafe { MFCreateSample() }?;
+                sample.AddBuffer(&dxgi_buffer)?;
+
+                sample.SetSampleTime(time.duration_since(UNIX_EPOCH)?.as_nanos() as i64 / 100)?;
+                sample.SetSampleDuration(10_000_000 / target_framerate as i64)?;
+
+                transform.ProcessInput(input_stream_id, &sample, 0)?;
             }
 
             // METransformHaveOutput
@@ -355,7 +384,7 @@ unsafe fn software(
 
             sample.AddBuffer(&media_buffer)?;
             sample.SetSampleTime(time.duration_since(UNIX_EPOCH)?.as_nanos() as i64 / 100)?;
-            sample.SetSampleDuration(100_000_000 / target_framerate as i64)?;
+            sample.SetSampleDuration(10_000_000 / target_framerate as i64)?;
 
             let process_output = || {
                 let output_stream_info = transform.GetOutputStreamInfo(output_stream_id)?;

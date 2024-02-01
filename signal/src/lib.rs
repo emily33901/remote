@@ -259,7 +259,7 @@ async fn handle_incoming_message(
         Close(_) => {
             println!("{} i close", our_peer_id);
             Err(None)
-        },
+        }
         Ping(_data) | Pong(_data) => todo!(),
     }
 }
@@ -344,7 +344,7 @@ pub async fn server(address: &str) -> Result<()> {
                                 },
                             }
                         }
-                    } 
+                    }
                 }
 
                 println!("{} {} disconnected", peer_id, &addr);

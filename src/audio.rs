@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::{util, ARBITRARY_CHANNEL_LIMIT};
+use crate::ARBITRARY_CHANNEL_LIMIT;
 use rtc::{self, ChannelControl, ChannelEvent, PeerConnection};
 use tokio::sync::mpsc;
 
@@ -36,12 +36,7 @@ pub(crate) async fn audio_channel(
                         ChannelEvent::Open => {}
                         ChannelEvent::Close => {}
                         ChannelEvent::Message(data) => {
-                            util::send(
-                                "channel event to audio event",
-                                &event_tx,
-                                AudioEvent::Audio(data),
-                            )
-                            .await?;
+                            event_tx.send(AudioEvent::Audio(data)).await?;
                         }
                     }
                 }
