@@ -62,7 +62,7 @@ fn make_id() -> PeerId {
 
     const LEN: usize = 5;
 
-    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz23456789";
     let mut rng = rand::thread_rng();
     let one_char = || CHARSET[rng.gen_range(0..CHARSET.len())] as char;
     iter::repeat_with(one_char).take(LEN).collect()
@@ -236,31 +236,46 @@ async fn handle_incoming_message_inner(
     }
 }
 
+async fn handle_incoming_text_message(
+    our_peer_id: PeerId,
+    connection_requests: ConnectionRequestMap,
+    peers: PeerMap,
+    msg: String,
+) -> core::result::Result<(), Option<ServerToPeerMessage>> {
+    let message = serde_json::from_str::<PeerToServerMessage>(&msg).unwrap();
+    let job_id = message.job_id;
+    Ok(
+        handle_incoming_message_inner(our_peer_id, connection_requests, peers, message)
+            .await
+            .map_err(|err| ServerToPeerMessage {
+                job_id: job_id,
+                inner: ServerToPeer::Error(err),
+            })?,
+    )
+}
+
 async fn handle_incoming_message(
     our_peer_id: PeerId,
+    outgoing: &mut SplitSink<WebSocketStream<TcpStream>, Message>,
     connection_requests: ConnectionRequestMap,
     peers: PeerMap,
     msg: Message,
 ) -> core::result::Result<(), Option<ServerToPeerMessage>> {
     match msg {
         Text(text_message) => {
-            let message = serde_json::from_str::<PeerToServerMessage>(&text_message).unwrap();
-            let job_id = message.job_id;
-            Ok(
-                handle_incoming_message_inner(our_peer_id, connection_requests, peers, message)
-                    .await
-                    .map_err(|err| ServerToPeerMessage {
-                        job_id: job_id,
-                        inner: ServerToPeer::Error(err),
-                    })?,
-            )
+            handle_incoming_text_message(our_peer_id, connection_requests, peers, text_message)
+                .await
         }
         Binary(_) | Frame(_) => panic!("No idea what to do with binary"),
         Close(_) => {
             println!("{} i close", our_peer_id);
             Err(None)
         }
-        Ping(_data) | Pong(_data) => todo!(),
+        Ping(data) => Ok(outgoing
+            .send(tokio_tungstenite::tungstenite::Message::Pong(data))
+            .await
+            .unwrap()),
+        Pong(_data) => Ok(()),
     }
 }
 
@@ -305,6 +320,8 @@ pub async fn server(address: &str) -> Result<()> {
                 .await
                 .unwrap();
 
+                let mut ticker = tokio::time::interval(std::time::Duration::from_secs(30));
+
                 loop {
                     let peers = peers.clone();
                     let connection_requests = connection_requests.clone();
@@ -312,7 +329,7 @@ pub async fn server(address: &str) -> Result<()> {
                         msg = incoming.next().fuse() => {
                             match msg {
                                 Some(Ok(msg)) => {
-                                    match handle_incoming_message(peer_id.clone(), connection_requests, peers, msg).await {
+                                    match handle_incoming_message(peer_id.clone(), &mut outgoing, connection_requests, peers, msg).await {
                                         Err(Some(response)) => {
                                             tx.send(response).await?
                                         }
@@ -344,6 +361,9 @@ pub async fn server(address: &str) -> Result<()> {
                                 },
                             }
                         }
+                        _ = ticker.tick().fuse() => {
+                            outgoing.send(Ping(Vec::from(b"ping"))).await.unwrap();
+                        }
                     }
                 }
 
@@ -369,6 +389,7 @@ pub enum SignallingControl {
     RequestConnection(PeerId),
     AcceptConnection(ConnectionId),
     RejectConnection(ConnectionId),
+    _Pong(Vec<u8>),
 }
 
 #[derive(Debug)]
@@ -419,12 +440,20 @@ async fn handle_control(
             inner: PeerToServer::AcceptConnection(connection_id),
         },
         SignallingControl::RejectConnection(_connection_id) => todo!(),
+        SignallingControl::_Pong(data) => {
+            write.send(Message::Pong(data)).await?;
+            return Ok(());
+        }
     };
 
     Ok(send_message(write, message).await?)
 }
 
-async fn handle_message(event_tx: mpsc::Sender<SignallingEvent>, msg: Message) -> Result<()> {
+async fn handle_message(
+    control_tx: mpsc::Sender<SignallingControl>,
+    event_tx: mpsc::Sender<SignallingEvent>,
+    msg: Message,
+) -> Result<()> {
     match msg {
         Text(text) => {
             let message = serde_json::from_str::<ServerToPeerMessage>(&text)?;
@@ -452,7 +481,8 @@ async fn handle_message(event_tx: mpsc::Sender<SignallingEvent>, msg: Message) -
         }
         Binary(_) | Frame(_) => Err(eyre!("No idea what to do with binary")),
         Close(_) => Err(eyre!("Going down")),
-        Ping(_data) | Pong(_data) => todo!(),
+        Ping(data) => Ok(control_tx.send(SignallingControl::_Pong(data)).await?),
+        Pong(_) => Ok(()),
     }
 }
 
@@ -474,36 +504,39 @@ pub async fn client(
 
     log::info!("client signal connected");
 
-    tokio::spawn(async move {
-        loop {
-            match futures::select! {
-                control = control_rx.recv().fuse() => {
-                    match control {
-                        None => {
-                            log::warn!("control_rx None");
-                            break;
-                        },
-                        Some(control) => handle_control(&mut write, control).await,
+    tokio::spawn({
+        let control_tx = control_tx.clone();
+        async move {
+            loop {
+                match futures::select! {
+                    control = control_rx.recv().fuse() => {
+                        match control {
+                            None => {
+                                log::warn!("control_rx None");
+                                break;
+                            },
+                            Some(control) => handle_control(&mut write, control).await,
+                        }
                     }
-                }
-                msg = read.next().fuse() => {
-                    match msg {
-                        Some(Ok(msg)) => handle_message(event_tx.clone(), msg).await,
-                        None => {
-                            log::warn!("error reading from websocket (None)");
-                            break
-                        },
-                        Some(Err(err)) => {
-                            log::warn!("error reading from websocket ({err})");
-                            break
-                        },
+                    msg = read.next().fuse() => {
+                        match msg {
+                            Some(Ok(msg)) => handle_message(control_tx.clone(), event_tx.clone(), msg).await,
+                            None => {
+                                log::warn!("error reading from websocket (None)");
+                                break
+                            },
+                            Some(Err(err)) => {
+                                log::warn!("error reading from websocket ({err})");
+                                break
+                            },
+                        }
                     }
-                }
-            } {
-                Ok(_ok) => {}
-                Err(err) => {
-                    log::error!("err {err}");
-                    break;
+                } {
+                    Ok(_ok) => {}
+                    Err(err) => {
+                        log::error!("err {err}");
+                        break;
+                    }
                 }
             }
         }
