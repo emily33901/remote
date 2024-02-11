@@ -230,7 +230,7 @@ pub(crate) mod video {
     use tokio::sync::{mpsc, mpsc::error::TryRecvError};
 
     use windows::{
-        core::s,
+        core::{s, HSTRING},
         Win32::{
             Foundation::{HWND, LPARAM, LRESULT, S_OK, WPARAM},
             Graphics::{
@@ -275,12 +275,14 @@ pub(crate) mod video {
         }
     }
 
-    fn create_window() -> Result<HWND> {
+    fn create_window(name: &str) -> Result<HWND> {
         unsafe {
             let instance = GetModuleHandleA(None)?;
             debug_assert!(instance.0 != 0);
 
-            let window_class = s!("remote-player-window");
+            let name = format!("remote-{name}");
+
+            let window_class = windows::core::PCSTR(name.as_ptr());
 
             let wc = WNDCLASSEXA {
                 cbSize: std::mem::size_of::<WNDCLASSEXA>() as u32,
@@ -299,7 +301,7 @@ pub(crate) mod video {
             let window_handle = CreateWindowExA(
                 WINDOW_EX_STYLE::default(),
                 window_class,
-                s!("remote-player-window"),
+                window_class,
                 WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_SYSMENU | WS_MINIMIZEBOX,
                 CW_USEDEFAULT,
                 CW_USEDEFAULT,
@@ -320,6 +322,7 @@ pub(crate) mod video {
     pub(crate) fn sink(
         width: u32,
         height: u32,
+        name: &str,
     ) -> Result<mpsc::Sender<(ID3D11Texture2D, std::time::SystemTime)>> {
         let (tx, mut rx) =
             mpsc::channel::<(ID3D11Texture2D, std::time::SystemTime)>(ARBITRARY_CHANNEL_LIMIT);
@@ -327,12 +330,14 @@ pub(crate) mod video {
         tokio::spawn({
             let tx = tx.clone();
 
+            let name = name.to_string();
+
             async move {
-                telemetry::client::watch_channel(&tx, "video sink").await;
+                telemetry::client::watch_channel(&tx, &format!("player-sink-{}", name)).await;
 
                 match tokio::task::spawn_blocking(move || -> eyre::Result<()> {
                     let (device, context, swap_chain) =
-                        create_device_and_swapchain(create_window()?, width, height)?;
+                        create_device_and_swapchain(create_window(&name)?, width, height)?;
 
                     let back_buffer: ID3D11Texture2D = unsafe { swap_chain.GetBuffer(0) }?;
                     let mut render_target: Option<ID3D11RenderTargetView> = None;

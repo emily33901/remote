@@ -28,6 +28,7 @@ pub(crate) async fn produce(
     path: &str,
     width: u32,
     height: u32,
+    target_framerate: u32,
     bitrate: u32,
 ) -> Result<(mpsc::Sender<MediaControl>, mpsc::Receiver<MediaEvent>)> {
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
@@ -39,7 +40,8 @@ pub(crate) async fn produce(
         }
     });
 
-    let (h264_control, mut h264_event) = encoder::h264_encoder(width, height, 30, bitrate).await?;
+    let (h264_control, mut h264_event) =
+        encoder::h264_encoder(width, height, target_framerate, bitrate).await?;
 
     tokio::spawn({
         let event_tx = event_tx.clone();

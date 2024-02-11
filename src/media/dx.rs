@@ -44,7 +44,7 @@ pub(crate) fn create_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
 
         let mut flags = FLAGS;
 
-        #[cfg(debug_assertions)]
+        // #[cfg(debug_assertions)]
         {
             flags |= D3D11_CREATE_DEVICE_DEBUG;
         }
@@ -126,6 +126,7 @@ pub(crate) fn create_device_and_swapchain(
 pub(crate) enum TextureFormat {
     NV12,
     BGRA,
+    RGBA,
 }
 
 impl From<TextureFormat> for DXGI_FORMAT {
@@ -133,6 +134,7 @@ impl From<TextureFormat> for DXGI_FORMAT {
         match value {
             TextureFormat::NV12 => DXGI_FORMAT_NV12,
             TextureFormat::BGRA => DXGI_FORMAT_B8G8R8A8_UNORM,
+            TextureFormat::RGBA => DXGI_FORMAT_R8G8B8A8_UNORM,
         }
     }
 }
@@ -303,7 +305,7 @@ pub(crate) fn copy_texture(
         out_texture.GetDesc(&mut out_desc);
     }
 
-    let (in_texture, out_texture) = if in_device != out_device {
+    let (in_texture, out_texture, device) = if in_device != out_device {
         let in_flags = D3D11_RESOURCE_MISC_FLAG(in_desc.MiscFlags as i32);
         let out_flags = D3D11_RESOURCE_MISC_FLAG(out_desc.MiscFlags as i32);
 
@@ -327,7 +329,7 @@ pub(crate) fn copy_texture(
             let in_texture: ID3D11Texture2D =
                 unsafe { out_device.OpenSharedResource1(shared_handle) }?;
 
-            (in_texture, out_texture.clone())
+            (in_texture, out_texture.clone(), out_device.cast()?)
         } else if out_flags.contains(D3D11_RESOURCE_MISC_SHARED_NTHANDLE) {
             let dxgi_resource: IDXGIResource1 = out_texture.cast()?;
             let shared_handle = unsafe {
@@ -341,16 +343,14 @@ pub(crate) fn copy_texture(
             let out_texture: ID3D11Texture2D =
                 unsafe { in_device.OpenSharedResource1(shared_handle) }?;
 
-            (in_texture.clone(), out_texture)
+            (in_texture.clone(), out_texture, in_device.cast()?)
         } else {
             panic!("Whilst copying texture, neither input nor output texture are shared nt handle, and are from different devices.")
         }
     } else {
-        (in_texture.clone(), out_texture.clone())
+        (in_texture.clone(), out_texture.clone(), out_device)
     };
 
-    // TODO(emily): I don't think this is correct.
-    let device = unsafe { out_texture.GetDevice() }?;
     let context = unsafe { device.GetImmediateContext() }?;
 
     // If keyed mutex then lock keyed muticies

@@ -12,6 +12,8 @@ use windows::{
 
 use crate::{video::VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
 
+use super::mf;
+
 pub(crate) enum FileSinkControl {
     Video(VideoBuffer),
     Done,
@@ -32,8 +34,7 @@ pub(crate) fn file_sink(
 
     tokio::spawn(async move {
         match tokio::task::spawn_blocking(move || unsafe {
-            CoInitializeEx(None, COINIT_DISABLE_OLE1DDE | COINIT_APARTMENTTHREADED)?;
-            unsafe { MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)? }
+            mf::init()?;
 
             let (device, _context) = super::dx::create_device()?;
 

@@ -148,7 +148,7 @@ async fn peer_connected(
 
     let (control, mut event) = peer::peer(
         api,
-        our_peer_id,
+        our_peer_id.clone(),
         their_peer_id.clone(),
         tx.clone(),
         controlling,
@@ -173,7 +173,7 @@ async fn peer_connected(
     let (h264_control, mut h264_event) =
         media::decoder::h264_decoder(width, height, framerate, bitrate).await?;
 
-    let video_sink_tx = player::video::sink(width, height)?;
+    let video_sink_tx = player::video::sink(width, height, "player-window")?;
 
     tokio::spawn({
         async move {
@@ -188,9 +188,22 @@ async fn peer_connected(
     });
 
     tokio::spawn({
+        let our_peer_id = our_peer_id.clone();
+
         async move {
             // NOTE(emily): Make sure to keep player alive
             let _player = audio_player;
+
+            // let file_sink = media::file_sink::file_sink(
+            //     std::path::Path::new(&format!("test-{our_peer_id}.mp4")),
+            //     width,
+            //     height,
+            //     framerate,
+            //     bitrate,
+            // )
+            // .unwrap();
+
+            // let mut i = 0;
 
             while let Some(event) = event.recv().await {
                 match event {
@@ -202,9 +215,22 @@ async fn peer_connected(
                     peer::PeerEvent::Video(video) => {
                         log::debug!("peer event video {}", video.data.len());
                         let _ = h264_control
-                            .send(media::decoder::DecoderControl::Data(video))
+                            .send(media::decoder::DecoderControl::Data(video.clone()))
                             .await
                             .unwrap();
+
+                        // match i {
+                        //     0..=500 => file_sink
+                        //         .send(media::file_sink::FileSinkControl::Video(video))
+                        //         .await
+                        //         .unwrap(),
+                        //     501 => file_sink
+                        //         .send(media::file_sink::FileSinkControl::Done)
+                        //         .await
+                        //         .unwrap(),
+                        //     _ => {}
+                        // }
+                        // i += 1;
                     }
                     peer::PeerEvent::Error(error) => {
                         log::warn!("peer event error {error:?}");
@@ -333,7 +359,7 @@ async fn peer(address: &str, produce: &bool) -> Result<()> {
                     let maybe_file = std::env::var("media_filename").ok();
 
                     let (_tx, mut rx) = if let Some(file) = maybe_file {
-                        media::produce(&file, width, height, bitrate).await?
+                        media::produce(&file, width, height, framerate, bitrate).await?
                     } else {
                         media::duplicate_desktop(width, height, framerate, bitrate).await?
                     };

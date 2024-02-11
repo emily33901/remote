@@ -10,7 +10,7 @@ use windows::{
     },
 };
 
-use super::mf::{debug_video_format, IMFAttributesExt};
+use super::mf::{debug_video_format, IMFAttributesExt, IMFDXGIBufferExt};
 
 pub(crate) fn open_media(
     device: &ID3D11Device,
@@ -244,17 +244,7 @@ impl Media {
                 let media_buffer = unsafe { sample.GetBufferByIndex(0) }?;
                 let dxgi_buffer: IMFDXGIBuffer = media_buffer.cast()?;
 
-                let mut texture: MaybeUninit<ID3D11Texture2D> = MaybeUninit::uninit();
-
-                unsafe {
-                    dxgi_buffer.GetResource(
-                        &ID3D11Texture2D::IID as *const _,
-                        &mut texture as *mut _ as *mut *mut std::ffi::c_void,
-                    )
-                }?;
-
-                let subresource_index = unsafe { dxgi_buffer.GetSubresourceIndex()? };
-                let texture = unsafe { texture.assume_init() };
+                let (texture, subresource_index) = dxgi_buffer.texture()?;
 
                 super::dx::copy_texture(&output, &texture, Some(subresource_index))?;
 

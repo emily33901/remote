@@ -1,6 +1,6 @@
 use std::time::UNIX_EPOCH;
 
-use eyre::Result;
+use eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{self, error::TryRecvError};
 use windows::{
@@ -13,11 +13,17 @@ use windows::{
     },
 };
 
-use crate::media::dx::{TextureCPUAccess, TextureUsage};
+use crate::media::{
+    dx::{TextureCPUAccess, TextureUsage},
+    mf::make_dxgi_sample,
+};
 
 use crate::{media::mf::debug_video_format, video::VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
 
-use super::{dx::MapTextureExt, mf::IMFAttributesExt};
+use super::{
+    dx::MapTextureExt,
+    mf::{self, IMFAttributesExt},
+};
 
 use windows::Win32::Graphics::Direct3D11::*;
 
@@ -48,8 +54,7 @@ pub(crate) async fn h264_encoder(
     tokio::spawn({
         async move {
             match tokio::task::spawn_blocking(move || unsafe {
-                CoInitializeEx(None, COINIT_DISABLE_OLE1DDE | COINIT_APARTMENTTHREADED)?;
-                unsafe { MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)? }
+                mf::init()?;
 
                 let (device, context) = super::dx::create_device()?;
 
@@ -66,7 +71,10 @@ pub(crate) async fn h264_encoder(
                         } else {
                             MFT_ENUM_FLAG(0)
                         } | MFT_ENUM_FLAG_SORTANDFILTER,
-                        None,
+                        Some(&MFT_REGISTER_TYPE_INFO {
+                            guidMajorType: MFMediaType_Video,
+                            guidSubtype: MFVideoFormat_NV12,
+                        } as *const _),
                         Some(&MFT_REGISTER_TYPE_INFO {
                             guidMajorType: MFMediaType_Video,
                             guidSubtype: MFVideoFormat_H264,
@@ -83,7 +91,13 @@ pub(crate) async fn h264_encoder(
                     // NOTE(emily): If there is an activate then it should be real
                     let activate = activate.as_ref().unwrap();
 
+
                     let transform: IMFTransform = activate.ActivateObject()?;
+
+                    let attributes: IMFAttributes = activate.cast().unwrap();
+                    if let Ok(s) = attributes.get_string(&MFT_FRIENDLY_NAME_Attribute) {
+                        log::info!("chose encoder {s}");
+                    }
 
                     eyre::Ok(transform)
                 };
@@ -127,12 +141,12 @@ pub(crate) async fn h264_encoder(
 
                     output_type.set_fraction(&MF_MT_FRAME_SIZE, width, height)?;
                     output_type.set_fraction(&MF_MT_FRAME_RATE, target_framerate, 1)?;
-                    output_type.set_fraction(&MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
+                    // output_type.set_fraction(&MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
 
                     output_type
                         .set_u32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
-                    // output_type.SetUINT32(&MF_MT_MAX_KEYFRAME_SPACING, 100)?;
-                    // output_type.set_u32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
+                    output_type.SetUINT32(&MF_MT_MAX_KEYFRAME_SPACING, 100)?;
+                    output_type.set_u32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
 
                     output_type
                         .set_u32(&MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_High.0 as u32)?;
@@ -144,7 +158,8 @@ pub(crate) async fn h264_encoder(
                 }
 
                 {
-                    let input_type = transform.GetInputAvailableType(input_stream_ids[0], 0)?;
+                    let input_type = MFCreateMediaType()?;
+                    // let input_type = transform.GetInputAvailableType(input_stream_ids[0], 0)?;
 
                     input_type.set_guid(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
                     input_type.set_guid(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
@@ -213,16 +228,34 @@ unsafe fn hardware(
         let event = event_gen.GetEvent(MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS(0))?;
         let event_type = event.GetType()?;
 
-        log::trace!("encoder event {event_type}");
+        // log::info!("encoder event {event_type}");
 
         match event_type {
             601 => {
-                let EncoderControl::Frame(frame, time) = match control_rx.blocking_recv() {
-                    Some(control) => control,
-                    None => return Err(eyre::eyre!("encoder control closed")),
+                let EncoderControl::Frame(frame, time) = {
+                    let mut control = None;
+
+                    while let Ok(new_control) = control_rx.try_recv() {
+                        control = Some(new_control);
+                    }
+
+                    // If we didn't get a frame then wait for one now
+                    if control.is_none() {
+                        control = Some(
+                            control_rx
+                                .blocking_recv()
+                                .ok_or(eyre!("encoder control closed"))?,
+                        );
+                        // match control_rx.blocking_recv() {
+                        //     Some(control) => Some(control),
+                        //     None => return Err(eyre::eyre!("encoder control closed")),
+                        // };
+                    };
+
+                    control.unwrap()
                 };
 
-                log::trace!("encoder got control {time:?}");
+                // log::info!("encoder got control {time:?}");
 
                 // let EncoderControl::Frame(frame, time) = match control_rx.try_recv() {
                 //     Ok(control) => {
@@ -250,39 +283,39 @@ unsafe fn hardware(
 
                 super::dx::copy_texture(&texture, &frame, None)?;
 
+                // log::info!("copied texture");
+
                 // NOTE(emily): AMD MF encoder calls Lock2D on this texture
                 // So you CANNOT use MFCreateVideoSampleFromSurface
 
-                let dxgi_buffer =
-                    MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &texture, 0, FALSE)?;
-                let sample = unsafe { MFCreateSample() }?;
-                sample.AddBuffer(&dxgi_buffer)?;
+                let sample = make_dxgi_sample(&texture, None)?;
 
                 sample.SetSampleTime(time.duration_since(UNIX_EPOCH)?.as_nanos() as i64 / 100)?;
                 sample.SetSampleDuration(10_000_000 / target_framerate as i64)?;
 
+                // log::info!("made sample");
+
                 transform.ProcessInput(input_stream_id, &sample, 0)?;
+
+                // log::info!("process input");
             }
 
             // METransformHaveOutput
             602 => {
                 let mut output_buffer = MFT_OUTPUT_DATA_BUFFER::default();
-                // output_buffer.pSample =
-                // ManuallyDrop::new(Some(output_sample.clone())); //  ManuallyDrop::new(Some(sample.clone()));
                 output_buffer.dwStatus = 0;
                 output_buffer.dwStreamID = output_stream_id;
 
                 let mut output_buffers = [output_buffer];
 
                 let mut status = 0_u32;
-                match transform.ProcessOutput(0, &mut output_buffers, &mut status) {
+                match transform
+                    .ProcessOutput(0, &mut output_buffers, &mut status)
+                    .map_err(|e| e.code())
+                {
                     Ok(_ok) => {
-                        // let timestamp = unsafe { sample.GetSampleTime()? };
                         let sample = output_buffers[0].pSample.take().unwrap();
                         let media_buffer = unsafe { sample.ConvertToContiguousBuffer() }?;
-
-                        // let sample = &output_sample;
-                        // let media_buffer = &output_media_buffer;
 
                         let mut output = vec![];
 
@@ -328,7 +361,10 @@ unsafe fn hardware(
                             key_frame: is_keyframe,
                         }))?;
                     }
-                    Err(_) => {}
+
+                    Err(err) => {
+                        log::info!("encoder err {err}");
+                    }
                 }
             }
 

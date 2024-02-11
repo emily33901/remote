@@ -1,6 +1,9 @@
-use std::{mem::{ManuallyDrop, MaybeUninit}, time::UNIX_EPOCH};
+use std::{
+    mem::{ManuallyDrop, MaybeUninit},
+    time::UNIX_EPOCH,
+};
 
-use eyre::Result;
+use eyre::{eyre, Result};
 use tokio::sync::mpsc;
 use windows::{
     core::ComInterface,
@@ -8,13 +11,16 @@ use windows::{
         Foundation::FALSE,
         Graphics::Direct3D11::ID3D11Texture2D,
         Media::MediaFoundation::*,
-        System::Com::{CoInitializeEx, COINIT_DISABLE_OLE1DDE},
+        System::Com::{CoInitializeEx, COINIT_DISABLE_OLE1DDE, COINIT_MULTITHREADED},
     },
 };
 
 use crate::ARBITRARY_CHANNEL_LIMIT;
 
-use super::{dx::copy_texture, mf::IMFAttributesExt};
+use super::{
+    dx::copy_texture,
+    mf::{self, make_dxgi_sample, IMFAttributesExt, IMFDXGIBufferExt},
+};
 
 pub(crate) enum ConvertControl {
     Frame(ID3D11Texture2D, std::time::SystemTime),
@@ -33,7 +39,7 @@ impl From<Format> for windows::core::GUID {
     fn from(value: Format) -> Self {
         match value {
             Format::NV12 => MFVideoFormat_NV12,
-            Format::BGRA => MFVideoFormat_RGB32,
+            Format::BGRA => MFVideoFormat_ARGB32,
         }
     }
 }
@@ -63,24 +69,11 @@ pub(crate) async fn converter(
     tokio::spawn({
         async move {
             match tokio::task::spawn_blocking(move || unsafe {
-                CoInitializeEx(None, COINIT_DISABLE_OLE1DDE)?;
-                unsafe { MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)? }
-
-                let mut reset_token = 0_u32;
-                let mut device_manager: Option<IMFDXGIDeviceManager> = None;
+                mf::init()?;
 
                 let (device, _context) = super::dx::create_device()?;
 
-                unsafe {
-                    MFCreateDXGIDeviceManager(
-                        &mut reset_token as *mut _,
-                        &mut device_manager as *mut _,
-                    )
-                }?;
-
-                let device_manager = device_manager.unwrap();
-
-                unsafe { device_manager.ResetDevice(&device, reset_token) }?;
+                let device_manager = super::mf::create_dxgi_manager(&device)?;
 
                 let mut count = 0_u32;
                 let mut activates: *mut Option<IMFActivate> = std::ptr::null_mut();
@@ -123,7 +116,10 @@ pub(crate) async fn converter(
                     std::mem::transmute(device_manager),
                 )?;
 
-                // attributes.SetUINT32(&MF_LOW_LATENCY as *const _, 1)?;
+                // attributes.set_u32(&MF_LOW, value)
+
+                attributes.set_u32(&MF_LOW_LATENCY, 1)?;
+
 
                 {
                     let input_type = MFCreateMediaType()?;
@@ -133,85 +129,98 @@ pub(crate) async fn converter(
                     input_type.set_guid(&MF_MT_SUBTYPE, &input_format.into())?;
 
                     input_type.set_fraction(&MF_MT_FRAME_SIZE, width, height)?;
-                    input_type.set_fraction(&MF_MT_FRAME_RATE, target_framerate, 1)?;
-                    input_type.set_fraction(&MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
+                    // input_type.set_fraction(&MF_MT_FRAME_RATE, target_framerate, 1)?;
+                    // input_type.set_fraction(&MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
 
-                    input_type
-                        .set_u32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
+                    // input_type
+                    //     .set_u32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
                     input_type.set_u32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
-                    input_type.set_u32(&MF_MT_FIXED_SIZE_SAMPLES, 1)?;
+                    // input_type.set_u32(&MF_MT_FIXED_SIZE_SAMPLES, 1)?;
 
                     transform.SetInputType(0, &input_type, 0)?;
                 }
 
-                // for i in 0.. 
-                {
-                    // if let Ok(output_type) = transform.GetOutputAvailableType(0, i) {
-                    //     let subtype = output_type.get_guid(&MF_MT_SUBTYPE)?;
-                    //     if subtype == output_format.into() {
-                    let output_type = MFCreateMediaType()?;
-                    output_type.set_guid(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-                    output_type.set_guid(&MF_MT_SUBTYPE, &output_format.into())?;
+                for i in 0.. {
+                    let output_type = transform.GetOutputAvailableType(0, i)?;
+
+                    let format = output_type.get_guid(&MF_MT_SUBTYPE)?;
 
                     output_type.set_fraction(&MF_MT_FRAME_SIZE, width, height)?;
-                    output_type.set_fraction(&MF_MT_FRAME_RATE, target_framerate, 1)?;
-                    output_type.set_fraction(&MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?; 
 
-                    output_type.set_u32(
-                        &MF_MT_INTERLACE_MODE,
-                        MFVideoInterlace_Progressive.0 as u32,
-                    )?;
-                    output_type.set_u32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
-                    output_type.set_u32(&MF_MT_FIXED_SIZE_SAMPLES, 1)?;
+                    if format == output_format.into() {
+                        transform.SetOutputType(0, &output_type, 0)?;
+                        break;
+                    }
+                }
 
-                    transform.SetOutputType(0, &output_type, 0)?;
-                            // break;
-                        // }
-                    // } else {
-                        // break;
-                    // }
-                 }
+                // {
+                //     let output_type = MFCreateMediaType()?;
+                //     output_type.set_guid(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+                //     output_type.set_guid(&MF_MT_SUBTYPE, &output_format.into())?;
 
-                transform.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
-                transform.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
-                transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
+                //     output_type.set_fraction(&MF_MT_FRAME_SIZE, width, height)?;
 
-                let output_sample_texture = super::dx::TextureBuilder::new(
-                    &device,
-                    width,
-                    height,
-                    super::dx::TextureFormat::NV12,
-                )
-                .build()
-                .unwrap();
+                //     // output_type.set_u32(
+                //     //     &MF_MT_INTERLACE_MODE,
+                //     //     MFVideoInterlace_Progressive.0 as u32,
+                //     // )?;
+                //     // output_type.set_u32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
+                //     // output_type.set_u32(&MF_MT_FIXED_SIZE_SAMPLES, 1)?;
+
+                //     transform.SetOutputType(0, &output_type, 0)?;
+                //  }
+
+                // transform.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
+                // transform.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
+                // transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
+
+                
+                // let debug_window_output = crate::player::video::sink(width, height, "cc-debug-output")?;
 
                 loop {
-                    let ConvertControl::Frame(frame, time) = control_rx
-                        .blocking_recv()
-                        .ok_or(eyre::eyre!("convert control closed"))?;
+                    let ConvertControl::Frame(frame, time) = {
+                        let mut control = None;
+    
+                        while let Ok(new_control) = control_rx.try_recv() {
+                            control = Some(new_control);
+                        }
+    
+                        // If we didn't get a frame then wait for one now
+                        if control.is_none() {
+                            control = Some(
+                                control_rx
+                                    .blocking_recv()
+                                    .ok_or(eyre!("cc control closed"))?,
+                            );
+                            // match control_rx.blocking_recv() {
+                            //     Some(control) => Some(control),
+                            //     None => return Err(eyre::eyre!("encoder control closed")),
+                            // };
+                        };
+    
+                        control.unwrap()
+                    };
 
-                    
                     // NOTE(emily): If this frame elapsed then throw it before trying to make a texture,
                     // do this after getting the sample from the media resource
-                    if let Ok(d) = time.elapsed() {
-                        if d > std::time::Duration::from_millis(10) {
-                            log::info!("cc throwing expired frame (before input) {}ms", d.as_millis());
-                            continue;
-                        }
-                    }
+                    // if let Ok(d) = time.elapsed() {
+                    //     if d > std::time::Duration::from_millis(10) {
+                    //         log::info!("cc throwing expired frame (before input) {}ms", d.as_millis());
+                    //         continue;
+                    //     }
+                    // }
 
-                    let dxgi_buffer =
-                        MFCreateDXGISurfaceBuffer(&ID3D11Texture2D::IID, &frame, 0, FALSE)?;
+                    let texture = super::dx::TextureBuilder::new(&device, width, height, input_format.into()).bind_render_target().bind_shader_resource().build()?;
 
-                    let sample = unsafe { MFCreateSample() }?;
+                    super::dx::copy_texture(&texture, &frame, None)?;
 
-                    sample.AddBuffer(&dxgi_buffer)?;
-
-                    // let sample = MFCreateVideoSampleFromSurface(&frame)?;
+                    let sample = make_dxgi_sample(&texture, None)?;
 
                     sample
                         .SetSampleTime(time.duration_since(UNIX_EPOCH)?.as_nanos() as i64 / 100)?;
                     sample.SetSampleDuration(10_000_000 / target_framerate as i64)?;
+
+                    // log::info!("cc made sample");
 
                     let process_output = || -> Result<Option<(ID3D11Texture2D, std::time::SystemTime)>, windows::core::Error> {
                         let mut output_buffer = MFT_OUTPUT_DATA_BUFFER::default();
@@ -229,22 +238,14 @@ pub(crate) async fn converter(
                                 let timestamp = std::time::SystemTime::UNIX_EPOCH
                                     + std::time::Duration::from_nanos(timestamp_hns as u64 * 100);
 
+                                if sample.GetBufferCount()? != 1 {
+                                    panic!("More than one buffer?")
+                                }
+
                                 let media_buffer = unsafe { sample.GetBufferByIndex(0) }?;
                                 let dxgi_buffer: IMFDXGIBuffer = media_buffer.cast()?;
 
-                                let mut texture: MaybeUninit<ID3D11Texture2D> =
-                                    MaybeUninit::uninit();
-
-                                unsafe {
-                                    dxgi_buffer.GetResource(
-                                        &ID3D11Texture2D::IID as *const _,
-                                        &mut texture as *mut _ as *mut *mut std::ffi::c_void,
-                                    )
-                                }?;
-
-                                let subresource_index =
-                                    unsafe { dxgi_buffer.GetSubresourceIndex()? };
-                                let texture = unsafe { texture.assume_init() };
+                                let (texture, subresource_index) = dxgi_buffer.texture()?;
 
                                 // NOTE(emily): If this frame elapsed then throw it before trying to make a texture,
                                 // do this after getting the sample from the media resource
@@ -259,7 +260,7 @@ pub(crate) async fn converter(
                                     &device,
                                     width,
                                     height,
-                                    super::dx::TextureFormat::NV12,
+                                    output_format.into(),
                                 )
                                 .keyed_mutex()
                                 .nt_handle()
@@ -277,23 +278,37 @@ pub(crate) async fn converter(
                         }
                     };
 
-                    match transform
+                    let result = transform
                         .ProcessInput(0, &sample, 0)
-                        .map_err(|err| err.code())
+                        .map_err(|err| err.code());
+
+                    log::trace!("cc process input {result:?}");
+
+                    match result
                     {
-                        Ok(_) | Err(MF_E_NOTACCEPTING) => loop {
-                            match process_output().map_err(|err| err.code()) {
+                        Ok(_) | Err(MF_E_NOTACCEPTING) => {
+                            let output_result = process_output().map_err(|err| err.code());
+
+                            log::trace!("cc process output {output_result:?}");
+
+                            match output_result {
                                 Ok(Some((output_texture, timestamp))) => {
-                                    event_tx.blocking_send(ConvertEvent::Frame(
-                                        output_texture,
-                                        timestamp,
-                                    )).unwrap()
+                                    match event_tx.try_send(ConvertEvent::Frame(output_texture.clone(), timestamp)) {
+                                        Ok(_) => {},
+                                        Err(err) => match err {
+                                            mpsc::error::TrySendError::Full(_) => log::info!("cc backpressured"),   
+                                            mpsc::error::TrySendError::Closed(_) => { log::warn!("cc event closed"); return Err(eyre!("cc event closed")); },
+                                        },
+                                    }
+                                    debug_window_output.blocking_send((output_texture, timestamp)).unwrap();
                                 }
                                 Ok(None) => {
                                     // Continue trying to get more frames
+                                    log::trace!("cc trying to get more frames")
                                 }
                                 Err(MF_E_TRANSFORM_NEED_MORE_INPUT) => {
-                                    break;
+                                    log::warn!("cc needs more input");
+                                    // break;
                                 }
                                 Err(MF_E_TRANSFORM_STREAM_CHANGE) => {
                                     log::warn!("cc stream change");
@@ -318,12 +333,14 @@ pub(crate) async fn converter(
                                         }
                                     }
 
+                                    break;
+
                                     // transform.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
                                 }
                                 Err(err) => {
-                                    log::error!("No idea what to do with {err}");
-                                    break;
-                                    // todo!("No idea what to do with {err}")
+                                    // log::error!("No idea what to do with {err}");
+                                    // break;
+                                    todo!("No idea what to do with {err}")
                                 }
                             };
                         },

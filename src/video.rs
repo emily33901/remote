@@ -97,13 +97,12 @@ pub(crate) async fn video_channel(
                     match control {
                         VideoControl::Video(video) => {
                             let deadline = video.time;
-                            // if let Ok(t) = deadline.elapsed() {
-                            //     log::warn!(
-                            //         "throwing expired frame {}ms in the past",
-                            //         t.as_millis()
-                            //     );
-                            // } else
-                            {
+                            if let Ok(t) = (deadline).elapsed() {
+                                log::warn!(
+                                    "throwing expired frame {}ms in the past",
+                                    t.as_millis()
+                                );
+                            } else {
                                 chunk_tx
                                     .send(crate::chunk::ChunkControl::Whole(video, deadline))
                                     .await?;

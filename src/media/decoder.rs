@@ -15,7 +15,7 @@ use crate::{video::VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
 
 use super::{
     dx::{copy_texture, MapTextureExt, TextureCPUAccess, TextureUsage},
-    mf::IMFAttributesExt,
+    mf::{self, IMFAttributesExt, IMFDXGIBufferExt},
 };
 
 pub(crate) enum DecoderControl {
@@ -40,8 +40,7 @@ pub(crate) async fn h264_decoder(
     tokio::spawn({
         async move {
             match tokio::task::spawn_blocking(move || unsafe {
-                CoInitializeEx(None, COINIT_DISABLE_OLE1DDE | COINIT_APARTMENTTHREADED)?;
-                unsafe { MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)? }
+                mf::init()?;
 
                 let (device, context) = super::dx::create_device()?;
 
@@ -253,17 +252,7 @@ unsafe fn hardware(
                     let media_buffer = unsafe { sample.GetBufferByIndex(0) }?;
                     let dxgi_buffer: IMFDXGIBuffer = media_buffer.cast()?;
 
-                    let mut texture: MaybeUninit<ID3D11Texture2D> = MaybeUninit::uninit();
-
-                    unsafe {
-                        dxgi_buffer.GetResource(
-                            &ID3D11Texture2D::IID as *const _,
-                            &mut texture as *mut _ as *mut *mut std::ffi::c_void,
-                        )
-                    }?;
-
-                    let subresource_index = unsafe { dxgi_buffer.GetSubresourceIndex()? };
-                    let texture = unsafe { texture.assume_init() };
+                    let (texture, subresource_index) = dxgi_buffer.texture()?;
 
                     copy_texture(&output_texture, &texture, Some(subresource_index))?;
 

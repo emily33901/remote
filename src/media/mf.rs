@@ -1,15 +1,21 @@
 use core::slice;
 use std::mem::MaybeUninit;
 
+use tokio_tungstenite::tungstenite::protocol::frame;
 use windows::{
-    core::{IUnknown, PWSTR},
+    core::{ComInterface, IUnknown, PWSTR},
     Win32::{
-        Graphics::Direct3D11::ID3D11Device,
+        Foundation::FALSE,
+        Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D},
         Media::MediaFoundation::{
-            IMFAttributes, IMFDXGIDeviceManager, IMFMediaBuffer, IMFMediaType, MFCreateAttributes,
-            MFCreateDXGIDeviceManager, MFCreateMediaType, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE,
+            IMFAttributes, IMFDXGIBuffer, IMFDXGIDeviceManager, IMFMediaBuffer, IMFMediaType,
+            IMFSample, MFCreateAttributes, MFCreateDXGIDeviceManager, MFCreateDXGISurfaceBuffer,
+            MFCreateMediaType, MFCreateSample, MFStartup, MFSTARTUP_NOSOCKET, MF_MT_FRAME_RATE,
+            MF_MT_FRAME_SIZE, MF_VERSION,
         },
-        System::Com::CoTaskMemFree,
+        System::Com::{
+            CoInitializeEx, CoTaskMemFree, COINIT_DISABLE_OLE1DDE, COINIT_MULTITHREADED,
+        },
     },
 };
 
@@ -261,4 +267,51 @@ impl IMFAttributesExt for IMFMediaType {
 
         Ok((top as u32, bottom as u32))
     }
+}
+
+pub(crate) trait IMFDXGIBufferExt {
+    fn texture(&self) -> windows::core::Result<(ID3D11Texture2D, u32)>;
+}
+
+impl IMFDXGIBufferExt for IMFDXGIBuffer {
+    fn texture(&self) -> windows::core::Result<(ID3D11Texture2D, u32)> {
+        let mut texture: MaybeUninit<ID3D11Texture2D> = MaybeUninit::uninit();
+
+        unsafe {
+            self.GetResource(
+                &ID3D11Texture2D::IID as *const _,
+                &mut texture as *mut _ as *mut *mut std::ffi::c_void,
+            )
+        }?;
+
+        let subresource_index = unsafe { self.GetSubresourceIndex()? };
+        let texture = unsafe { texture.assume_init() };
+
+        Ok((texture, subresource_index))
+    }
+}
+
+pub(crate) fn make_dxgi_sample(
+    texture: &ID3D11Texture2D,
+    subresource_index: Option<u32>,
+) -> windows::core::Result<IMFSample> {
+    let dxgi_buffer = unsafe {
+        MFCreateDXGISurfaceBuffer(
+            &ID3D11Texture2D::IID,
+            texture,
+            subresource_index.unwrap_or_default(),
+            FALSE,
+        )?
+    };
+
+    let sample = unsafe { MFCreateSample() }?;
+    unsafe { sample.AddBuffer(&dxgi_buffer)? };
+    Ok(sample)
+}
+
+pub(crate) fn init() -> Result<()> {
+    unsafe { CoInitializeEx(None, COINIT_DISABLE_OLE1DDE | COINIT_MULTITHREADED) }?;
+    unsafe { MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)? }
+
+    Ok(())
 }

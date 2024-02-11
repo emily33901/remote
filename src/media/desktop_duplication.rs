@@ -82,7 +82,7 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
                 };
 
                 for mode in modes {
-                    log::info!("mode {mode:?}");
+                    // log::info!("mode {mode:?}");
                     if best_mode.is_none() {
                         best_mode = Some(mode);
                         continue;
@@ -114,14 +114,6 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
 
             let (device_width, device_height) = (desc.ModeDesc.Width, desc.ModeDesc.Height);
 
-            let out_texture = dx::TextureBuilder::new(
-                &device,
-                device_width,
-                device_height,
-                dx::TextureFormat::BGRA,
-            )
-            .build()?;
-
             event_tx.blocking_send(DDEvent::Size(desc.ModeDesc.Height, desc.ModeDesc.Height))?;
 
             let mut start = 0;
@@ -137,16 +129,24 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
                 }
 
                 match unsafe {
-                    duplicated.AcquireNextFrame(100, &mut frame_info, &mut frame_resource)
+                    duplicated.AcquireNextFrame(1000, &mut frame_info, &mut frame_resource)
                 } {
                     Ok(_) => {
                         if frame_info.AccumulatedFrames == 0 || frame_info.LastPresentTime == 0 {
                             // Only mouse moved
-                            // log::info!("only mouse moved")
                         } else {
                             let frame_resource = frame_resource.unwrap();
                             let duplication_texture: ID3D11Texture2D = frame_resource.cast()?;
-                            let out_texture = out_texture.clone();
+
+                            let out_texture = dx::TextureBuilder::new(
+                                &device,
+                                device_width,
+                                device_height,
+                                dx::TextureFormat::BGRA,
+                            )
+                            .nt_handle()
+                            .keyed_mutex()
+                            .build()?;
 
                             // NOTE(emily): Cannot use dx::copy_texture here because whilst the input might appear
                             // to be keyed mutex, it is impossible to actually acquire that.
@@ -157,6 +157,27 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
                                 unsafe {
                                     duplication_texture.GetDesc(&mut in_desc as *mut _);
                                     out_texture.GetDesc(&mut out_desc as *mut _);
+                                }
+
+                                let keyed_out =
+                                    if D3D11_RESOURCE_MISC_FLAG(out_desc.MiscFlags as i32)
+                                        .contains(D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX)
+                                    {
+                                        let keyed: IDXGIKeyedMutex = out_texture.cast()?;
+                                        unsafe {
+                                            keyed.AcquireSync(0, u32::MAX)?;
+                                        }
+                                        Some(keyed)
+                                    } else {
+                                        None
+                                    };
+
+                                scopeguard::defer! {
+                                    if let Some(keyed) = keyed_out {
+                                        unsafe {
+                                            let _ = keyed.ReleaseSync(0);
+                                        }
+                                    }
                                 }
 
                                 let device = unsafe { duplication_texture.GetDevice() }?;
@@ -189,7 +210,7 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
 
                             match event_tx.try_send(DDEvent::Frame(
                                 out_texture,
-                                std::time::SystemTime::now() + std::time::Duration::from_millis(10),
+                                std::time::SystemTime::now() + std::time::Duration::from_millis(50),
                             )) {
                                 Ok(_) => {}
                                 Err(mpsc::error::TrySendError::Closed(_)) => break,
