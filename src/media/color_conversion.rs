@@ -300,7 +300,6 @@ pub(crate) async fn converter(
                                             mpsc::error::TrySendError::Closed(_) => { log::warn!("cc event closed"); return Err(eyre!("cc event closed")); },
                                         },
                                     }
-                                    debug_window_output.blocking_send((output_texture, timestamp)).unwrap();
                                 }
                                 Ok(None) => {
                                     // Continue trying to get more frames
