@@ -316,7 +316,7 @@ pub(crate) fn copy_texture(
                 || out_flags.contains(D3D11_RESOURCE_MISC_SHARED_NTHANDLE)
         );
 
-        // Try and use in_texture first
+        // Try and use in_texture first, otherwise use out_texture
         if in_flags.contains(D3D11_RESOURCE_MISC_SHARED_NTHANDLE) {
             let dxgi_resource: IDXGIResource1 = in_texture.cast()?;
             let shared_handle =

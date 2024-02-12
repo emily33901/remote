@@ -281,7 +281,6 @@ pub(crate) mod video {
             debug_assert!(instance.0 != 0);
 
             let name = format!("remote-{name}");
-
             let window_class = windows::core::PCSTR(name.as_ptr());
 
             let wc = WNDCLASSEXA {

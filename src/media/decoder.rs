@@ -105,7 +105,11 @@ pub(crate) async fn h264_decoder(
                 //   send the MFT_MESSAGE_SET_D3D_MANAGER message to the MFT.
 
                 // The default value of this attribute is FALSE. Treat this attribute as read-only. 
-                // Do not change the value; the MFT will ignore any changes to the value. 
+                // Do not change the value; the MFT will ignore any changes to the value.
+
+                // NOTE(emily): What I don't understand here is that even in VM on apple M1, we pass the D3D11 aware
+                // check but we cannot set a d3d manager. This is in complete contrast to what the MSDN article above
+                // suggests.
 
                 if attributes.get_u32(&MF_SA_D3D11_AWARE)? != 1 {
                     panic!("Not D3D11 aware");

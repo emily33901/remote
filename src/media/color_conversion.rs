@@ -116,26 +116,17 @@ pub(crate) async fn converter(
                     std::mem::transmute(device_manager),
                 )?;
 
-                // attributes.set_u32(&MF_LOW, value)
-
                 attributes.set_u32(&MF_LOW_LATENCY, 1)?;
 
 
                 {
                     let input_type = MFCreateMediaType()?;
-                    // let input_type = transform.GetInputAvailableType(0, 0)?;
 
                     input_type.set_guid(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
                     input_type.set_guid(&MF_MT_SUBTYPE, &input_format.into())?;
 
                     input_type.set_fraction(&MF_MT_FRAME_SIZE, width, height)?;
-                    // input_type.set_fraction(&MF_MT_FRAME_RATE, target_framerate, 1)?;
-                    // input_type.set_fraction(&MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
-
-                    // input_type
-                    //     .set_u32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
                     input_type.set_u32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
-                    // input_type.set_u32(&MF_MT_FIXED_SIZE_SAMPLES, 1)?;
 
                     transform.SetInputType(0, &input_type, 0)?;
                 }
@@ -152,30 +143,6 @@ pub(crate) async fn converter(
                         break;
                     }
                 }
-
-                // {
-                //     let output_type = MFCreateMediaType()?;
-                //     output_type.set_guid(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-                //     output_type.set_guid(&MF_MT_SUBTYPE, &output_format.into())?;
-
-                //     output_type.set_fraction(&MF_MT_FRAME_SIZE, width, height)?;
-
-                //     // output_type.set_u32(
-                //     //     &MF_MT_INTERLACE_MODE,
-                //     //     MFVideoInterlace_Progressive.0 as u32,
-                //     // )?;
-                //     // output_type.set_u32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
-                //     // output_type.set_u32(&MF_MT_FIXED_SIZE_SAMPLES, 1)?;
-
-                //     transform.SetOutputType(0, &output_type, 0)?;
-                //  }
-
-                // transform.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
-                // transform.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
-                // transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
-
-                
-                // let debug_window_output = crate::player::video::sink(width, height, "cc-debug-output")?;
 
                 loop {
                     let ConvertControl::Frame(frame, time) = {
@@ -220,8 +187,6 @@ pub(crate) async fn converter(
                         .SetSampleTime(time.duration_since(UNIX_EPOCH)?.as_nanos() as i64 / 100)?;
                     sample.SetSampleDuration(10_000_000 / target_framerate as i64)?;
 
-                    // log::info!("cc made sample");
-
                     let process_output = || -> Result<Option<(ID3D11Texture2D, std::time::SystemTime)>, windows::core::Error> {
                         let mut output_buffer = MFT_OUTPUT_DATA_BUFFER::default();
                         output_buffer.dwStatus = 0;
@@ -237,10 +202,6 @@ pub(crate) async fn converter(
                                 let timestamp_hns = unsafe { sample.GetSampleTime()? };
                                 let timestamp = std::time::SystemTime::UNIX_EPOCH
                                     + std::time::Duration::from_nanos(timestamp_hns as u64 * 100);
-
-                                if sample.GetBufferCount()? != 1 {
-                                    panic!("More than one buffer?")
-                                }
 
                                 let media_buffer = unsafe { sample.GetBufferByIndex(0) }?;
                                 let dxgi_buffer: IMFDXGIBuffer = media_buffer.cast()?;
@@ -306,35 +267,10 @@ pub(crate) async fn converter(
                                     log::trace!("cc trying to get more frames")
                                 }
                                 Err(MF_E_TRANSFORM_NEED_MORE_INPUT) => {
-                                    log::warn!("cc needs more input");
-                                    // break;
+                                    log::trace!("cc needs more input");
                                 }
                                 Err(MF_E_TRANSFORM_STREAM_CHANGE) => {
-                                    log::warn!("cc stream change");
-
-                                    {
-                                        for i in 0.. {
-                                            if let Ok(output_type) =
-                                                transform.GetOutputAvailableType(0, i)
-                                            {
-                                                let subtype =
-                                                    output_type.GetGUID(&MF_MT_SUBTYPE)?;
-
-                                                // super::produce::debug_video_format(&output_type)?;
-
-                                                if subtype == MFVideoFormat_NV12 {
-                                                    transform.SetOutputType(0, &output_type, 0)?;
-                                                    break;
-                                                }
-                                            } else {
-                                                break;
-                                            }
-                                        }
-                                    }
-
-                                    break;
-
-                                    // transform.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
+                                    unreachable!("Not expecting a stream format change");
                                 }
                                 Err(err) => {
                                     // log::error!("No idea what to do with {err}");
