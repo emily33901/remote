@@ -2053,12 +2053,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nasm-rs"
-version = "0.2.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe4d98d0065f4b1daf164b3eafb11974c94662e5e2396cf03f32d0bb5c17da51"
-
-[[package]]
 name = "native-tls"
 version = "0.2.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2285,26 +2279,6 @@ name = "opaque-debug"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "624a8340c38c1b80fd549087862da4ba43e08858af025b236e509b6649fc13d5"
-
-[[package]]
-name = "openh264"
-version = "0.4.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e42e632449bb36c5593e4cde7324ed0b93c00d971cea140da60ee8ae04a3dae7"
-dependencies = [
- "openh264-sys2",
-]
-
-[[package]]
-name = "openh264-sys2"
-version = "0.4.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7626c49bfd4e268dea1d3660bc27f2f47765a0ee274060c8c0d62aa3b46a8c7b"
-dependencies = [
- "cc",
- "nasm-rs",
- "walkdir",
-]
 
 [[package]]
 name = "openssl"
@@ -2849,7 +2823,6 @@ dependencies = [
  "humantime",
  "log",
  "once_cell",
- "openh264",
  "parking_lot",
  "rodio",
  "rtc",

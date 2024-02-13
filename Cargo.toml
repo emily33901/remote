@@ -1,4 +1,10 @@
-workspace = { members = ["media", "signal", "telemetry", "telemetry/dash"] }
+workspace = { members = [
+    "media",
+    "signal",
+    "telemetry",
+    "telemetry/dash",
+    "rtc",
+] }
 
 [package]
 name = "remote"
@@ -38,7 +44,7 @@ dotenv = "0.15.0"
 thiserror = "1.0"
 telemetry = { path = "telemetry" }
 rtc = { path = "rtc" }
-openh264 = "0.4.4"
+# openh264 = "0.4.4"
 scopeguard = "1.2.0"
 signal = { path = "signal" }
 

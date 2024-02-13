@@ -145,12 +145,11 @@ pub(crate) async fn h264_encoder(
 
                     output_type
                         .set_u32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
-                    output_type.SetUINT32(&MF_MT_MAX_KEYFRAME_SPACING, 100)?;
-                    output_type.set_u32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
+                    // output_type.SetUINT32(&MF_MT_MAX_KEYFRAME_SPACING, 100)?;
+                    // output_type.set_u32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
 
                     output_type
                         .set_u32(&MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_High.0 as u32)?;
-
 
                     debug_video_format(&output_type)?;
 
@@ -224,6 +223,11 @@ unsafe fn hardware(
         log::debug!("h264 encoder going down");
     };
 
+    // TODO(emily): Consider
+    // https://stackoverflow.com/questions/59051443/gop-setting-is-not-honored-by-intel-h264-hardware-mft
+
+    let mut last_control = None;
+
     loop {
         let event = event_gen.GetEvent(MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS(0))?;
         let event_type = event.GetType()?;
@@ -240,7 +244,7 @@ unsafe fn hardware(
                     }
 
                     // If we didn't get a frame then wait for one now
-                    if control.is_none() {
+                    if control.is_none() && last_control.is_none() {
                         control = Some(
                             control_rx
                                 .blocking_recv()
@@ -250,10 +254,18 @@ unsafe fn hardware(
                         //     Some(control) => Some(control),
                         //     None => return Err(eyre::eyre!("encoder control closed")),
                         // };
+                    } else if control.is_none() {
+                        // TODO(emily): We need to change the time of the control here
+                        control = Some(last_control.clone().unwrap());
                     };
 
                     control.unwrap()
                 };
+
+                last_control = Some(EncoderControl::Frame(
+                    frame.clone(),
+                    time + std::time::Duration::from_secs_f32(1.0 / target_framerate as f32),
+                ));
 
                 // log::info!("encoder got control {time:?}");
 
@@ -333,6 +345,25 @@ unsafe fn hardware(
                             _ => FrameIsKeyframe::Perhaps,
                         };
 
+                        let sequence_header = if let FrameIsKeyframe::Yes = is_keyframe {
+                            // log::info!("keyframe!");
+                            let output_type = transform.GetOutputCurrentType(output_stream_id)?;
+                            let extra_data_size =
+                                output_type.GetBlobSize(&MF_MT_MPEG_SEQUENCE_HEADER)? as usize;
+
+                            let mut sequence_header = vec![0; extra_data_size];
+
+                            output_type.GetBlob(
+                                &MF_MT_MPEG_SEQUENCE_HEADER,
+                                &mut sequence_header.as_mut_slice()[..extra_data_size],
+                                None,
+                            )?;
+
+                            Some(sequence_header)
+                        } else {
+                            None
+                        };
+
                         // log::info!("is_keyframe {is_keyframe:?}");
 
                         // let is_keyframe = sample.GetUINT32(&MFSampleExtension_CleanPoint)? == 1;
@@ -354,7 +385,7 @@ unsafe fn hardware(
 
                         event_tx.blocking_send(EncoderEvent::Data(VideoBuffer {
                             data: output,
-                            sequence_header: None,
+                            sequence_header: sequence_header,
                             time: std::time::UNIX_EPOCH
                                 + std::time::Duration::from_nanos(sample_time * 100),
                             duration: duration,

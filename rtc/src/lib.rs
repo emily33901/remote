@@ -1,4 +1,6 @@
+#[cfg(feature = "datachannel")]
 mod datachannel;
+
 mod webrtc;
 
 use std::{collections::HashMap, fmt::Display, str::FromStr, sync::Arc};
@@ -65,6 +67,7 @@ pub struct ChannelOptions {
 
 pub enum Api {
     WebrtcRs,
+    #[cfg(feature = "datachannel")]
     DataChannel,
 }
 
@@ -79,6 +82,7 @@ impl Api {
     )> {
         match self {
             Self::WebrtcRs => self::webrtc::peer::rtc_peer(controlling).await,
+            #[cfg(feature = "datachannel")]
             Self::DataChannel => self::datachannel::peer::rtc_peer(controlling).await,
         }
     }
@@ -114,6 +118,7 @@ impl FromStr for Api {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "webrtc-rs" | "WebrtcRs" => Ok(Self::WebrtcRs),
+            #[cfg(feature = "datachannel")]
             "datachannel" | "DataChannel" => Ok(Self::DataChannel),
             _ => Err(ApiParseError),
         }
