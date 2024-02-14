@@ -257,7 +257,7 @@ pub(crate) async fn converter(
                                     match event_tx.try_send(ConvertEvent::Frame(output_texture.clone(), timestamp)) {
                                         Ok(_) => {},
                                         Err(err) => match err {
-                                            mpsc::error::TrySendError::Full(_) => log::info!("cc backpressured"),   
+                                            mpsc::error::TrySendError::Full(_) => log::info!("cc backpressured"),
                                             mpsc::error::TrySendError::Closed(_) => { log::warn!("cc event closed"); return Err(eyre!("cc event closed")); },
                                         },
                                     }
