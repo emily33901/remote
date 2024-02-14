@@ -139,8 +139,6 @@ impl From<TextureFormat> for DXGI_FORMAT {
     }
 }
 
-// TODO(emily): Staging textures
-
 pub enum TextureUsage {
     Staging,
 }
