@@ -2003,6 +2003,16 @@ dependencies = [
 [[package]]
 name = "media"
 version = "0.1.0"
+dependencies = [
+ "derive_more",
+ "eyre",
+ "log",
+ "scopeguard",
+ "serde",
+ "telemetry",
+ "tokio",
+ "windows 0.52.0",
+]
 
 [[package]]
 name = "memchr"
@@ -2822,6 +2832,7 @@ dependencies = [
  "futures",
  "humantime",
  "log",
+ "media",
  "once_cell",
  "parking_lot",
  "rodio",

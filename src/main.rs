@@ -1,7 +1,6 @@
 mod audio;
 mod chunk;
 mod logic;
-mod media;
 mod peer;
 mod player;
 mod video;

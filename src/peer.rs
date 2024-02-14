@@ -1,8 +1,9 @@
 use crate::audio::audio_channel;
 use crate::logic::logic_channel;
 use crate::rtc::{self};
-use crate::video::{video_channel, VideoBuffer};
+use crate::video::video_channel;
 use crate::{PeerId, ARBITRARY_CHANNEL_LIMIT};
+use media::VideoBuffer;
 use signal::SignallingControl;
 
 use eyre::Result;

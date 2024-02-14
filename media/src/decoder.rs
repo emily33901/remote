@@ -11,21 +11,21 @@ use windows::{
     },
 };
 
-use crate::{video::VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
+use crate::{VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
 
 use super::{
     dx::{copy_texture, MapTextureExt, TextureCPUAccess, TextureUsage},
     mf::{self, IMFAttributesExt, IMFDXGIBufferExt},
 };
 
-pub(crate) enum DecoderControl {
+pub enum DecoderControl {
     Data(VideoBuffer),
 }
-pub(crate) enum DecoderEvent {
+pub enum DecoderEvent {
     Frame(ID3D11Texture2D, std::time::SystemTime),
 }
 
-pub(crate) async fn h264_decoder(
+pub async fn h264_decoder(
     width: u32,
     height: u32,
     target_framerate: u32,

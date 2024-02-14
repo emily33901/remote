@@ -5,20 +5,15 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{self, error::TryRecvError};
 use windows::{
     core::ComInterface,
-    Win32::{
-        Foundation::FALSE,
-        Graphics::Direct3D11::ID3D11Texture2D,
-        Media::MediaFoundation::*,
-        System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE},
-    },
+    Win32::{Foundation::FALSE, Graphics::Direct3D11::ID3D11Texture2D, Media::MediaFoundation::*},
 };
 
-use crate::media::{
+use crate::{
     dx::{TextureCPUAccess, TextureUsage},
     mf::make_dxgi_sample,
 };
 
-use crate::{media::mf::debug_video_format, video::VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
+use crate::{mf::debug_video_format, VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
 
 use super::{
     dx::MapTextureExt,
@@ -28,21 +23,21 @@ use super::{
 use windows::Win32::Graphics::Direct3D11::*;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) enum FrameIsKeyframe {
+pub enum FrameIsKeyframe {
     Yes,
     No,
     Perhaps,
 }
 
 #[derive(Clone)]
-pub(crate) enum EncoderControl {
+pub enum EncoderControl {
     Frame(ID3D11Texture2D, std::time::SystemTime),
 }
-pub(crate) enum EncoderEvent {
+pub enum EncoderEvent {
     Data(VideoBuffer),
 }
 
-pub(crate) async fn h264_encoder(
+pub async fn h264_encoder(
     width: u32,
     height: u32,
     target_framerate: u32,

@@ -47,6 +47,7 @@ rtc = { path = "rtc" }
 # openh264 = "0.4.4"
 scopeguard = "1.2.0"
 signal = { path = "signal" }
+media = { path = "media" }
 
 [dependencies.windows]
 version = "0.52.0"

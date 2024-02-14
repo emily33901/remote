@@ -10,7 +10,7 @@ use windows::{
     },
 };
 
-use crate::{video::VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
+use crate::{VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
 
 use super::mf;
 
@@ -18,8 +18,6 @@ pub(crate) enum FileSinkControl {
     Video(VideoBuffer),
     Done,
 }
-
-// pub(crate) enum FileSinkEvent {}
 
 pub(crate) fn file_sink(
     path: &std::path::Path,

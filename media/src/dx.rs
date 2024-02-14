@@ -69,7 +69,7 @@ pub(crate) fn create_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
     }
 }
 
-pub(crate) fn create_device_and_swapchain(
+pub fn create_device_and_swapchain(
     hwnd: HWND,
     width: u32,
     height: u32,
@@ -123,7 +123,7 @@ pub(crate) fn create_device_and_swapchain(
     }
 }
 
-pub(crate) enum TextureFormat {
+pub enum TextureFormat {
     NV12,
     BGRA,
     RGBA,
@@ -141,16 +141,16 @@ impl From<TextureFormat> for DXGI_FORMAT {
 
 // TODO(emily): Staging textures
 
-pub(crate) enum TextureUsage {
+pub enum TextureUsage {
     Staging,
 }
 
-pub(crate) enum TextureCPUAccess {
+pub enum TextureCPUAccess {
     Write,
     Read,
 }
 
-pub(crate) struct TextureBuilder<'a> {
+pub struct TextureBuilder<'a> {
     device: &'a ID3D11Device,
     keyed_mutex: bool,
     nt_handle: bool,
@@ -165,12 +165,7 @@ pub(crate) struct TextureBuilder<'a> {
 }
 
 impl<'a> TextureBuilder<'a> {
-    pub(crate) fn new(
-        device: &'a ID3D11Device,
-        width: u32,
-        height: u32,
-        format: TextureFormat,
-    ) -> Self {
+    pub fn new(device: &'a ID3D11Device, width: u32, height: u32, format: TextureFormat) -> Self {
         Self {
             device,
             bind_shader_resource: false,
@@ -186,37 +181,37 @@ impl<'a> TextureBuilder<'a> {
         }
     }
 
-    pub(crate) fn bind_render_target(mut self) -> Self {
+    pub fn bind_render_target(mut self) -> Self {
         self.bind_render_target = true;
         self
     }
 
-    pub(crate) fn keyed_mutex(mut self) -> Self {
+    pub fn keyed_mutex(mut self) -> Self {
         self.keyed_mutex = true;
         self
     }
 
-    pub(crate) fn nt_handle(mut self) -> Self {
+    pub fn nt_handle(mut self) -> Self {
         self.nt_handle = true;
         self
     }
 
-    pub(crate) fn bind_shader_resource(mut self) -> Self {
+    pub fn bind_shader_resource(mut self) -> Self {
         self.bind_shader_resource = true;
         self
     }
 
-    pub(crate) fn usage(mut self, usage: TextureUsage) -> Self {
+    pub fn usage(mut self, usage: TextureUsage) -> Self {
         self.usage = Some(usage);
         self
     }
 
-    pub(crate) fn cpu_access(mut self, cpu_access: TextureCPUAccess) -> Self {
+    pub fn cpu_access(mut self, cpu_access: TextureCPUAccess) -> Self {
         self.cpu_access = Some(cpu_access);
         self
     }
 
-    pub(crate) fn build(self) -> Result<ID3D11Texture2D> {
+    pub fn build(self) -> Result<ID3D11Texture2D> {
         let bind_flags =
             0 | if self.bind_shader_resource {
                 D3D11_BIND_SHADER_RESOURCE.0 as u32
@@ -290,7 +285,7 @@ impl<'a> TextureBuilder<'a> {
     }
 }
 
-pub(crate) fn copy_texture(
+pub fn copy_texture(
     out_texture: &ID3D11Texture2D,
     in_texture: &ID3D11Texture2D,
     subresource_index: Option<u32>,
@@ -426,7 +421,7 @@ pub(crate) fn copy_texture(
     Ok(())
 }
 
-pub(crate) fn compile_shader(data: &str, entry_point: PCSTR, target: PCSTR) -> Result<ID3DBlob> {
+pub fn compile_shader(data: &str, entry_point: PCSTR, target: PCSTR) -> Result<ID3DBlob> {
     unsafe {
         let mut blob: MaybeUninit<Option<ID3DBlob>> = MaybeUninit::uninit();
         let mut err_blob: Option<ID3DBlob> = None;

@@ -250,10 +250,9 @@ pub(crate) mod video {
         },
     };
 
-    use crate::{
-        media::dx::{self, compile_shader, copy_texture, create_device_and_swapchain},
-        ARBITRARY_CHANNEL_LIMIT,
-    };
+    use crate::ARBITRARY_CHANNEL_LIMIT;
+
+    use media::dx::{self, compile_shader, copy_texture, create_device_and_swapchain};
 
     extern "system" fn wndproc(
         window: HWND,
