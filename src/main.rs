@@ -358,21 +358,24 @@ async fn peer(address: &str, produce: &bool) -> Result<()> {
                     let maybe_file = std::env::var("media_filename").ok();
 
                     let (_tx, mut rx) = if let Some(file) = maybe_file {
-                        media::produce(&file, width, height, framerate, bitrate).await?
+                        media::produce::produce(&file, width, height, framerate, bitrate).await?
                     } else {
-                        media::duplicate_desktop(width, height, framerate, bitrate).await?
+                        media::desktop_duplication::duplicate_desktop(
+                            width, height, framerate, bitrate,
+                        )
+                        .await?
                     };
 
                     while let Some(event) = rx.recv().await {
                         match event {
-                            media::MediaEvent::Audio(audio) => {
+                            media::produce::MediaEvent::Audio(audio) => {
                                 log::trace!("produce audio {}", audio.len());
                                 let peer_controls = peer_controls.lock().await;
                                 for (_, control) in peer_controls.iter() {
                                     control.send(PeerControl::Audio(audio.clone())).await?;
                                 }
                             }
-                            media::MediaEvent::Video(video) => {
+                            media::produce::MediaEvent::Video(video) => {
                                 // log::debug!("throwing video");
                                 log::trace!("produce video {}", video.data.len());
                                 let peer_controls = peer_controls.lock().await;
