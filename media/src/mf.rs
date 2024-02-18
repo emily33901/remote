@@ -294,6 +294,9 @@ pub(crate) fn make_dxgi_sample(
     texture: &ID3D11Texture2D,
     subresource_index: Option<u32>,
 ) -> windows::core::Result<IMFSample> {
+    // NOTE(emily): AMD MF encoder calls Lock2D on this texture so you CANNOT use MFCreateVideoSampleFromSurface.
+    // consider maybe making that a special case.
+
     let dxgi_buffer = unsafe {
         MFCreateDXGISurfaceBuffer(
             &ID3D11Texture2D::IID,

@@ -88,8 +88,8 @@ pub(crate) async fn video_channel(
                 while let Some(control) = control_rx.recv().await {
                     match control {
                         VideoControl::Video(video) => {
-                            let deadline = video.time;
-                            if let Ok(t) = (deadline).elapsed() {
+                            let deadline = video.time + std::time::Duration::from_secs(10);
+                            if let Ok(t) = deadline.elapsed() {
                                 log::warn!(
                                     "throwing expired frame {}ms in the past",
                                     t.as_millis()

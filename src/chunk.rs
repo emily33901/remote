@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use eyre::Result;
+use eyre::{eyre, Result};
 use serde::{Deserialize, Serialize};
 
 use tokio::sync::mpsc;
@@ -64,9 +64,8 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
             match tokio::spawn(async move {
                 type ChunkArragement = HashMap<u32, HashSet<Chunk>>;
                 let mut chunk_arrangement: ChunkArragement = HashMap::new();
+                let mut ticker = tokio::time::interval(std::time::Duration::from_secs(1));
                 loop {
-                    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(1));
-
                     fn remove_elapsed_chunks(chunk_arrangement: &mut ChunkArragement) {
                         let mut remove_ids: Vec<u32> = vec![];
                         for (id, chunks) in chunk_arrangement.iter() {
@@ -76,6 +75,9 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
                                     break;
                                 }
                             }
+                        }
+                        log::debug!("removing {} unfinished chunks that expired", remove_ids.len());
+                            if remove_ids.len() > 0 {
                         }
                         for id in remove_ids {
                             chunk_arrangement.remove(&id);
@@ -141,8 +143,8 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
                                 None => break,
                             }
                         }
-                        _ = ticker.tick() => {
-                            remove_elapsed_chunks(&mut chunk_arrangement)
+                        _t = ticker.tick() => {
+                            remove_elapsed_chunks(&mut chunk_arrangement);
                         }
                     }
                 }
@@ -199,6 +201,7 @@ pub(crate) async fn chunk<T: Serialize + for<'de> Deserialize<'de> + Send + 'sta
                                 if let Ok(_) = deadline.elapsed() {
                                     // We actually timed out trying to send these chunks!
                                     // give up.
+                                    log::warn!("{} expired during chunking", chunk_id);
                                     break;
                                 }
                                 let chunk = Chunk {
@@ -209,7 +212,18 @@ pub(crate) async fn chunk<T: Serialize + for<'de> Deserialize<'de> + Send + 'sta
                                     total: total as u32,
                                     deadline,
                                 };
-                                event_tx.send(ChunkEvent::Chunk(chunk)).await?;
+                                match event_tx.try_send(ChunkEvent::Chunk(chunk)) {
+                                    Ok(_) => {}
+                                    Err(mpsc::error::TrySendError::Full(_)) => {
+                                        log::warn!("chunk control backpressured");
+                                        break;
+                                    }
+                                    Err(err) => {
+                                        log::warn!("chunk control closed");
+                                        return Err(eyre!("chunk control closed"));
+                                    }
+                                }
+                                // event_tx.try_send().await?;
                             }
                         }
                     }

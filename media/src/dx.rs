@@ -11,7 +11,7 @@ use windows::{
             Dxgi::{
                 Common::{
                     DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12,
-                    DXGI_FORMAT_R8G8B8A8_UNORM,
+                    DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8_UNORM,
                 },
                 IDXGIKeyedMutex, IDXGIResource1, IDXGISwapChain, DXGI_ERROR_DEVICE_REMOVED,
                 DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE, DXGI_SWAP_CHAIN_DESC,
@@ -127,6 +127,7 @@ pub enum TextureFormat {
     NV12,
     BGRA,
     RGBA,
+    R,
 }
 
 impl From<TextureFormat> for DXGI_FORMAT {
@@ -135,6 +136,7 @@ impl From<TextureFormat> for DXGI_FORMAT {
             TextureFormat::NV12 => DXGI_FORMAT_NV12,
             TextureFormat::BGRA => DXGI_FORMAT_B8G8R8A8_UNORM,
             TextureFormat::RGBA => DXGI_FORMAT_R8G8B8A8_UNORM,
+            TextureFormat::R => DXGI_FORMAT_R8_UNORM,
         }
     }
 }
@@ -451,8 +453,12 @@ pub fn compile_shader(data: &str, entry_point: PCSTR, target: PCSTR) -> Result<I
 }
 
 pub(crate) trait MapTextureExt {
-    fn map<F: Fn(&[u8]) -> Result<()>>(&self, context: &ID3D11DeviceContext, f: F) -> Result<()>;
-    fn map_mut<F: Fn(&mut [u8]) -> Result<()>>(
+    fn map<F: Fn(&[u8], usize) -> Result<()>>(
+        &self,
+        context: &ID3D11DeviceContext,
+        f: F,
+    ) -> Result<()>;
+    fn map_mut<F: Fn(&mut [u8], usize) -> Result<()>>(
         &self,
         context: &ID3D11DeviceContext,
         f: F,
@@ -460,7 +466,11 @@ pub(crate) trait MapTextureExt {
 }
 
 impl MapTextureExt for ID3D11Texture2D {
-    fn map<F: Fn(&[u8]) -> Result<()>>(&self, context: &ID3D11DeviceContext, f: F) -> Result<()> {
+    fn map<F: FnOnce(&[u8], usize) -> Result<()>>(
+        &self,
+        context: &ID3D11DeviceContext,
+        f: F,
+    ) -> Result<()> {
         unsafe {
             let mut desc = D3D11_TEXTURE2D_DESC::default();
             self.GetDesc(&mut desc);
@@ -468,12 +478,6 @@ impl MapTextureExt for ID3D11Texture2D {
             assert!(
                 D3D11_CPU_ACCESS_FLAG(desc.CPUAccessFlags as i32).contains(D3D11_CPU_ACCESS_READ)
             );
-
-            let len = match desc.Format {
-                DXGI_FORMAT_NV12 => desc.Width * desc.Height * 2,
-                DXGI_FORMAT_B8G8R8A8_UNORM => desc.Width * desc.Height * 4,
-                _ => todo!("Unknown format"),
-            } as usize;
 
             let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
 
@@ -489,15 +493,22 @@ impl MapTextureExt for ID3D11Texture2D {
                 context.Unmap(self, 0);
             };
 
+            let len = match desc.Format {
+                DXGI_FORMAT_NV12 => (mapped_resource.RowPitch * desc.Height) * 2,
+                DXGI_FORMAT_B8G8R8A8_UNORM => (mapped_resource.RowPitch * desc.Height) * 4,
+                DXGI_FORMAT_R8_UNORM => mapped_resource.RowPitch * desc.Height,
+                _ => todo!("Unknown format"),
+            } as usize;
+
             let s = std::slice::from_raw_parts(mapped_resource.pData as *const u8, len);
 
-            f(s)?;
+            f(s, mapped_resource.RowPitch as usize)?;
         }
 
         Ok(())
     }
 
-    fn map_mut<F: Fn(&mut [u8]) -> Result<()>>(
+    fn map_mut<F: Fn(&mut [u8], usize) -> Result<()>>(
         &self,
         context: &ID3D11DeviceContext,
         f: F,
@@ -510,18 +521,12 @@ impl MapTextureExt for ID3D11Texture2D {
                 D3D11_CPU_ACCESS_FLAG(desc.CPUAccessFlags as i32).contains(D3D11_CPU_ACCESS_WRITE)
             );
 
-            let len = match desc.Format {
-                DXGI_FORMAT_NV12 => desc.Width * desc.Height * 2,
-                DXGI_FORMAT_B8G8R8A8_UNORM => desc.Width * desc.Height * 4,
-                _ => todo!("Unknown format"),
-            } as usize;
-
             let mut mapped_resource = D3D11_MAPPED_SUBRESOURCE::default();
 
             context.Map(
                 self,
                 0,
-                D3D11_MAP_READ,
+                D3D11_MAP_WRITE,
                 0,
                 Some(&mut mapped_resource as *mut _),
             )?;
@@ -530,9 +535,15 @@ impl MapTextureExt for ID3D11Texture2D {
                 context.Unmap(self, 0);
             };
 
+            let len = match desc.Format {
+                DXGI_FORMAT_NV12 => mapped_resource.RowPitch * desc.Height * 2,
+                DXGI_FORMAT_B8G8R8A8_UNORM => desc.Width * desc.Height * 4,
+                _ => todo!("Unknown format"),
+            } as usize;
+
             let s = std::slice::from_raw_parts_mut(mapped_resource.pData as *mut u8, len);
 
-            f(s)?;
+            f(s, mapped_resource.RowPitch as usize)?;
         }
 
         Ok(())

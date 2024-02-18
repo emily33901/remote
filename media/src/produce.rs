@@ -379,7 +379,7 @@ pub async fn produce(
         }
     });
 
-    let (h264_control, mut h264_event) = crate::encoder::Encoder::MediaFoundation
+    let (h264_control, mut h264_event) = crate::encoder::Encoder::OpenH264
         .run(width, height, target_framerate, bitrate)
         .await?;
 

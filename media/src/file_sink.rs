@@ -14,12 +14,12 @@ use crate::{VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
 
 use super::mf;
 
-pub(crate) enum FileSinkControl {
+pub enum FileSinkControl {
     Video(VideoBuffer),
     Done,
 }
 
-pub(crate) fn file_sink(
+pub fn file_sink(
     path: &std::path::Path,
     width: u32,
     height: u32,

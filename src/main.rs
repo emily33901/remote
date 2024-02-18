@@ -169,8 +169,9 @@ async fn peer_connected(
         .send(player::audio::PlayerControl::Sink(audio_sink_rx))
         .await?;
 
-    let (h264_control, mut h264_event) =
-        media::decoder::h264_decoder(width, height, framerate, bitrate).await?;
+    let (h264_control, mut h264_event) = media::decoder::Decoder::OpenH264
+        .run(width, height, framerate, bitrate)
+        .await?;
 
     let video_sink_tx = player::video::sink(width, height, "player-window")?;
 
@@ -207,27 +208,29 @@ async fn peer_connected(
             while let Some(event) = event.recv().await {
                 match event {
                     peer::PeerEvent::Audio(audio) => {
-                        log::debug!("peer event audio {}", audio.len());
+                        // log::debug!("peer event audio {}", audio.len());
                         audio_sink_tx.send(audio).await.unwrap();
                         // audio_sink_tx.send(audio).await.unwrap();
                     }
                     peer::PeerEvent::Video(video) => {
-                        log::debug!("peer event video {}", video.data.len());
-                        let _ = h264_control
+                        // log::debug!("peer event video {}", video.data.len());
+                        h264_control
                             .send(media::decoder::DecoderControl::Data(video.clone()))
                             .await
                             .unwrap();
 
                         // match i {
-                        //     0..=500 => file_sink
+                        //     0..=1000 => file_sink
                         //         .send(media::file_sink::FileSinkControl::Video(video))
                         //         .await
                         //         .unwrap(),
-                        //     501 => file_sink
+                        //     1001 => file_sink
                         //         .send(media::file_sink::FileSinkControl::Done)
                         //         .await
                         //         .unwrap(),
-                        //     _ => {}
+                        //     _ => {
+                        //         log::info!("!! DONE")
+                        //     }
                         // }
                         // i += 1;
                     }

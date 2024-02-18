@@ -75,7 +75,7 @@ async fn on_datachannel(
         Box::new(move || {
             // let channel = channel.clone();
             Box::pin(async move {
-                log::debug!("!! channel {our_label} open");
+                log::debug!("channel {our_label} open");
                 event_tx.send(ChannelEvent::Open).await.unwrap();
 
                 // NOTE(emily): Only start handling controls once the data channel is open.
@@ -91,7 +91,7 @@ async fn on_datachannel(
                                 .await
                                 .take()
                                 .expect("expected channel control");
-                            log::debug!("!! took channel {our_label} control");
+                            log::debug!("took channel {our_label} control");
 
                             let sent_counter = telemetry::client::Counter::default();
                             telemetry::client::watch_counter(
@@ -176,7 +176,7 @@ async fn on_datachannel(
         .await;
 
         Box::new(move |msg: DataChannelMessage| {
-            log::debug!("channel {our_label} message");
+            log::trace!("channel {our_label} message");
             let event_tx = event_tx.clone();
             let our_label = our_label.clone();
 

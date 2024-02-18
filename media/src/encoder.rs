@@ -1,3 +1,4 @@
+mod openh264;
 mod windows;
 
 use ::windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
@@ -20,6 +21,7 @@ pub enum FrameIsKeyframe {
 pub enum EncoderControl {
     Frame(ID3D11Texture2D, std::time::SystemTime),
 }
+
 pub enum EncoderEvent {
     Data(VideoBuffer),
 }
@@ -27,6 +29,7 @@ pub enum EncoderEvent {
 pub enum Encoder {
     MediaFoundation,
     X264,
+    OpenH264,
 }
 
 impl Encoder {
@@ -42,6 +45,9 @@ impl Encoder {
                 windows::h264_encoder(width, height, target_framerate, target_bitrate).await
             }
             Encoder::X264 => todo!("x264 not implemented"),
+            Encoder::OpenH264 => {
+                openh264::h264_encoder(width, height, target_framerate, target_bitrate).await
+            }
         }
     }
 }

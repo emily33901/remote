@@ -234,10 +234,6 @@ unsafe fn hardware(
                                 .blocking_recv()
                                 .ok_or(eyre!("encoder control closed"))?,
                         );
-                        // match control_rx.blocking_recv() {
-                        //     Some(control) => Some(control),
-                        //     None => return Err(eyre::eyre!("encoder control closed")),
-                        // };
                     } else if control.is_none() {
                         control = Some(last_control.clone().unwrap());
                     };
@@ -245,27 +241,13 @@ unsafe fn hardware(
                     control.unwrap()
                 };
 
-                // TODO(emily): I don't necessarily know that this is correct here. Right now this results in
-                // stuttering when we go and use the last control, consider changing when we use a timebase properly.
+                // TODO(emily): I don't necessarily know that this is correct here. This time could be ahead of the
+                // next frame that we get from color conversion and we have no way of knowing. This requires slightly
+                // more thought.
                 last_control = Some(EncoderControl::Frame(
                     frame.clone(),
                     time + std::time::Duration::from_secs_f32(1.0 / target_framerate as f32),
                 ));
-
-                // log::info!("encoder got control {time:?}");
-
-                // let EncoderControl::Frame(frame, time) = match control_rx.try_recv() {
-                //     Ok(control) => {
-                //         // last_frame = Some(control.clone());
-                //         control
-                //     }
-                //     Err(TryRecvError::Empty) => last_frame.as_ref().unwrap().clone(),
-                //     Err(TryRecvError::Disconnected) => {
-                //         return Err(eyre::eyre!("encoder control closed"))
-                //     }
-                // };
-
-                // let texture = frame;
 
                 let texture = crate::dx::TextureBuilder::new(
                     device,
@@ -279,11 +261,6 @@ unsafe fn hardware(
                 .unwrap();
 
                 crate::dx::copy_texture(&texture, &frame, None)?;
-
-                // log::info!("copied texture");
-
-                // NOTE(emily): AMD MF encoder calls Lock2D on this texture
-                // So you CANNOT use MFCreateVideoSampleFromSurface
 
                 let sample = make_dxgi_sample(&texture, None)?;
 
@@ -421,8 +398,12 @@ unsafe fn software(
             // Map frame to memory and write to buffer
             crate::dx::copy_texture(&staging_texture, &frame, None)?;
 
+            // TODO(emily): I see no reason why we shouldn't be able to feed the encoder a texture here.
+            // Up above we have an assert that this encoder supports d3d11, so I don't understand why
+            // we need to feed it a memory buffer here.
+
             let media_buffer = MFCreateMemoryBuffer(width * height * 2)?;
-            staging_texture.map(context, |texture_data| {
+            staging_texture.map(context, |texture_data, source_row_pitch| {
                 crate::mf::with_locked_media_buffer(&media_buffer, |data, len| {
                     data.copy_from_slice(texture_data);
                     *len = texture_data.len();

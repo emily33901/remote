@@ -308,6 +308,26 @@ impl Home {
                         .unwrap_or_default(),
                 )
             }
+            telemetry::Unit::Fps => {
+                format!(
+                    "{:>6}fps ({:>6}fps avg) {:8.2}fs",
+                    if let Some(recent_avg) = recent_avg {
+                        format!("{:>4.2}", recent_avg)
+                    } else {
+                        "NaN".into()
+                    },
+                    if let Some(rolling_avg) = rolling_avg {
+                        format!("{:>4.2}", rolling_avg)
+                    } else {
+                        "NaN".into()
+                    },
+                    counter
+                        .counts
+                        .front()
+                        .map(|(c, _)| *c as f32)
+                        .unwrap_or_default(),
+                )
+            }
         }
     }
 

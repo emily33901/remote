@@ -260,7 +260,7 @@ pub async fn duplicate_desktop(
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
     let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
-    let (h264_control, mut h264_event) = Encoder::MediaFoundation
+    let (h264_control, mut h264_event) = Encoder::OpenH264
         .run(width, height, framerate, bitrate)
         .await?;
 

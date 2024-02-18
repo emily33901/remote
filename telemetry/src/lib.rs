@@ -15,6 +15,7 @@ pub type ClientId = usize;
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Unit {
     Bytes,
+    Fps,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
