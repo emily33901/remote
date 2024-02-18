@@ -188,7 +188,7 @@ async fn peer_connected(
     });
 
     tokio::spawn({
-        let our_peer_id = our_peer_id.clone();
+        let _our_peer_id = our_peer_id.clone();
 
         async move {
             // NOTE(emily): Make sure to keep player alive

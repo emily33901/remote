@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use openh264::{
     self,
     encoder::{Encoder, EncoderConfig},
-    formats::{YUVBuffer, YUVSource},
+    formats::{YUVSource},
     OpenH264API,
 };
 
@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 
 use crate::{dx::MapTextureExt, ARBITRARY_CHANNEL_LIMIT};
 
-use crate::yuv_buffer::{self, YUVBuffer2};
+use crate::yuv_buffer::{YUVBuffer2};
 
 use super::{EncoderControl, EncoderEvent};
 

@@ -6,7 +6,6 @@ use windows::{
     core::HSTRING,
     Win32::{
         Media::MediaFoundation::*,
-        System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE},
     },
 };
 
@@ -90,7 +89,7 @@ pub fn file_sink(
                         sequence_header: _,
                         time,
                         duration,
-                        key_frame,
+                        key_frame: _,
                     }) => {
                         let len = data.len();
                         let media_buffer = MFCreateMemoryBuffer(len as u32)?;

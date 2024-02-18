@@ -1,4 +1,4 @@
-use core::slice;
+
 use std::mem::MaybeUninit;
 
 use windows::{

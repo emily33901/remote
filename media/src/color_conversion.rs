@@ -1,5 +1,4 @@
 use std::{
-    mem::{ManuallyDrop, MaybeUninit},
     time::UNIX_EPOCH,
 };
 
@@ -8,10 +7,8 @@ use tokio::sync::mpsc;
 use windows::{
     core::ComInterface,
     Win32::{
-        Foundation::FALSE,
         Graphics::Direct3D11::ID3D11Texture2D,
         Media::MediaFoundation::*,
-        System::Com::{CoInitializeEx, COINIT_DISABLE_OLE1DDE, COINIT_MULTITHREADED},
     },
 };
 
@@ -196,7 +193,7 @@ pub(crate) async fn converter(
 
                         let mut status = 0_u32;
                         match transform.ProcessOutput(0, &mut output_buffers, &mut status) {
-                            Ok(ok) => {
+                            Ok(_ok) => {
                                 let sample = output_buffers[0].pSample.take().unwrap();
 
                                 let timestamp_hns = unsafe { sample.GetSampleTime()? };

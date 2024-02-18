@@ -3,18 +3,15 @@ use tokio::sync::mpsc;
 use windows::{
     core::ComInterface,
     Win32::{
-        Foundation::CloseHandle,
         Graphics::{
             Direct3D11::{
-                ID3D11Device1, ID3D11Texture2D, D3D11_BOX, D3D11_RESOURCE_MISC_FLAG,
+                ID3D11Texture2D, D3D11_BOX, D3D11_RESOURCE_MISC_FLAG,
                 D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX, D3D11_TEXTURE2D_DESC,
             },
             Dxgi::{
-                Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12, DXGI_MODE_DESC},
-                IDXGIAdapter, IDXGIDevice2, IDXGIKeyedMutex, IDXGIOutput1, IDXGIResource,
-                IDXGIResource1, DXGI_ENUM_MODES_DISABLED_STEREO, DXGI_ERROR_WAIT_TIMEOUT,
+                Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_MODE_DESC},
+                IDXGIAdapter, IDXGIDevice2, IDXGIKeyedMutex, IDXGIOutput1, IDXGIResource, DXGI_ENUM_MODES_DISABLED_STEREO, DXGI_ERROR_WAIT_TIMEOUT,
                 DXGI_OUTDUPL_DESC, DXGI_OUTDUPL_FRAME_INFO, DXGI_OUTPUT_DESC,
-                DXGI_SHARED_RESOURCE_WRITE,
             },
         },
         System::Performance::QueryPerformanceCounter,
@@ -44,7 +41,7 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
     tokio::spawn(async move {
         match tokio::task::spawn_blocking(move || {
             let (device, _context) = dx::create_device()?;
-            let (device2, _context2) = dx::create_device()?;
+            let (_device2, _context2) = dx::create_device()?;
 
             let dxgi_device: IDXGIDevice2 = device.cast()?;
 
@@ -57,7 +54,7 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
             {
                 let primary = primary.clone();
                 let display = primary;
-                let mut desc = DXGI_OUTPUT_DESC::default();
+                let _desc = DXGI_OUTPUT_DESC::default();
 
                 let modes = {
                     let mut num_modes = unsafe {

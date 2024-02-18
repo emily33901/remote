@@ -1,11 +1,10 @@
-use std::mem::MaybeUninit;
+
 
 use ::windows::{
     core::ComInterface,
     Win32::{
-        Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D},
+        Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext},
         Media::MediaFoundation::*,
-        System::Com::{CoInitializeEx, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE},
     },
 };
 use eyre::Result;
@@ -193,7 +192,7 @@ unsafe fn hardware(
             sequence_header,
             time,
             duration,
-            key_frame,
+            key_frame: _,
         }) = control_rx
             .blocking_recv()
             .ok_or(eyre::eyre!("decoder control closed"))?;
@@ -345,7 +344,7 @@ unsafe fn software(
             sequence_header,
             time,
             duration,
-            key_frame,
+            key_frame: _,
         }) = control_rx
             .blocking_recv()
             .ok_or(eyre::eyre!("decoder control closed"))?;

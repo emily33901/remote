@@ -1,9 +1,9 @@
 mod openh264;
 mod windows;
 
-use std::mem::MaybeUninit;
 
-use ::windows::{core::ComInterface, Win32::Graphics::Direct3D11::ID3D11Texture2D};
+
+use ::windows::{Win32::Graphics::Direct3D11::ID3D11Texture2D};
 use eyre::Result;
 use tokio::sync::mpsc;
 

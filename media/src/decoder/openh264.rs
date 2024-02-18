@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+
 
 use openh264::{
     decoder::{Decoder, DecoderConfig},
@@ -6,7 +6,7 @@ use openh264::{
 };
 use tokio::sync::mpsc;
 
-use crate::{dx::MapTextureExt, yuv_buffer::YUVBuffer2, ARBITRARY_CHANNEL_LIMIT};
+use crate::{dx::MapTextureExt, ARBITRARY_CHANNEL_LIMIT};
 
 use super::{DecoderControl, DecoderEvent};
 
@@ -20,13 +20,13 @@ fn i420_components_to_nv12(
     v_plane: &[u8],
     src_y_stride: usize,
     src_u_stride: usize,
-    src_v_stride: usize,
+    _src_v_stride: usize,
     dest_y_stride: usize,
     dest_uv_stride: usize,
     nv12_data: &mut [u8],
 ) {
     let y_size = dest_y_stride * height;
-    let uv_size = dest_uv_stride * height / 2;
+    let _uv_size = dest_uv_stride * height / 2;
 
     for row in 0..height {
         let src_offset = row * src_y_stride;
@@ -64,8 +64,8 @@ fn i420_components_to_nv12(
 pub async fn h264_decoder(
     width: u32,
     height: u32,
-    target_framerate: u32,
-    target_bitrate: u32,
+    _target_framerate: u32,
+    _target_bitrate: u32,
 ) -> Result<(mpsc::Sender<DecoderControl>, mpsc::Receiver<DecoderEvent>)> {
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
     let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);

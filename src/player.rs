@@ -230,7 +230,7 @@ pub(crate) mod video {
     use tokio::sync::{mpsc, mpsc::error::TryRecvError};
 
     use windows::{
-        core::{s, HSTRING},
+        core::{s},
         Win32::{
             Foundation::{HWND, LPARAM, LRESULT, S_OK, WPARAM},
             Graphics::{

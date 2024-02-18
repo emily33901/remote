@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use eyre::{eyre, Result};
+use eyre::{Result};
 use serde::{Deserialize, Serialize};
 
 use tokio::sync::mpsc;
@@ -168,7 +168,7 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
             }
             .await
             {
-                Ok(r) => {}
+                Ok(_r) => {}
                 Err(err) => {
                     log::error!("assembly control error {err}");
                 }

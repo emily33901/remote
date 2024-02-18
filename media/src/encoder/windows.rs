@@ -2,11 +2,11 @@ use std::time::UNIX_EPOCH;
 
 use ::windows::{
     core::ComInterface,
-    Win32::{Foundation::FALSE, Graphics::Direct3D11::ID3D11Texture2D, Media::MediaFoundation::*},
+    Win32::{Media::MediaFoundation::*},
 };
 use eyre::{eyre, Result};
-use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc::{self, error::TryRecvError};
+
+use tokio::sync::mpsc::{self};
 
 use crate::{
     dx::{self, TextureCPUAccess, TextureUsage},
@@ -403,7 +403,7 @@ unsafe fn software(
             // we need to feed it a memory buffer here.
 
             let media_buffer = MFCreateMemoryBuffer(width * height * 2)?;
-            staging_texture.map(context, |texture_data, source_row_pitch| {
+            staging_texture.map(context, |texture_data, _source_row_pitch| {
                 crate::mf::with_locked_media_buffer(&media_buffer, |data, len| {
                     data.copy_from_slice(texture_data);
                     *len = texture_data.len();

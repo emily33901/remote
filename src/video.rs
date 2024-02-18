@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
+
 use tokio::sync::mpsc;
 
 use crate::{
