@@ -111,27 +111,7 @@ pub async fn h264_encoder(
                 crate::dx::copy_texture(&staging_texture, &frame, None)?;
 
                 staging_texture.map(&context, |data, source_row_pitch| {
-                    // TODO(emily): You actually need to obey row pitch and depth pitch here!
                     let mut yuv_buffer = yuv_buffer.borrow_mut();
-
-                    // let y_stride = yuv_buffer.y_stride() as usize;
-                    // let u_stride = yuv_buffer.u_stride() as usize;
-                    // let v_stride = yuv_buffer.v_stride() as usize;
-
-                    // let (y, u, v) = yuv_buffer.yuv_mut();
-
-                    // nv12_to_i420_inner(
-                    //     data,
-                    //     y,
-                    //     y_stride,
-                    //     u,
-                    //     u_stride,
-                    //     v,
-                    //     v_stride,
-                    //     width as usize,
-                    //     height as usize,
-                    // );
-
                     nv12_to_i420(
                         width as usize,
                         height as usize,
@@ -148,8 +128,6 @@ pub async fn h264_encoder(
                 let yuv_buffer = yuv_buffer.borrow();
 
                 let bitstream = encoder.encode(&*yuv_buffer)?;
-
-                log::info!("{} layers", bitstream.num_layers());
 
                 fps_counter.update(1);
 

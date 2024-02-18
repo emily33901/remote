@@ -164,7 +164,7 @@ pub(crate) async fn converter(
                             //     None => return Err(eyre::eyre!("encoder control closed")),
                             // };
                         };
-    
+
                         control.unwrap()
                     };
 

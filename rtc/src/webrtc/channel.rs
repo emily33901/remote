@@ -124,6 +124,8 @@ async fn on_datachannel(
                                             let buffered_total =
                                                 len + channel.buffered_amount().await;
 
+                                            log::trace!("buffered_total is {buffered_total}");
+
                                             if buffered_total > MAX_BUFFERED_AMOUNT {
                                                 // Wait for the signal that more can be sent
                                                 log::warn!(

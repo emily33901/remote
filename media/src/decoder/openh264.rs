@@ -12,43 +12,6 @@ use super::{DecoderControl, DecoderEvent};
 
 use eyre::{eyre, Result};
 
-// fn i420_to_nv12(
-//     width: usize,
-//     height: usize,
-//     i420_data: &[u8],
-//     src_y_stride: usize,
-//     dest_y_stride: usize,
-//     dest_uv_stride: usize,
-//     nv12_data: &mut [u8],
-// ) {
-//     let y_size = dest_y_stride * height;
-//     let uv_size = dest_uv_stride * height / 2;
-
-//     // Extract Y, U, and V planes
-//     let (y_plane, uv_plane) = i420_data.split_at(y_size);
-//     let (u_plane, v_plane) = uv_plane.split_at(uv_size);
-
-//     // Copy Y plane with source and destination strides
-//     for row in 0..height {
-//         let src_offset = row * src_y_stride;
-//         let dest_offset = row * dest_y_stride;
-//         nv12_data[dest_offset..dest_offset + width].copy_from_slice(&y_plane[src_offset..src_offset + width]);
-//     }
-
-//     // Interleave U and V planes into UV plane with destination stride
-//     for row in 0..height / 2 {
-//         let dest_offset = row * dest_uv_stride;
-
-//         for col in 0..width / 2 {
-//             let uv_index = col * 2;
-//             let dest_index = dest_offset + col;
-
-//             nv12_data[y_size + dest_index] = u_plane[uv_index];
-//             nv12_data[y_size + dest_index + 1] = v_plane[uv_index];
-//         }
-//     }
-// }
-
 fn i420_components_to_nv12(
     width: usize,
     height: usize,
@@ -65,7 +28,6 @@ fn i420_components_to_nv12(
     let y_size = dest_y_stride * height;
     let uv_size = dest_uv_stride * height / 2;
 
-    // Copy Y plane with source and destination strides
     for row in 0..height {
         let src_offset = row * src_y_stride;
         let dest_offset = row * dest_y_stride;
@@ -73,21 +35,30 @@ fn i420_components_to_nv12(
             .copy_from_slice(&y_plane[src_offset..src_offset + width]);
     }
 
-    // Copy U plane with source and destination strides
     for row in 0..height / 2 {
         let src_offset = row * src_u_stride;
         let dest_offset = row * dest_uv_stride;
-        nv12_data[y_size + dest_offset..y_size + dest_offset + width / 2]
-            .copy_from_slice(&u_plane[src_offset..src_offset + width / 2]);
+        for i in 0..width / 2 {
+            nv12_data[y_size + dest_offset + i * 2] = u_plane[src_offset + i];
+            nv12_data[y_size + dest_offset + i * 2 + 1] = v_plane[src_offset + i];
+        }
     }
 
-    // Copy V plane with source and destination strides
-    for row in 0..height / 2 {
-        let src_offset = row * src_v_stride;
-        let dest_offset = row * dest_uv_stride;
-        nv12_data[y_size + dest_offset + 1..y_size + dest_offset + width / 2 + 1]
-            .copy_from_slice(&v_plane[src_offset..src_offset + width / 2]);
-    }
+    // // Interleave U and V planes into UV plane
+    // for i in 0..uv_size / 2 {
+    //     nv12_data[y_size + i * 2] = u_plane[i];
+    //     nv12_data[y_size + i * 2 + 1] = v_plane[i];
+    // }
+
+    // for row in 0..(height / 2) {
+    //     let src_offset_u = row * src_u_stride;
+    //     let src_offset_v = row * src_v_stride;
+    //     let dest_offset = row * dest_uv_stride;
+    //     for col in (0..width - 1).step_by(2) {
+    //         nv12_data[y_size + dest_offset + col] = u_plane[src_offset_u + col];
+    //         nv12_data[y_size + dest_offset + col + 1] = v_plane[src_offset_v + col];
+    //     }
+    // }
 }
 
 pub async fn h264_decoder(

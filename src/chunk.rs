@@ -61,7 +61,7 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
     tokio::spawn({
         let event_tx = event_tx.clone();
         async move {
-            match tokio::spawn(async move {
+            match async move {
                 type ChunkArragement = HashMap<u32, HashSet<Chunk>>;
                 let mut chunk_arrangement: ChunkArragement = HashMap::new();
                 let mut ticker = tokio::time::interval(std::time::Duration::from_secs(1));
@@ -70,18 +70,24 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
                         let mut remove_ids: Vec<u32> = vec![];
                         for (id, chunks) in chunk_arrangement.iter() {
                             for chunk in chunks.iter() {
+                                // If any of the chunks expired then cull all of them
                                 if let Ok(_) = chunk.deadline.elapsed() {
                                     remove_ids.push(*id);
                                     break;
                                 }
                             }
                         }
-                        log::debug!("removing {} unfinished chunks that expired", remove_ids.len());
-                            if remove_ids.len() > 0 {
-                        }
+                        log::debug!(
+                            "removing {} unfinished packets that expired",
+                            remove_ids.len()
+                        );
+                        if remove_ids.len() > 0 {}
+                        let mut chunks_removed = 0;
                         for id in remove_ids {
-                            chunk_arrangement.remove(&id);
+                            let cs = chunk_arrangement.remove(&id).unwrap();
+                            chunks_removed += cs.len()
                         }
+                        log::debug!("removed {} chunks", chunks_removed);
                     }
 
                     async fn handle_control<
@@ -99,6 +105,7 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
 
                                 if let Ok(_) = chunk.deadline.elapsed() {
                                     // Ignore elapsed chunk
+                                    log::debug!("ignoring elapsed chunk");
                                     return Ok(());
                                 }
 
@@ -107,28 +114,37 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
 
                                     chunk_complete = chunks.len() == total;
                                 } else {
-                                    let mut chunk_storage = HashSet::new();
-                                    let id = chunk.id;
-                                    chunk_storage.insert(chunk);
-                                    chunk_arrangement.insert(id, chunk_storage);
+                                    if chunk.total == 1 {
+                                        // early out because we have a whole packet from one chunk
+                                        // TODO(emily): Copy paste from above
+                                        let v: T = bincode::deserialize(&chunk.data)?;
+                                        event_tx.send(AssemblyEvent::Whole(v)).await.map_err(
+                                            |_err| {
+                                                eyre::eyre!("Failed to decode reassembled packet")
+                                            },
+                                        )?;
+                                    } else {
+                                        let mut chunk_storage = HashSet::new();
+                                        chunk_storage.insert(chunk);
+                                        chunk_arrangement.insert(chunk_id, chunk_storage);
+                                    }
                                 }
 
                                 if chunk_complete {
-                                    if let Some(mut chunks) = chunk_arrangement.remove(&chunk_id) {
-                                        // got all chunks, build T
-                                        let mut data = vec![];
-                                        let mut chunks = chunks.drain().collect::<Vec<_>>();
-                                        chunks.sort_by_cached_key(|c| c.part);
-                                        // data.reserve();
-                                        for mut chunk in chunks {
-                                            data.append(&mut chunk.data);
-                                        }
-                                        let v: T = bincode::deserialize(&data)?;
-                                        event_tx
-                                            .send(AssemblyEvent::Whole(v))
-                                            .await
-                                            .map_err(|_err| eyre::eyre!("Failed to send"))?;
+                                    let mut chunks = chunk_arrangement.remove(&chunk_id).unwrap();
+                                    // got all chunks, build T
+                                    let mut data = vec![];
+                                    let mut chunks = chunks.drain().collect::<Vec<_>>();
+                                    chunks.sort_by_cached_key(|c| c.part);
+                                    for mut chunk in chunks {
+                                        data.append(&mut chunk.data);
                                     }
+                                    let v: T = bincode::deserialize(&data)?;
+                                    event_tx.send(AssemblyEvent::Whole(v)).await.map_err(
+                                        |_err| {
+                                            eyre::eyre!("Failed to decode reassembled packet")
+                                        },
+                                    )?;
                                 }
                             }
                         }
@@ -149,17 +165,12 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
                     }
                 }
                 eyre::Ok(())
-            })
+            }
             .await
             {
-                Ok(r) => match r {
-                    Ok(_) => {}
-                    Err(err) => {
-                        log::error!("assembly control error {err}");
-                    }
-                },
+                Ok(r) => {}
                 Err(err) => {
-                    log::error!("assembly control join error {err}");
+                    log::error!("assembly control error {err}");
                 }
             }
         }
@@ -194,8 +205,14 @@ pub(crate) async fn chunk<T: Serialize + for<'de> Deserialize<'de> + Send + 'sta
 
                             let encoded = bincode::serialize(&v)?;
 
+                            let total = ((encoded.len()) / chunk_size)
+                                + (if encoded.len() % chunk_size == 0 {
+                                    0
+                                } else {
+                                    1
+                                });
+
                             let chunks = encoded.chunks(chunk_size);
-                            let (total, _) = chunks.size_hint();
 
                             for (i, chunk) in chunks.enumerate() {
                                 if let Ok(_) = deadline.elapsed() {
@@ -212,18 +229,20 @@ pub(crate) async fn chunk<T: Serialize + for<'de> Deserialize<'de> + Send + 'sta
                                     total: total as u32,
                                     deadline,
                                 };
-                                match event_tx.try_send(ChunkEvent::Chunk(chunk)) {
-                                    Ok(_) => {}
-                                    Err(mpsc::error::TrySendError::Full(_)) => {
-                                        log::warn!("chunk control backpressured");
-                                        break;
-                                    }
-                                    Err(err) => {
-                                        log::warn!("chunk control closed");
-                                        return Err(eyre!("chunk control closed"));
-                                    }
-                                }
-                                // event_tx.try_send().await?;
+
+                                event_tx.send(ChunkEvent::Chunk(chunk)).await?;
+
+                                // match event_tx.try_send(ChunkEvent::Chunk(chunk)) {
+                                //     Ok(_) => {}
+                                //     Err(mpsc::error::TrySendError::Full(_)) => {
+                                //         log::warn!("chunk control backpressured");
+                                //         break;
+                                //     }
+                                //     Err(err) => {
+                                //         log::warn!("chunk control closed");
+                                //         return Err(eyre!("chunk control closed"));
+                                //     }
+                                // }
                             }
                         }
                     }
