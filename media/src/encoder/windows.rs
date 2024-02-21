@@ -1,9 +1,6 @@
 use std::time::UNIX_EPOCH;
 
-use ::windows::{
-    core::ComInterface,
-    Win32::{Media::MediaFoundation::*},
-};
+use ::windows::{core::ComInterface, Win32::Media::MediaFoundation::*};
 use eyre::{eyre, Result};
 
 use tokio::sync::mpsc::{self};
@@ -246,7 +243,10 @@ unsafe fn hardware(
                 // more thought.
                 last_control = Some(EncoderControl::Frame(
                     frame.clone(),
-                    time + std::time::Duration::from_secs_f32(1.0 / target_framerate as f32),
+                    crate::Timestamp::new(
+                        time.duration()
+                            + std::time::Duration::from_secs_f32(1.0 / target_framerate as f32),
+                    ),
                 ));
 
                 let texture = crate::dx::TextureBuilder::new(
@@ -264,7 +264,7 @@ unsafe fn hardware(
 
                 let sample = make_dxgi_sample(&texture, None)?;
 
-                sample.SetSampleTime(time.duration_since(UNIX_EPOCH)?.as_nanos() as i64 / 100)?;
+                sample.SetSampleTime(time.hns())?;
                 sample.SetSampleDuration(10_000_000 / target_framerate as i64)?;
 
                 // log::info!("made sample");
@@ -332,7 +332,7 @@ unsafe fn hardware(
                         // let is_keyframe = false;
                         unsafe {
                             sample_time = match sample.GetSampleTime() {
-                                Ok(sample_time) => sample_time as u64,
+                                Ok(sample_time) => sample_time,
                                 Err(_err) => {
                                     // No sample time, but thats fine! we can just throw this sample
                                     log::info!("throwing encoder output sample with no sample time attached");
@@ -348,8 +348,7 @@ unsafe fn hardware(
                         event_tx.blocking_send(EncoderEvent::Data(VideoBuffer {
                             data: output,
                             sequence_header: sequence_header,
-                            time: std::time::UNIX_EPOCH
-                                + std::time::Duration::from_nanos(sample_time * 100),
+                            time: crate::Timestamp::new_hns(sample_time),
                             duration: duration,
                             key_frame: is_keyframe,
                         }))?;
@@ -416,7 +415,7 @@ unsafe fn software(
             let sample = unsafe { MFCreateSample() }?;
 
             sample.AddBuffer(&media_buffer)?;
-            sample.SetSampleTime(time.duration_since(UNIX_EPOCH)?.as_nanos() as i64 / 100)?;
+            sample.SetSampleTime(time.hns())?;
             sample.SetSampleDuration(10_000_000 / target_framerate as i64)?;
 
             let process_output = || {
@@ -497,8 +496,7 @@ unsafe fn software(
                             .blocking_send(EncoderEvent::Data(VideoBuffer {
                                 data: output,
                                 sequence_header: sequence_header,
-                                time: std::time::UNIX_EPOCH
-                                    + std::time::Duration::from_nanos(sample_time * 100),
+                                time: crate::Timestamp::new_hns(sample_time as i64),
                                 duration: duration,
                                 key_frame: is_keyframe,
                             }))

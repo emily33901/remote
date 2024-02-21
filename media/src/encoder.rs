@@ -19,7 +19,7 @@ pub enum FrameIsKeyframe {
 
 #[derive(Clone)]
 pub enum EncoderControl {
-    Frame(ID3D11Texture2D, std::time::SystemTime),
+    Frame(ID3D11Texture2D, crate::Timestamp),
 }
 
 pub enum EncoderEvent {

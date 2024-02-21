@@ -379,7 +379,7 @@ pub async fn produce(
         }
     });
 
-    let (h264_control, mut h264_event) = crate::encoder::Encoder::OpenH264
+    let (h264_control, mut h264_event) = crate::encoder::Encoder::MediaFoundation
         .run(width, height, target_framerate, bitrate)
         .await?;
 
@@ -443,10 +443,7 @@ pub async fn produce(
 
                             match h264_control.try_send(encoder::EncoderControl::Frame(
                                 new_texture,
-                                start
-                                    + std::time::Duration::from_nanos(
-                                        media.video_timestamp as u64 * 100,
-                                    ),
+                                crate::Timestamp::new_hns(media.video_timestamp),
                             )) {
                                 Ok(_) => {}
                                 Err(mpsc::error::TrySendError::Full(_)) => {

@@ -2,12 +2,7 @@ use std::mem::MaybeUninit;
 
 use eyre::Result;
 use tokio::sync::mpsc;
-use windows::{
-    core::HSTRING,
-    Win32::{
-        Media::MediaFoundation::*,
-    },
-};
+use windows::{core::HSTRING, Win32::Media::MediaFoundation::*};
 
 use crate::{VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
 
@@ -107,12 +102,7 @@ pub fn file_sink(
                         let sample = MFCreateSample()?;
 
                         sample.AddBuffer(&media_buffer)?;
-                        sample.SetSampleTime(
-                            (time.duration_since(std::time::UNIX_EPOCH))
-                                .unwrap()
-                                .as_nanos() as i64
-                                / 100,
-                        )?;
+                        sample.SetSampleTime(time.hns())?;
 
                         sample.SetSampleDuration(duration.as_nanos() as i64 / 100)?;
                         writer.WriteSample(0, &sample)?;

@@ -169,7 +169,7 @@ async fn peer_connected(
         .send(player::audio::PlayerControl::Sink(audio_sink_rx))
         .await?;
 
-    let (h264_control, mut h264_event) = media::decoder::Decoder::OpenH264
+    let (h264_control, mut h264_event) = media::decoder::Decoder::MediaFoundation
         .run(width, height, framerate, bitrate)
         .await?;
 
@@ -180,7 +180,9 @@ async fn peer_connected(
             while let Some(event) = h264_event.recv().await {
                 match event {
                     media::decoder::DecoderEvent::Frame(tex, time) => {
-                        video_sink_tx.send((tex, time)).await.unwrap()
+                        // Try and give video to player otherwise drop it.
+                        // TODO(emily): Probably back pressure
+                        let _ = video_sink_tx.send((tex, time)).await;
                     }
                 }
             }

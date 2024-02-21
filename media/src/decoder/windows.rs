@@ -1,5 +1,3 @@
-
-
 use ::windows::{
     core::ComInterface,
     Win32::{
@@ -215,13 +213,8 @@ unsafe fn hardware(
         let sample = MFCreateSample()?;
         sample.AddBuffer(&media_buffer)?;
 
-        sample.SetSampleTime(
-            time.duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos() as i64
-                / 100,
-        )?;
-        sample.SetSampleDuration(duration.as_nanos() as i64 / 100)?;
+        // sample.SetSampleTime(time.hns())?;
+        // sample.SetSampleDuration(duration.as_nanos() as i64 / 100)?;
 
         let process_output = || {
             let mut output_buffer = MFT_OUTPUT_DATA_BUFFER::default();
@@ -247,6 +240,8 @@ unsafe fn hardware(
                     let sample = output_buffers[0].pSample.take().unwrap();
                     let timestamp = unsafe { sample.GetSampleTime()? };
 
+                    log::debug!("decoder timestamp was {timestamp}");
+
                     let media_buffer = unsafe { sample.GetBufferByIndex(0) }?;
                     let dxgi_buffer: IMFDXGIBuffer = media_buffer.cast()?;
 
@@ -257,8 +252,7 @@ unsafe fn hardware(
                     event_tx
                         .blocking_send(DecoderEvent::Frame(
                             output_texture,
-                            std::time::SystemTime::UNIX_EPOCH
-                                + std::time::Duration::from_nanos(timestamp as u64 * 100),
+                            crate::Timestamp::new_hns(timestamp),
                         ))
                         .unwrap();
 
@@ -367,12 +361,7 @@ unsafe fn software(
         let sample = MFCreateSample()?;
         sample.AddBuffer(&media_buffer)?;
 
-        sample.SetSampleTime(
-            time.duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos() as i64
-                / 100,
-        )?;
+        sample.SetSampleTime(time.hns())?;
         sample.SetSampleDuration(duration.as_nanos() as i64 / 100)?;
 
         let process_output = || {
@@ -422,8 +411,7 @@ unsafe fn software(
                     event_tx
                         .blocking_send(DecoderEvent::Frame(
                             output_texture,
-                            std::time::SystemTime::UNIX_EPOCH
-                                + std::time::Duration::from_nanos(timestamp as u64 * 100),
+                            crate::Timestamp::new_hns(timestamp),
                         ))
                         .unwrap();
 

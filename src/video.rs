@@ -1,5 +1,4 @@
-use std::sync::Arc;
-
+use std::{sync::Arc, time};
 
 use tokio::sync::mpsc;
 
@@ -88,7 +87,9 @@ pub(crate) async fn video_channel(
                 while let Some(control) = control_rx.recv().await {
                     match control {
                         VideoControl::Video(video) => {
-                            let deadline = video.time + std::time::Duration::from_secs(1);
+                            // TODO(emily): Don't hardcode this deadline
+                            let deadline = std::time::SystemTime::now()
+                                + std::time::Duration::from_millis(100);
                             if let Ok(t) = deadline.elapsed() {
                                 log::warn!(
                                     "throwing expired frame {}ms in the past",

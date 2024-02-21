@@ -1,9 +1,7 @@
 mod openh264;
 mod windows;
 
-
-
-use ::windows::{Win32::Graphics::Direct3D11::ID3D11Texture2D};
+use ::windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 use eyre::Result;
 use tokio::sync::mpsc;
 
@@ -13,7 +11,7 @@ pub enum DecoderControl {
     Data(VideoBuffer),
 }
 pub enum DecoderEvent {
-    Frame(ID3D11Texture2D, std::time::SystemTime),
+    Frame(ID3D11Texture2D, crate::Timestamp),
 }
 
 pub enum Decoder {

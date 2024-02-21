@@ -20,10 +20,10 @@ use super::{
 };
 
 pub(crate) enum ConvertControl {
-    Frame(ID3D11Texture2D, std::time::SystemTime),
+    Frame(ID3D11Texture2D, crate::Timestamp),
 }
 pub(crate) enum ConvertEvent {
-    Frame(ID3D11Texture2D, std::time::SystemTime),
+    Frame(ID3D11Texture2D, crate::Timestamp),
 }
 
 #[derive(Copy, Clone)]
@@ -181,10 +181,10 @@ pub(crate) async fn converter(
                     let sample = make_dxgi_sample(&texture, None)?;
 
                     sample
-                        .SetSampleTime(time.duration_since(UNIX_EPOCH)?.as_nanos() as i64 / 100)?;
+                        .SetSampleTime(time.hns())?;
                     sample.SetSampleDuration(10_000_000 / target_framerate as i64)?;
 
-                    let process_output = || -> Result<Option<(ID3D11Texture2D, std::time::SystemTime)>, windows::core::Error> {
+                    let process_output = || -> Result<Option<(ID3D11Texture2D, crate::Timestamp)>, windows::core::Error> {
                         let mut output_buffer = MFT_OUTPUT_DATA_BUFFER::default();
                         output_buffer.dwStatus = 0;
                         output_buffer.dwStreamID = 0;
@@ -197,8 +197,6 @@ pub(crate) async fn converter(
                                 let sample = output_buffers[0].pSample.take().unwrap();
 
                                 let timestamp_hns = unsafe { sample.GetSampleTime()? };
-                                let timestamp = std::time::SystemTime::UNIX_EPOCH
-                                    + std::time::Duration::from_nanos(timestamp_hns as u64 * 100);
 
                                 let media_buffer = unsafe { sample.GetBufferByIndex(0) }?;
                                 let dxgi_buffer: IMFDXGIBuffer = media_buffer.cast()?;
@@ -227,7 +225,7 @@ pub(crate) async fn converter(
 
                                 copy_texture(&output_texture, &texture, Some(subresource_index))?;
 
-                                Ok(Some((output_texture, timestamp)))
+                                Ok(Some((output_texture, crate::Timestamp::new_hns(timestamp_hns))))
                             }
                             Err(err) => {
                                 // log::warn!("output flags {}", output_buffers[0].dwStatus);

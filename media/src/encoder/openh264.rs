@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use openh264::{
     self,
     encoder::{Encoder, EncoderConfig},
-    formats::{YUVSource},
+    formats::YUVSource,
     OpenH264API,
 };
 
@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 
 use crate::{dx::MapTextureExt, ARBITRARY_CHANNEL_LIMIT};
 
-use crate::yuv_buffer::{YUVBuffer2};
+use crate::yuv_buffer::YUVBuffer2;
 
 use super::{EncoderControl, EncoderEvent};
 
@@ -127,7 +127,10 @@ pub async fn h264_encoder(
 
                 let yuv_buffer = yuv_buffer.borrow();
 
-                let bitstream = encoder.encode(&*yuv_buffer)?;
+                let bitstream = encoder.encode_at(
+                    &*yuv_buffer,
+                    openh264::Timestamp::from_millis(time.duration().as_millis() as u64),
+                )?;
 
                 fps_counter.update(1);
 

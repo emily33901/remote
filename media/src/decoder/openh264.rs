@@ -1,5 +1,3 @@
-
-
 use openh264::{
     decoder::{Decoder, DecoderConfig},
     nal_units, OpenH264API,
@@ -102,6 +100,8 @@ pub async fn h264_decoder(
 
                 for unit in nal_units(&buffer.data) {
                     if let Ok(Some(output)) = decoder.decode(unit) {
+                        log::debug!("decoder timestamp was {:?}", output.timestamp());
+
                         staging_texture.map_mut(&context, |data, dest_stride| {
                             let (y_stride, u_stride, v_stride) = output.strides_yuv();
 
@@ -133,7 +133,7 @@ pub async fn h264_decoder(
 
                             event_tx.blocking_send(DecoderEvent::Frame(
                                 frame,
-                                std::time::SystemTime::now(),
+                                crate::Timestamp::new_millis(output.timestamp().as_millis()),
                             ))?;
 
                             fps_counter.update(1);

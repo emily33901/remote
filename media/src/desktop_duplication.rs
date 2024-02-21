@@ -10,8 +10,9 @@ use windows::{
             },
             Dxgi::{
                 Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_MODE_DESC},
-                IDXGIAdapter, IDXGIDevice2, IDXGIKeyedMutex, IDXGIOutput1, IDXGIResource, DXGI_ENUM_MODES_DISABLED_STEREO, DXGI_ERROR_WAIT_TIMEOUT,
-                DXGI_OUTDUPL_DESC, DXGI_OUTDUPL_FRAME_INFO, DXGI_OUTPUT_DESC,
+                IDXGIAdapter, IDXGIDevice2, IDXGIKeyedMutex, IDXGIOutput1, IDXGIResource,
+                DXGI_ENUM_MODES_DISABLED_STEREO, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_DESC,
+                DXGI_OUTDUPL_FRAME_INFO, DXGI_OUTPUT_DESC,
             },
         },
         System::Performance::QueryPerformanceCounter,
@@ -31,7 +32,7 @@ pub(crate) enum DDControl {}
 
 pub(crate) enum DDEvent {
     Size(u32, u32),
-    Frame(ID3D11Texture2D, std::time::SystemTime),
+    Frame(ID3D11Texture2D, crate::Timestamp),
 }
 
 pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Receiver<DDEvent>)> {
@@ -120,7 +121,7 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
 
             let mut start = 0;
             unsafe { QueryPerformanceCounter(&mut start) }?;
-            let _start_time = std::time::SystemTime::now();
+            let start_time = std::time::SystemTime::now();
 
             loop {
                 let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
@@ -212,7 +213,10 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
 
                             match event_tx.try_send(DDEvent::Frame(
                                 out_texture,
-                                std::time::SystemTime::now() + std::time::Duration::from_millis(50),
+                                crate::Timestamp::new_diff(
+                                    start_time,
+                                    std::time::SystemTime::now(),
+                                )?,
                             )) {
                                 Ok(_) => {}
                                 Err(mpsc::error::TrySendError::Closed(_)) => break,
@@ -257,7 +261,7 @@ pub async fn duplicate_desktop(
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
     let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
-    let (h264_control, mut h264_event) = Encoder::OpenH264
+    let (h264_control, mut h264_event) = Encoder::MediaFoundation
         .run(width, height, framerate, bitrate)
         .await?;
 
