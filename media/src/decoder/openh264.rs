@@ -1,5 +1,6 @@
 use openh264::{
     decoder::{Decoder, DecoderConfig},
+    formats::YUVSource,
     nal_units, OpenH264API,
 };
 use tokio::sync::mpsc;
@@ -81,7 +82,7 @@ pub async fn h264_decoder(
             let config = DecoderConfig::new();
 
             let api = OpenH264API::from_source();
-            let mut decoder = Decoder::with_config(api, config)?;
+            let mut decoder = Decoder::with_api_config(api, config)?;
 
             let staging_texture = crate::dx::TextureBuilder::new(
                 &device,
@@ -103,14 +104,14 @@ pub async fn h264_decoder(
                         tracing::debug!("decoder timestamp was {:?}", output.timestamp());
 
                         staging_texture.map_mut(&context, |data, dest_stride| {
-                            let (y_stride, u_stride, v_stride) = output.strides_yuv();
+                            let (y_stride, u_stride, v_stride) = output.strides();
 
                             i420_components_to_nv12(
                                 width as usize,
                                 height as usize,
-                                output.y_with_stride(),
-                                output.u_with_stride(),
-                                output.v_with_stride(),
+                                output.y(),
+                                output.u(),
+                                output.v(),
                                 y_stride,
                                 u_stride,
                                 v_stride,

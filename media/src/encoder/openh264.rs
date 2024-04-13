@@ -72,12 +72,12 @@ pub async fn h264_encoder(
     tokio::task::spawn_blocking(move || {
         let (device, context) = crate::dx::create_device()?;
 
-        let config = EncoderConfig::new(width, height)
+        let config = EncoderConfig::new()
             .max_frame_rate(target_framerate as f32)
             .set_bitrate_bps(target_bitrate);
 
         let api = OpenH264API::from_source();
-        let mut encoder = Encoder::with_config(api, config)?;
+        let mut encoder = Encoder::with_api_config(api, config)?;
 
         let yuv_buffer = RefCell::new(YUVBuffer2::new(width as usize, height as usize));
 
@@ -112,13 +112,14 @@ pub async fn h264_encoder(
 
                 staging_texture.map(&context, |data, source_row_pitch| {
                     let mut yuv_buffer = yuv_buffer.borrow_mut();
+                    let (y_stride, u_stride, v_stride) = yuv_buffer.strides();
                     nv12_to_i420(
                         width as usize,
                         height as usize,
                         data,
                         source_row_pitch,
-                        yuv_buffer.y_stride() as usize,
-                        yuv_buffer.u_stride() as usize,
+                        y_stride,
+                        u_stride,
                         yuv_buffer.buffer_mut(),
                     );
 

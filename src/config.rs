@@ -14,6 +14,7 @@ pub(crate) struct Config {
     pub(crate) decoder_api: Decoder,
     pub(crate) log_level: tracing::level_filters::LevelFilter,
     pub(crate) webrtc_api: rtc::Api,
+    pub(crate) signal_server: String,
 }
 
 static config: OnceCell<Config> = OnceCell::new();
@@ -40,6 +41,7 @@ impl Config {
                     log_level: tracing::level_filters::LevelFilter::from_str(&std::env::var(
                         "log_level",
                     )?)?,
+                    signal_server: std::env::var("signal_server")?,
                 })
             })
             .unwrap()
