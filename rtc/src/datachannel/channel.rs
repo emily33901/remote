@@ -47,7 +47,7 @@ pub(crate) async fn channel(
                 reliability = reliability.unordered();
             }
 
-            log::info!("{our_label} reliability options are {reliability:?}");
+            tracing::info!("{our_label} reliability options are {reliability:?}");
 
             init = init.reliability(reliability);
         }

@@ -11,7 +11,11 @@ use windows::{
     },
 };
 
-use crate::{dx, encoder, VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
+use crate::{
+    dx,
+    encoder::{self, Encoder},
+    VideoBuffer, ARBITRARY_CHANNEL_LIMIT,
+};
 
 use super::mf::{debug_video_format, IMFAttributesExt, IMFDXGIBufferExt};
 
@@ -183,7 +187,7 @@ impl Media {
             let block_align = output.get_u32(&MF_MT_AUDIO_BLOCK_ALIGNMENT)?;
             let avg_per_sec = output.get_u32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND)?;
 
-            log::debug!("Media::debug_media_format: {typ}: c:{channels} sps:{samples_per_sec} bps:{bits_per_sample} ba:{block_align} aps:{avg_per_sec}");
+            tracing::debug!("Media::debug_media_format: {typ}: c:{channels} sps:{samples_per_sec} bps:{bits_per_sample} ba:{block_align} aps:{avg_per_sec}");
 
             Ok(())
         };
@@ -364,6 +368,7 @@ pub enum MediaEvent {
 pub enum MediaControl {}
 
 pub async fn produce(
+    encoder_api: Encoder,
     path: &str,
     width: u32,
     height: u32,
@@ -379,7 +384,7 @@ pub async fn produce(
         }
     });
 
-    let (h264_control, mut h264_event) = crate::encoder::Encoder::MediaFoundation
+    let (h264_control, mut h264_event) = encoder_api
         .run(width, height, target_framerate, bitrate)
         .await?;
 
@@ -447,26 +452,26 @@ pub async fn produce(
                             )) {
                                 Ok(_) => {}
                                 Err(mpsc::error::TrySendError::Full(_)) => {
-                                    log::debug!("video backpressured")
+                                    tracing::debug!("video backpressured")
                                 }
                                 Err(mpsc::error::TrySendError::Closed(_)) => {
-                                    log::error!("produce channel closed, going down");
+                                    tracing::error!("produce channel closed, going down");
                                     break;
                                 }
                             }
                         }
 
                         if audio_buffer.len() > 0 {
-                            log::trace!("produced audio");
+                            tracing::trace!("produced audio");
 
                             // Try and put a frame but if we are being back pressured then dump and run
                             match event_tx.try_send(MediaEvent::Audio(audio_buffer.clone())) {
                                 Ok(_) => {}
                                 Err(mpsc::error::TrySendError::Full(_)) => {
-                                    log::debug!("audio backpressured")
+                                    tracing::debug!("audio backpressured")
                                 }
                                 Err(mpsc::error::TrySendError::Closed(_)) => {
-                                    log::error!("produce channel closed, going down");
+                                    tracing::error!("produce channel closed, going down");
                                     break;
                                 }
                             }
@@ -481,8 +486,8 @@ pub async fn produce(
             .await
             .unwrap()
             {
-                Ok(_) => log::warn!("media::produce exit Ok"),
-                Err(err) => log::error!("media::produce exit err {err:?}"),
+                Ok(_) => tracing::warn!("media::produce exit Ok"),
+                Err(err) => tracing::error!("media::produce exit err {err:?}"),
             }
         }
     });
@@ -505,7 +510,7 @@ pub async fn produce(
             .unwrap()
             {
                 Ok(_) => {}
-                Err(err) => log::error!("encoder event err {err}"),
+                Err(err) => tracing::error!("encoder event err {err}"),
             }
         }
     });

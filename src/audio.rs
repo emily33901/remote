@@ -48,11 +48,11 @@ pub(crate) async fn audio_channel(
                 Ok(r) => match r {
                     Ok(_) => {}
                     Err(err) => {
-                        log::error!("audio channel event error {err}");
+                        tracing::error!("audio channel event error {err}");
                     }
                 },
                 Err(err) => {
-                    log::error!("audio channel event join error {err}");
+                    tracing::error!("audio channel event join error {err}");
                 }
             }
         }
@@ -77,11 +77,11 @@ pub(crate) async fn audio_channel(
                 Ok(r) => match r {
                     Ok(_) => {}
                     Err(err) => {
-                        log::error!("audio channel control error {err}");
+                        tracing::error!("audio channel control error {err}");
                     }
                 },
                 Err(err) => {
-                    log::error!("audio channel control join error {err}");
+                    tracing::error!("audio channel control join error {err}");
                 }
             }
         }

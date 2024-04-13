@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use eyre::{Result};
+use eyre::Result;
 use serde::{Deserialize, Serialize};
 
 use tokio::sync::mpsc;
@@ -77,7 +77,7 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
                                 }
                             }
                         }
-                        log::debug!(
+                        tracing::debug!(
                             "removing {} unfinished packets that expired",
                             remove_ids.len()
                         );
@@ -87,7 +87,7 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
                             let cs = chunk_arrangement.remove(&id).unwrap();
                             chunks_removed += cs.len()
                         }
-                        log::debug!("removed {} chunks", chunks_removed);
+                        tracing::debug!("removed {} chunks", chunks_removed);
                     }
 
                     async fn handle_control<
@@ -105,7 +105,7 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
 
                                 if let Ok(_) = chunk.deadline.elapsed() {
                                     // Ignore elapsed chunk
-                                    log::debug!("ignoring elapsed chunk");
+                                    tracing::debug!("ignoring elapsed chunk");
                                     return Ok(());
                                 }
 
@@ -170,7 +170,7 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
             {
                 Ok(_r) => {}
                 Err(err) => {
-                    log::error!("assembly control error {err}");
+                    tracing::error!("assembly control error {err}");
                 }
             }
         }
@@ -218,7 +218,7 @@ pub(crate) async fn chunk<T: Serialize + for<'de> Deserialize<'de> + Send + 'sta
                                 if let Ok(_) = deadline.elapsed() {
                                     // We actually timed out trying to send these chunks!
                                     // give up.
-                                    log::warn!("{} expired during chunking", chunk_id);
+                                    tracing::warn!("{} expired during chunking", chunk_id);
                                     break;
                                 }
                                 let chunk = Chunk {
@@ -235,11 +235,11 @@ pub(crate) async fn chunk<T: Serialize + for<'de> Deserialize<'de> + Send + 'sta
                                 // match event_tx.try_send(ChunkEvent::Chunk(chunk)) {
                                 //     Ok(_) => {}
                                 //     Err(mpsc::error::TrySendError::Full(_)) => {
-                                //         log::warn!("chunk control backpressured");
+                                //         tracing::warn!("chunk control backpressured");
                                 //         break;
                                 //     }
                                 //     Err(err) => {
-                                //         log::warn!("chunk control closed");
+                                //         tracing::warn!("chunk control closed");
                                 //         return Err(eyre!("chunk control closed"));
                                 //     }
                                 // }
@@ -254,11 +254,11 @@ pub(crate) async fn chunk<T: Serialize + for<'de> Deserialize<'de> + Send + 'sta
                 Ok(r) => match r {
                     Ok(_) => {}
                     Err(err) => {
-                        log::error!("assembly control error {err}");
+                        tracing::error!("assembly control error {err}");
                     }
                 },
                 Err(err) => {
-                    log::error!("assembly control join error {err}");
+                    tracing::error!("assembly control join error {err}");
                 }
             }
         }

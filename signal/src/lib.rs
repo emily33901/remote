@@ -90,7 +90,7 @@ async fn handle_incoming_message_inner(
     peers: PeerMap,
     message: PeerToServerMessage,
 ) -> core::result::Result<(), SignallingError> {
-    log::debug!("{message:?}");
+    tracing::debug!("{message:?}");
     match message.inner {
         PeerToServer::IceCandidate(peer_id, inner) => {
             if let Some(peer) = peers.lock().await.get(&peer_id) {
@@ -133,7 +133,7 @@ async fn handle_incoming_message_inner(
         }
         PeerToServer::ConnectToPeer(peer_id) => {
             if peer_id == our_peer_id {
-                log::debug!("ignoring self connection {peer_id}");
+                tracing::debug!("ignoring self connection {peer_id}");
                 Ok(())
             } else if let Some(peer) = peers.lock().await.get(&peer_id) {
                 let connection_id = make_connection_id();
@@ -154,9 +154,9 @@ async fn handle_incoming_message_inner(
                             let requestee = peers.get(&peer_id);
 
                             if requester.is_none() || requestee.is_none() {
-                                log::debug!("while accepting connection, peer disapeared {our_peer_id} {peer_id}");
+                                tracing::debug!("while accepting connection, peer disapeared {our_peer_id} {peer_id}");
                             } else {
-                                log::debug!("accepting connection {connection_id} {peer_id}");
+                                tracing::debug!("accepting connection {connection_id} {peer_id}");
                                 requester
                                     .unwrap()
                                     .send(ServerToPeerMessage {
@@ -217,12 +217,12 @@ async fn handle_incoming_message_inner(
                 connection_requests.get(&connection_id)
             {
                 if requestee != &our_peer_id {
-                    log::debug!("ignoring accept connection from different requestee");
+                    tracing::debug!("ignoring accept connection from different requestee");
                     return Ok(());
                     // todo!();
                 }
             } else {
-                log::debug!("ignoring accept connection for unknown connection id");
+                tracing::debug!("ignoring accept connection for unknown connection id");
                 return Ok(());
             }
 
@@ -416,7 +416,7 @@ async fn handle_control(
     write: &mut SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>,
     control: SignallingControl,
 ) -> Result<()> {
-    log::debug!("sending to server {control:?}");
+    tracing::debug!("sending to server {control:?}");
 
     let message = match control {
         SignallingControl::IceCandidate(peer_id, candidate) => PeerToServerMessage {
@@ -457,7 +457,7 @@ async fn handle_message(
     match msg {
         Text(text) => {
             let message = serde_json::from_str::<ServerToPeerMessage>(&text)?;
-            log::debug!("received {message:?}");
+            tracing::debug!("received {message:?}");
             let _job_id = message.job_id;
             Ok(event_tx
                 .send(match message.inner {
@@ -492,7 +492,7 @@ pub async fn client(
     mpsc::Sender<SignallingControl>,
     mpsc::Receiver<SignallingEvent>,
 )> {
-    log::info!("starting signal client");
+    tracing::info!("starting signal client");
     let (ws_stream, _) = tokio_tungstenite::connect_async(address)
         .await
         .expect("Error during the websocket handshake occurred");
@@ -502,7 +502,7 @@ pub async fn client(
     let (control_tx, mut control_rx) = mpsc::channel::<SignallingControl>(ARBITRARY_CHANNEL_LIMIT);
     let (event_tx, event_rx) = mpsc::channel::<SignallingEvent>(ARBITRARY_CHANNEL_LIMIT);
 
-    log::info!("client signal connected");
+    tracing::info!("client signal connected");
 
     tokio::spawn({
         let control_tx = control_tx.clone();
@@ -512,7 +512,7 @@ pub async fn client(
                     control = control_rx.recv().fuse() => {
                         match control {
                             None => {
-                                log::warn!("control_rx None");
+                                tracing::warn!("control_rx None");
                                 break;
                             },
                             Some(control) => handle_control(&mut write, control).await,
@@ -522,11 +522,11 @@ pub async fn client(
                         match msg {
                             Some(Ok(msg)) => handle_message(control_tx.clone(), event_tx.clone(), msg).await,
                             None => {
-                                log::warn!("error reading from websocket (None)");
+                                tracing::warn!("error reading from websocket (None)");
                                 break
                             },
                             Some(Err(err)) => {
-                                log::warn!("error reading from websocket ({err})");
+                                tracing::warn!("error reading from websocket ({err})");
                                 break
                             },
                         }
@@ -534,7 +534,7 @@ pub async fn client(
                 } {
                     Ok(_ok) => {}
                     Err(err) => {
-                        log::error!("err {err}");
+                        tracing::error!("err {err}");
                         break;
                     }
                 }

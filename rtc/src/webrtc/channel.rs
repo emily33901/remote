@@ -50,7 +50,7 @@ async fn on_datachannel(
         let event_tx = event_tx.clone();
         let control_tx = control_tx.clone();
         Box::new(move || {
-            log::debug!("channel {our_label} closed");
+            tracing::debug!("channel {our_label} closed");
             let event_tx = event_tx.clone();
             let control_tx = control_tx.clone();
             Box::pin(async move {
@@ -64,7 +64,7 @@ async fn on_datachannel(
     let (more_can_be_sent, mut maybe_more_can_be_sent) = tokio::sync::mpsc::channel(1);
 
     channel.on_error(Box::new(move |err| {
-        Box::pin(async move { log::error!("channel error {err}") })
+        Box::pin(async move { tracing::error!("channel error {err}") })
     }));
 
     channel.on_open({
@@ -75,7 +75,7 @@ async fn on_datachannel(
         Box::new(move || {
             // let channel = channel.clone();
             Box::pin(async move {
-                log::debug!("channel {our_label} open");
+                tracing::debug!("channel {our_label} open");
                 event_tx.send(ChannelEvent::Open).await.unwrap();
 
                 // NOTE(emily): Only start handling controls once the data channel is open.
@@ -91,7 +91,7 @@ async fn on_datachannel(
                                 .await
                                 .take()
                                 .expect("expected channel control");
-                            log::debug!("took channel {our_label} control");
+                            tracing::debug!("took channel {our_label} control");
 
                             let sent_counter = telemetry::client::Counter::default();
                             telemetry::client::watch_counter(
@@ -115,7 +115,7 @@ async fn on_datachannel(
                                                     sent_counter.update(len);
                                                 }
                                                 Err(err) => {
-                                                    log::warn!(
+                                                    tracing::warn!(
                                                         "channel {our_label} unable to send {err}"
                                                     );
                                                 }
@@ -124,11 +124,11 @@ async fn on_datachannel(
                                             let buffered_total =
                                                 len + channel.buffered_amount().await;
 
-                                            log::trace!("buffered_total is {buffered_total}");
+                                            tracing::trace!("buffered_total is {buffered_total}");
 
                                             if buffered_total > MAX_BUFFERED_AMOUNT {
                                                 // Wait for the signal that more can be sent
-                                                log::warn!(
+                                                tracing::warn!(
                                                 "!! buffered_total too large, waiting for low mark"
                                             );
                                                 let _ = maybe_more_can_be_sent.recv().await;
@@ -152,11 +152,11 @@ async fn on_datachannel(
                             Ok(r) => match r {
                                 Ok(_) => {}
                                 Err(err) => {
-                                    log::error!("video channel chunk event error {err}");
+                                    tracing::error!("video channel chunk event error {err}");
                                 }
                             },
                             Err(err) => {
-                                log::error!("video channel chunk event join error {err}");
+                                tracing::error!("video channel chunk event join error {err}");
                             }
                         }
                     }
@@ -178,7 +178,7 @@ async fn on_datachannel(
         .await;
 
         Box::new(move |msg: DataChannelMessage| {
-            log::trace!("channel {our_label} message");
+            tracing::trace!("channel {our_label} message");
             let event_tx = event_tx.clone();
             let our_label = our_label.clone();
 
@@ -239,7 +239,7 @@ pub(crate) async fn channel(
             let channel_label = d.label().to_owned();
             let id = d.id();
 
-            log::debug!("New DataChannel {} {id}", d.label());
+            tracing::debug!("New DataChannel {} {id}", d.label());
 
             Box::pin({
                 let storage = storage.clone();

@@ -75,7 +75,7 @@ pub async fn h264_encoder(
 
                     let attributes: IMFAttributes = activate.cast().unwrap();
                     if let Ok(s) = attributes.get_string(&MFT_FRIENDLY_NAME_Attribute) {
-                        log::info!("chose encoder {s}");
+                        tracing::info!("chose encoder {s}");
                     }
 
                     eyre::Ok(transform)
@@ -84,7 +84,7 @@ pub async fn h264_encoder(
                 let transform = match find_encoder(true) {
                     Ok(encoder) => encoder,
                     Err(err) => {
-                        log::warn!("unable to find a hardware h264 encoder {err}, falling back to a software encoder");
+                        tracing::warn!("unable to find a hardware h264 encoder {err}, falling back to a software encoder");
                         find_encoder(false)?
                     }
                 };
@@ -161,7 +161,7 @@ pub async fn h264_encoder(
                 let output_stream_id = output_stream_ids[0];
 
                 if let Ok(event_gen) = transform.cast::<IMFMediaEventGenerator>() {
-                    log::debug!("starting hardware encoder");
+                    tracing::debug!("starting hardware encoder");
                     hardware(&device, event_gen, transform, control_rx, event_tx, target_framerate, output_stream_id, input_stream_id, width, height)?;
                 } else {
                     software(&device, &context, transform, control_rx, event_tx, target_framerate, output_stream_id, input_stream_id, width, height)?;
@@ -173,8 +173,8 @@ pub async fn h264_encoder(
             .await
             .unwrap()
             {
-                Ok(_) => log::warn!("h264::encoder exit Ok"),
-                Err(err) => log::error!("h264::encoder exit err {err} {err:?}"),
+                Ok(_) => tracing::warn!("h264::encoder exit Ok"),
+                Err(err) => tracing::error!("h264::encoder exit err {err} {err:?}"),
             }
         }
     });
@@ -199,7 +199,7 @@ unsafe fn hardware(
     transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
 
     scopeguard::defer! {
-        log::debug!("h264 encoder going down");
+        tracing::debug!("h264 encoder going down");
     };
 
     // TODO(emily): Consider
@@ -213,7 +213,7 @@ unsafe fn hardware(
         let event = event_gen.GetEvent(MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS(0))?;
         let event_type = event.GetType()?;
 
-        // log::info!("encoder event {event_type}");
+        // tracing::info!("encoder event {event_type}");
 
         match event_type {
             601 => {
@@ -267,11 +267,11 @@ unsafe fn hardware(
                 sample.SetSampleTime(time.hns())?;
                 sample.SetSampleDuration(10_000_000 / target_framerate as i64)?;
 
-                // log::info!("made sample");
+                // tracing::info!("made sample");
 
                 transform.ProcessInput(input_stream_id, &sample, 0)?;
 
-                // log::info!("process input");
+                // tracing::info!("process input");
             }
 
             // METransformHaveOutput
@@ -308,7 +308,7 @@ unsafe fn hardware(
                         };
 
                         let sequence_header = if let crate::FrameIsKeyframe::Yes = is_keyframe {
-                            // log::info!("keyframe!");
+                            // tracing::info!("keyframe!");
                             let output_type = transform.GetOutputCurrentType(output_stream_id)?;
                             let extra_data_size =
                                 output_type.GetBlobSize(&MF_MT_MPEG_SEQUENCE_HEADER)? as usize;
@@ -326,7 +326,7 @@ unsafe fn hardware(
                             None
                         };
 
-                        // log::info!("is_keyframe {is_keyframe:?}");
+                        // tracing::info!("is_keyframe {is_keyframe:?}");
 
                         // let is_keyframe = sample.GetUINT32(&MFSampleExtension_CleanPoint)? == 1;
                         // let is_keyframe = false;
@@ -335,7 +335,7 @@ unsafe fn hardware(
                                 Ok(sample_time) => sample_time,
                                 Err(_err) => {
                                     // No sample time, but thats fine! we can just throw this sample
-                                    log::info!("throwing encoder output sample with no sample time attached");
+                                    tracing::info!("throwing encoder output sample with no sample time attached");
                                     return Ok(());
                                 }
                             };
@@ -355,13 +355,13 @@ unsafe fn hardware(
                     }
 
                     Err(err) => {
-                        log::info!("encoder err {err}");
+                        tracing::info!("encoder err {err}");
                     }
                 }
             }
 
             _ => {
-                log::warn!("unknown event {event_type}")
+                tracing::warn!("unknown event {event_type}")
             }
         }
     }
@@ -472,7 +472,7 @@ unsafe fn software(
                             );
 
                             sequence_header = if let crate::FrameIsKeyframe::Yes = is_keyframe {
-                                // log::info!("keyframe!");
+                                // tracing::info!("keyframe!");
                                 let output_type =
                                     transform.GetOutputCurrentType(output_stream_id)?;
                                 let extra_data_size =
@@ -517,11 +517,11 @@ unsafe fn software(
                     match process_output().map_err(|err| err.code()) {
                         Ok(_) => {}
                         Err(MF_E_TRANSFORM_NEED_MORE_INPUT) => {
-                            log::debug!("need more input");
+                            tracing::debug!("need more input");
                             break;
                         }
                         Err(MF_E_TRANSFORM_STREAM_CHANGE) => {
-                            log::warn!("stream change");
+                            tracing::warn!("stream change");
 
                             {
                                 for i in 0.. {
@@ -546,7 +546,9 @@ unsafe fn software(
                     }
                 },
                 Err(MF_E_NOTACCEPTING) => {
-                    log::warn!("encoder is not accepting frames something has gone horribly wrong")
+                    tracing::warn!(
+                        "encoder is not accepting frames something has gone horribly wrong"
+                    )
                 }
                 Err(err) => todo!("No idea what to do with {err}"),
             }

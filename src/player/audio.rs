@@ -170,12 +170,12 @@ impl Inner {
             PlayerControl::Sink(reader) => {
                 self.reset_sink().await;
                 let source = reader.periodic_access(std::time::Duration::from_millis(1000), |_r| {
-                    // log::debug!("!!!! player periodic access");
+                    // tracing::debug!("!!!! player periodic access");
                 });
 
                 let sink = self.sink().await;
                 sink.append(source);
-                log::debug!("!!! playing source");
+                tracing::debug!("!!! playing source");
                 sink.play();
             }
             PlayerControl::Volume(volume) => {

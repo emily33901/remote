@@ -120,8 +120,8 @@ pub fn file_sink(
         .await
         .unwrap()
         {
-            Ok(_ok) => log::debug!("file_sink died ok"),
-            Err(err) => log::error!("file_sink died with error {err}"),
+            Ok(_ok) => tracing::debug!("file_sink died ok"),
+            Err(err) => tracing::error!("file_sink died with error {err}"),
         };
     });
 

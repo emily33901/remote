@@ -1,4 +1,4 @@
-use eyre::Result;
+use eyre::{eyre, Result};
 use tokio::sync::{mpsc, mpsc::error::TryRecvError};
 
 use windows::{
@@ -46,6 +46,7 @@ fn create_window(name: &str) -> Result<HWND> {
         let instance = GetModuleHandleA(None)?;
         debug_assert!(instance.0 != 0);
 
+        // TODO(emily): Don't leak this string
         let name = format!("remote-{name}");
         let window_class = windows::core::PCSTR(name.as_ptr());
 
@@ -78,6 +79,7 @@ fn create_window(name: &str) -> Result<HWND> {
             None,
         );
 
+        std::mem::forget(name);
         // ShowWindow(window_handle, SW_SHOW);
 
         Ok(window_handle)
@@ -341,17 +343,32 @@ pub(crate) fn sink(
                 let texture_lum_view = texture_lum_view.unwrap();
                 let texture_chrom_view = texture_chrom_view.unwrap();
 
+                let mut ticks_ticks = None;
+                let mut ticks_time = None;
+
                 loop {
-                    match rx.try_recv() {
-                        Ok((frame, time)) => {
-                            copy_texture(&texture, &frame, None)?;
-                        }
-                        Err(TryRecvError::Empty) => {
-                            //break
-                        }
-                        Err(TryRecvError::Disconnected) => {
-                            log::error!("player disconnected");
-                            Err(TryRecvError::Disconnected)?
+                    {
+                        let mut last_texture = None;
+                        loop {
+                            match rx.try_recv() {
+                                Ok((frame, time)) => {
+                                    if let None = ticks_time {
+                                        ticks_ticks = Some(time.duration());
+                                        ticks_time = Some(std::time::SystemTime::now());
+                                    }
+                                    last_texture = Some((frame, time));
+                                }
+                                Err(TryRecvError::Empty) => {
+                                    if let Some((frame, time)) = last_texture {
+                                        copy_texture(&texture, &frame, None)?;
+                                    }
+                                    break;
+                                }
+                                Err(TryRecvError::Disconnected) => {
+                                    tracing::error!("player disconnected");
+                                    Err(TryRecvError::Disconnected)?
+                                }
+                            }
                         }
                     }
 
@@ -400,7 +417,7 @@ pub(crate) fn sink(
                         match swap_chain.Present(1, 0) {
                             S_OK => {}
                             err => {
-                                log::debug!("Failed present {err}")
+                                tracing::debug!("Failed present {err}")
                             }
                         }
                     };
@@ -411,8 +428,8 @@ pub(crate) fn sink(
             .await
             .unwrap()
             {
-                Ok(_ok) => log::warn!("player sink down ok"),
-                Err(err) => log::error!("player sink down error {err}"),
+                Ok(_ok) => tracing::warn!("player sink down ok"),
+                Err(err) => tracing::error!("player sink down error {err}"),
             };
         }
     });

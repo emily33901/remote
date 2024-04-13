@@ -1,6 +1,8 @@
 mod openh264;
 mod windows;
 
+use std::str::FromStr;
+
 use ::windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 use serde::Deserialize;
 use serde::Serialize;
@@ -26,6 +28,7 @@ pub enum EncoderEvent {
     Data(VideoBuffer),
 }
 
+#[derive(Clone, Copy)]
 pub enum Encoder {
     MediaFoundation,
     X264,
@@ -48,6 +51,18 @@ impl Encoder {
             Encoder::OpenH264 => {
                 openh264::h264_encoder(width, height, target_framerate, target_bitrate).await
             }
+        }
+    }
+}
+
+impl FromStr for Encoder {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "media-foundation" | "MediaFoundation" => Ok(Self::MediaFoundation),
+            "open-h264" | "OpenH264" => Ok(Self::OpenH264),
+            _ => Err(()),
         }
     }
 }

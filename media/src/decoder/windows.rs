@@ -74,7 +74,7 @@ pub async fn h264_decoder(
                 let transform = match find_decoder(true) {
                     Ok(decoder) => decoder,
                     Err(err) => {
-                        log::warn!("unable to find a hardware h264 decoder {err}, falling back to a software encoder");
+                        tracing::warn!("unable to find a hardware h264 decoder {err}, falling back to a software encoder");
                         find_decoder(false)?
                     }
                 };
@@ -163,8 +163,8 @@ pub async fn h264_decoder(
             .await
             .unwrap()
             {
-                Ok(_) => log::warn!("h264::decoder exit Ok"),
-                Err(err) => log::error!("h264::decoder exit err {err} {err:?}"),
+                Ok(_) => tracing::warn!("h264::decoder exit Ok"),
+                Err(err) => tracing::error!("h264::decoder exit err {err} {err:?}"),
             }
         }
     });
@@ -240,8 +240,6 @@ unsafe fn hardware(
                     let sample = output_buffers[0].pSample.take().unwrap();
                     let timestamp = unsafe { sample.GetSampleTime()? };
 
-                    log::debug!("decoder timestamp was {timestamp}");
-
                     let media_buffer = unsafe { sample.GetBufferByIndex(0) }?;
                     let dxgi_buffer: IMFDXGIBuffer = media_buffer.cast()?;
 
@@ -259,7 +257,7 @@ unsafe fn hardware(
                     Ok(ok)
                 }
                 Err(err) => {
-                    // log::warn!("output flags {}", output_buffers[0].dwStatus);
+                    // tracing::warn!("output flags {}", output_buffers[0].dwStatus);
                     Err(err)
                 }
             }
@@ -272,15 +270,15 @@ unsafe fn hardware(
             Ok(_) => loop {
                 match process_output().map_err(|err| err.code()) {
                     Ok(_) => {
-                        // log::info!("process output ok");
+                        // tracing::info!("process output ok");
                         // break;
                     }
                     Err(MF_E_TRANSFORM_NEED_MORE_INPUT) => {
-                        log::debug!("need more input");
+                        tracing::debug!("need more input");
                         break;
                     }
                     Err(MF_E_TRANSFORM_STREAM_CHANGE) => {
-                        log::warn!("stream change");
+                        tracing::warn!("stream change");
 
                         {
                             for i in 0.. {
@@ -305,7 +303,7 @@ unsafe fn hardware(
                 };
             },
             Err(MF_E_NOTACCEPTING) => {
-                log::warn!("decoder is not accepting frames something has gone horribly wrong")
+                tracing::warn!("decoder is not accepting frames something has gone horribly wrong")
             }
             Err(err) => todo!("No idea what to do with {err}"),
         }
@@ -418,7 +416,7 @@ unsafe fn software(
                     Ok(ok)
                 }
                 Err(err) => {
-                    // log::warn!("output flags {}", output_buffers[0].dwStatus);
+                    // tracing::warn!("output flags {}", output_buffers[0].dwStatus);
                     Err(err)
                 }
             }
@@ -431,15 +429,15 @@ unsafe fn software(
             Ok(_) => loop {
                 match process_output().map_err(|err| err.code()) {
                     Ok(_) => {
-                        // log::info!("process output ok");
+                        // tracing::info!("process output ok");
                         // break;
                     }
                     Err(MF_E_TRANSFORM_NEED_MORE_INPUT) => {
-                        log::debug!("need more input");
+                        tracing::debug!("need more input");
                         break;
                     }
                     Err(MF_E_TRANSFORM_STREAM_CHANGE) => {
-                        log::warn!("stream change");
+                        tracing::warn!("stream change");
 
                         {
                             for i in 0.. {
@@ -462,7 +460,7 @@ unsafe fn software(
                 };
             },
             Err(MF_E_NOTACCEPTING) => {
-                log::warn!("decoder is not accepting frames something has gone horribly wrong")
+                tracing::warn!("decoder is not accepting frames something has gone horribly wrong")
             }
             Err(err) => todo!("No idea what to do with {err}"),
         }

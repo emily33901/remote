@@ -48,7 +48,7 @@ pub fn initialize_panic_handler() -> Result<()> {
         }
 
         // let msg = format!("{}", panic_hook.panic_report(panic_info));
-        // log::error!("Error: {}", strip_ansi_escapes::strip_str(msg));
+        // tracing::error!("Error: {}", strip_ansi_escapes::strip_str(msg));
 
         #[cfg(debug_assertions)]
         {

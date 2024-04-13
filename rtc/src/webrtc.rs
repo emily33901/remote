@@ -47,7 +47,7 @@ impl PeerConnection for WebrtcRsPeerConnection {
         // TODO(emily): I feel like this is a little silly.
         if controlling {
             let offer = self.inner.create_offer(None).await?;
-            log::debug!("made offer {offer:?}");
+            tracing::debug!("made offer {offer:?}");
             self.inner.set_local_description(offer).await?;
         }
 

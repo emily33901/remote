@@ -31,7 +31,7 @@ pub async fn stream() -> mpsc::Receiver<(ClientId, TelemetryEvent)> {
                     {
                         Ok(ok) => {}
                         Err(err) => {
-                            log::warn!("client {id} went down {}", err);
+                            tracing::warn!("client {id} went down {}", err);
                         }
                     }
                 }

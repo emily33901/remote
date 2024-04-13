@@ -62,7 +62,10 @@ pub(crate) async fn rtc_peer(
     // Prepare the configuration
     let config = RTCConfiguration {
         ice_servers: vec![RTCIceServer {
-            urls: vec!["stun:stun.l.google.com:19302".to_owned()],
+            urls: vec![
+                "stun:stun.l.google.com:19302".to_owned(),
+                "stun:stun.cloudflare.com:3478".to_owned(),
+            ],
             ..Default::default()
         }],
         ..Default::default()
@@ -78,13 +81,13 @@ pub(crate) async fn rtc_peer(
         Box::new(move |s: RTCPeerConnectionState| {
             let event_tx = event_tx.clone();
 
-            log::debug!("Peer Connection State has changed: {s}");
+            tracing::debug!("Peer Connection State has changed: {s}");
 
             if s == RTCPeerConnectionState::Failed {
                 // Wait until PeerConnection has had no network activity for 30 seconds or another failure. It may be reconnected using an ICE Restart.
                 // Use webrtc.PeerConnectionStateDisconnected if you are interested in detecting faster timeout.
                 // Note that the PeerConnection may come back from PeerConnectionStateDisconnected.
-                log::error!("Peer Connection has gone to failed exiting");
+                tracing::error!("Peer Connection has gone to failed exiting");
             }
 
             Box::pin(async move {
@@ -159,7 +162,9 @@ pub(crate) async fn rtc_peer(
                                     .await
                                     .unwrap();
                             } else {
-                                log::debug!("storing candidate until remote description arrives");
+                                tracing::debug!(
+                                    "storing candidate until remote description arrives"
+                                );
                                 pending_candidates_tx.send(candidate).await.unwrap();
                             }
                         }
@@ -181,7 +186,7 @@ pub(crate) async fn rtc_peer(
                             peer_connection.set_local_description(answer).await.unwrap();
 
                             while let Ok(candidate) = pending_candidates_rx.try_recv() {
-                                log::debug!("adding stored candidate");
+                                tracing::debug!("adding stored candidate");
                                 peer_connection
                                     .add_ice_candidate(RTCIceCandidateInit {
                                         candidate,
@@ -200,7 +205,7 @@ pub(crate) async fn rtc_peer(
                                 .unwrap();
 
                             while let Ok(candidate) = pending_candidates_rx.try_recv() {
-                                log::debug!("adding stored candidate");
+                                tracing::debug!("adding stored candidate");
                                 peer_connection
                                     .add_ice_candidate(RTCIceCandidateInit {
                                         candidate,

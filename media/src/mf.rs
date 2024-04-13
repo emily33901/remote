@@ -1,4 +1,3 @@
-
 use std::mem::MaybeUninit;
 
 use windows::{
@@ -60,7 +59,7 @@ pub(crate) fn debug_video_format(typ: &IMFMediaType) -> Result<()> {
     let denominator = fps_num_denom & 0xFFFF_FFFF;
     let fps = (numerator as f32) / (denominator as f32);
 
-    log::info!("mf::debug_video_format: {width}x{height} @ {fps} fps");
+    tracing::info!("mf::debug_video_format: {width}x{height} @ {fps} fps");
 
     Ok(())
 }

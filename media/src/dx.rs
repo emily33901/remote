@@ -272,7 +272,7 @@ impl<'a> TextureBuilder<'a> {
             Ok(texture) => Ok(texture),
             Err(err) => match err.code() {
                 DXGI_ERROR_DEVICE_REMOVED => {
-                    log::error!("device removed while trying to get texture {:?}", unsafe {
+                    tracing::error!("device removed while trying to get texture {:?}", unsafe {
                         self.device.GetDeviceRemovedReason()
                     });
                     Err(err)

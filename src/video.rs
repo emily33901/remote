@@ -70,11 +70,11 @@ pub(crate) async fn video_channel(
                 Ok(r) => match r {
                     Ok(_) => {}
                     Err(err) => {
-                        log::error!("video channel event error {err}");
+                        tracing::error!("video channel event error {err}");
                     }
                 },
                 Err(err) => {
-                    log::error!("video channel event join error {err}");
+                    tracing::error!("video channel event join error {err}");
                 }
             }
         }
@@ -91,7 +91,7 @@ pub(crate) async fn video_channel(
                             let deadline = std::time::SystemTime::now()
                                 + std::time::Duration::from_millis(100);
                             if let Ok(t) = deadline.elapsed() {
-                                log::warn!(
+                                tracing::warn!(
                                     "throwing expired frame {}ms in the past",
                                     t.as_millis()
                                 );
@@ -110,11 +110,11 @@ pub(crate) async fn video_channel(
                 Ok(r) => match r {
                     Ok(_) => {}
                     Err(err) => {
-                        log::error!("video channel control error {err}");
+                        tracing::error!("video channel control error {err}");
                     }
                 },
                 Err(err) => {
-                    log::error!("video channel control join error {err}");
+                    tracing::error!("video channel control join error {err}");
                 }
             }
         }
@@ -138,11 +138,11 @@ pub(crate) async fn video_channel(
                 Ok(r) => match r {
                     Ok(_) => {}
                     Err(err) => {
-                        log::error!("video channel assembly event error {err}");
+                        tracing::error!("video channel assembly event error {err}");
                     }
                 },
                 Err(err) => {
-                    log::error!("video channel assembly event join error {err}");
+                    tracing::error!("video channel assembly event join error {err}");
                 }
             }
         }
@@ -168,11 +168,11 @@ pub(crate) async fn video_channel(
                 Ok(r) => match r {
                     Ok(_) => {}
                     Err(err) => {
-                        log::error!("video channel chunk event error {err}");
+                        tracing::error!("video channel chunk event error {err}");
                     }
                 },
                 Err(err) => {
-                    log::error!("video channel chunk event join error {err}");
+                    tracing::error!("video channel chunk event join error {err}");
                 }
             }
         }

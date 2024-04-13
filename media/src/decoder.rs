@@ -1,6 +1,8 @@
 mod openh264;
 mod windows;
 
+use std::str::FromStr;
+
 use ::windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 use eyre::Result;
 use tokio::sync::mpsc;
@@ -35,6 +37,18 @@ impl Decoder {
                 openh264::h264_decoder(width, height, target_framerate, target_bitrate).await
                 // openh264::h264_decoder(width, height, target_framerate, target_bitrate).await
             }
+        }
+    }
+}
+
+impl FromStr for Decoder {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "media-foundation" | "MediaFoundation" => Ok(Self::MediaFoundation),
+            "open-h264" | "OpenH264" => Ok(Self::OpenH264),
+            _ => Err(()),
         }
     }
 }

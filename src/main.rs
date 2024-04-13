@@ -1,10 +1,12 @@
 mod audio;
 mod chunk;
+mod config;
 mod logic;
 mod peer;
 mod player;
 mod video;
 
+use crate::config::Config;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::{collections::HashMap, fmt::Display};
@@ -17,6 +19,7 @@ use signal::SignallingControl;
 use signal::{ConnectionId, PeerId};
 
 use tokio::sync::{mpsc, Mutex};
+use tracing::level_filters::LevelFilter;
 use uuid::Uuid;
 
 const ARBITRARY_CHANNEL_LIMIT: usize = 10;
@@ -79,42 +82,14 @@ async fn main() -> Result<()> {
 
     dotenv::dotenv()?;
 
-    fern::Dispatch::new()
-        // Perform allocation-free log formatting
-        .format(|out, message, record| {
-            out.finish(format_args!(
-                "[{}] [{}] {}",
-                record.level(),
-                record.target(),
-                message
-            ))
-        })
-        // Add blanket level filter -
-        .level(log::LevelFilter::from_str(&std::env::var("log_level")?)?)
-        // .level_for("remote", log::LevelFilter::Debug)
-        .level_for("webrtc_sctp::association", log::LevelFilter::Info)
-        .level_for("webrtc_sctp::stream", log::LevelFilter::Info)
-        .level_for("webrtc_sctp", log::LevelFilter::Info)
-        .level_for(
-            "webrtc_sctp::association::association_internal",
-            log::LevelFilter::Info,
-        )
-        // - and per-module overrides
-        // .level_for("hyper", log::LevelFilter::Info)
-        // Output to stdout, files, and other Dispatch configurations
-        .chain(std::io::stderr())
-        // .chain(
-        //     std::fs::OpenOptions::new()
-        //         .write(true)
-        //         .create(true)
-        //         .append(false)
-        //         .open(&format!("{}.log", args.name))?,
-        // )
-        // .chain(fern::log_file()?)
-        // Apply globally
-        .apply()?;
+    let config = Config::load();
 
-    log::info!("remote - '{}' '{}'", args.command, args.address);
+    tracing_subscriber::fmt::fmt()
+        .with_max_level(LevelFilter::DEBUG)
+        .pretty()
+        .init();
+
+    tracing::info!(args.command, args.address, "remote");
 
     std::panic::set_hook(Box::new(|info| {
         let backtrace = std::backtrace::Backtrace::capture();
@@ -136,17 +111,12 @@ async fn peer_connected(
     peer_controls: Arc<Mutex<HashMap<PeerId, mpsc::Sender<PeerControl>>>>,
     controlling: bool,
 ) -> Result<()> {
-    let width = u32::from_str(&std::env::var("width")?)?;
-    let height = u32::from_str(&std::env::var("height")?)?;
-    let bitrate = u32::from_str(&std::env::var("bitrate")?)?;
-    let framerate = u32::from_str(&std::env::var("framerate")?)?;
-
-    let api = rtc::Api::from_str(&std::env::var("webrtc_api")?)?;
+    let config = Config::load();
 
     let mut peer_controls = peer_controls.lock().await;
 
     let (control, mut event) = peer::peer(
-        api,
+        config.webrtc_api,
         our_peer_id.clone(),
         their_peer_id.clone(),
         tx.clone(),
@@ -169,11 +139,17 @@ async fn peer_connected(
         .send(player::audio::PlayerControl::Sink(audio_sink_rx))
         .await?;
 
-    let (h264_control, mut h264_event) = media::decoder::Decoder::MediaFoundation
-        .run(width, height, framerate, bitrate)
+    let (h264_control, mut h264_event) = config
+        .decoder_api
+        .run(
+            config.width,
+            config.height,
+            config.framerate,
+            config.bitrate,
+        )
         .await?;
 
-    let video_sink_tx = player::video::sink(width, height, "player-window")?;
+    let video_sink_tx = player::video::sink(config.width, config.height, "player-window")?;
 
     tokio::spawn({
         async move {
@@ -210,12 +186,12 @@ async fn peer_connected(
             while let Some(event) = event.recv().await {
                 match event {
                     peer::PeerEvent::Audio(audio) => {
-                        // log::debug!("peer event audio {}", audio.len());
+                        // tracing::debug!("peer event audio {}", audio.len());
                         audio_sink_tx.send(audio).await.unwrap();
                         // audio_sink_tx.send(audio).await.unwrap();
                     }
                     peer::PeerEvent::Video(video) => {
-                        // log::debug!("peer event video {}", video.data.len());
+                        // tracing::debug!("peer event video {}", video.data.len());
                         h264_control
                             .send(media::decoder::DecoderControl::Data(video.clone()))
                             .await
@@ -231,13 +207,13 @@ async fn peer_connected(
                         //         .await
                         //         .unwrap(),
                         //     _ => {
-                        //         log::info!("!! DONE")
+                        //         tracing::info!("!! DONE")
                         //     }
                         // }
                         // i += 1;
                     }
                     peer::PeerEvent::Error(error) => {
-                        log::warn!("peer event error {error:?}");
+                        tracing::warn!("peer event error {error:?}");
                         break;
                     }
                 }
@@ -249,12 +225,9 @@ async fn peer_connected(
 }
 
 async fn peer(address: &str, produce: &bool) -> Result<()> {
-    telemetry::client::sink().await;
+    let config = Config::load();
 
-    let width = u32::from_str(&std::env::var("width")?)?;
-    let height = u32::from_str(&std::env::var("height")?)?;
-    let bitrate = u32::from_str(&std::env::var("bitrate")?)?;
-    let framerate = u32::from_str(&std::env::var("framerate")?)?;
+    telemetry::client::sink().await;
 
     let (signal_tx, mut signal_rx) = signal::client(address).await?;
 
@@ -276,12 +249,12 @@ async fn peer(address: &str, produce: &bool) -> Result<()> {
             while let Some(event) = signal_rx.recv().await {
                 match event {
                     signal::SignallingEvent::Id(id) => {
-                        log::info!("id {id}");
+                        tracing::info!("id {id}");
                         println!("{id}");
                         *our_peer_id.lock().await = Some(id);
                     }
                     signal::SignallingEvent::ConectionRequest(peer_id, connection_id) => {
-                        log::info!("connection request p:{peer_id} c:{connection_id}");
+                        tracing::info!("connection request p:{peer_id} c:{connection_id}");
                         *last_connection_request.lock().await = Some(connection_id);
                         connection_peer_id
                             .lock()
@@ -289,17 +262,17 @@ async fn peer(address: &str, produce: &bool) -> Result<()> {
                             .insert(connection_id, peer_id);
                     }
                     signal::SignallingEvent::Offer(peer_id, offer) => {
-                        log::info!("offer p:{peer_id} {offer}");
+                        tracing::info!("offer p:{peer_id} {offer}");
                         let peer_controls = peer_controls.lock().await;
                         if let Some(peer_control) = peer_controls.get(&peer_id) {
                             peer_control.send(PeerControl::Offer(offer)).await.unwrap();
                         } else {
-                            log::debug!("got offer for unknown peer {peer_id}");
-                            log::debug!("peer_controls is {:?}", *peer_controls);
+                            tracing::debug!("got offer for unknown peer {peer_id}");
+                            tracing::debug!("peer_controls is {:?}", *peer_controls);
                         }
                     }
                     signal::SignallingEvent::Answer(peer_id, answer) => {
-                        log::info!("answer p:{peer_id} {answer}");
+                        tracing::info!("answer p:{peer_id} {answer}");
                         let peer_controls = peer_controls.lock().await;
                         if let Some(peer_control) = peer_controls.get(&peer_id) {
                             peer_control
@@ -307,12 +280,12 @@ async fn peer(address: &str, produce: &bool) -> Result<()> {
                                 .await
                                 .unwrap();
                         } else {
-                            log::debug!("got answer for unknown peer {peer_id}");
-                            log::debug!("peer_controls is {:?}", *peer_controls);
+                            tracing::debug!("got answer for unknown peer {peer_id}");
+                            tracing::debug!("peer_controls is {:?}", *peer_controls);
                         }
                     }
                     signal::SignallingEvent::IceCandidate(peer_id, ice_candidate) => {
-                        log::info!("ice candidate p:{peer_id} {ice_candidate}");
+                        tracing::info!("ice candidate p:{peer_id} {ice_candidate}");
                         let peer_controls = peer_controls.lock().await;
                         if let Some(peer_control) = peer_controls.get(&peer_id) {
                             peer_control
@@ -320,15 +293,15 @@ async fn peer(address: &str, produce: &bool) -> Result<()> {
                                 .await
                                 .unwrap();
 
-                            log::info!("sent candidate to peer control");
+                            tracing::info!("sent candidate to peer control");
                         } else {
-                            log::debug!("got ice candidate for unknown peer {peer_id}");
-                            log::debug!("peer_controls is {:?}", *peer_controls);
+                            tracing::debug!("got ice candidate for unknown peer {peer_id}");
+                            tracing::debug!("peer_controls is {:?}", *peer_controls);
                         }
                     }
                     signal::SignallingEvent::ConnectionAccepted(peer_id, connection_id) => {
                         // NOTE(emily): We sent the request so we are controlling
-                        log::info!("connection accepted p:{peer_id} c:{connection_id}");
+                        tracing::info!("connection accepted p:{peer_id} c:{connection_id}");
 
                         let our_peer_id = our_peer_id.lock().await.as_ref().unwrap().clone();
 
@@ -343,12 +316,12 @@ async fn peer(address: &str, produce: &bool) -> Result<()> {
                         });
                     }
                     signal::SignallingEvent::Error(error) => {
-                        log::info!("signalling error {error:?}");
+                        tracing::info!("signalling error {error:?}");
                     }
                 }
             }
 
-            log::info!("client going down");
+            tracing::info!("client going down");
         }
     });
 
@@ -360,13 +333,25 @@ async fn peer(address: &str, produce: &bool) -> Result<()> {
             let peer_controls = peer_controls.clone();
             async move {
                 match async move {
-                    let maybe_file = std::env::var("media_filename").ok();
+                    // let maybe_file = std::env::var("media_filename").ok();
 
-                    let (_tx, mut rx) = if let Some(file) = maybe_file {
-                        media::produce::produce(&file, width, height, framerate, bitrate).await?
+                    let (_tx, mut rx) = if let Some(file) = config.media_filename.as_ref() {
+                        media::produce::produce(
+                            config.encoder_api,
+                            file,
+                            config.width,
+                            config.height,
+                            config.framerate,
+                            config.bitrate,
+                        )
+                        .await?
                     } else {
                         media::desktop_duplication::duplicate_desktop(
-                            width, height, framerate, bitrate,
+                            config.encoder_api,
+                            config.width,
+                            config.height,
+                            config.framerate,
+                            config.bitrate,
                         )
                         .await?
                     };
@@ -374,15 +359,15 @@ async fn peer(address: &str, produce: &bool) -> Result<()> {
                     while let Some(event) = rx.recv().await {
                         match event {
                             media::produce::MediaEvent::Audio(audio) => {
-                                log::trace!("produce audio {}", audio.len());
+                                tracing::trace!("produce audio {}", audio.len());
                                 let peer_controls = peer_controls.lock().await;
                                 for (_, control) in peer_controls.iter() {
                                     control.send(PeerControl::Audio(audio.clone())).await?;
                                 }
                             }
                             media::produce::MediaEvent::Video(video) => {
-                                // log::debug!("throwing video");
-                                log::trace!("produce video {}", video.data.len());
+                                // tracing::debug!("throwing video");
+                                tracing::trace!("produce video {}", video.data.len());
                                 let peer_controls = peer_controls.lock().await;
                                 for (_, control) in peer_controls.iter() {
                                     control.send(PeerControl::Video(video.clone())).await?;
@@ -396,10 +381,10 @@ async fn peer(address: &str, produce: &bool) -> Result<()> {
                 .await
                 {
                     Ok(_) => {
-                        log::info!("produce down ok")
+                        tracing::info!("produce down ok")
                     }
                     Err(err) => {
-                        log::error!("produce down err {err}")
+                        tracing::error!("produce down err {err}")
                     }
                 }
 
@@ -439,7 +424,7 @@ async fn peer(address: &str, produce: &bool) -> Result<()> {
                             ))?;
                         }
                         "accept" => {
-                            log::debug!("accept '{arg}'");
+                            tracing::debug!("accept '{arg}'");
                             let connection_id = if arg == "" {
                                 last_connection_request.try_lock().unwrap().unwrap()
                             } else {
@@ -468,7 +453,7 @@ async fn peer(address: &str, produce: &bool) -> Result<()> {
                                         .await
                                         .unwrap();
                                     } else {
-                                        log::debug!("Unknown connection id {connection_id}");
+                                        tracing::debug!("Unknown connection id {connection_id}");
                                     }
                                 }
                             });
@@ -488,7 +473,7 @@ async fn peer(address: &str, produce: &bool) -> Result<()> {
                             std::process::exit(0);
                         }
 
-                        command => log::info!("Unknown command {command}"),
+                        command => tracing::info!("Unknown command {command}"),
                     }
                 }
             }

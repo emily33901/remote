@@ -62,7 +62,7 @@ pub(crate) async fn peer(
                 let _peer_connection = peer_connection;
 
                 while let Some(control) = control_rx.recv().await {
-                    // log::debug!("peer control {control:?}");
+                    // tracing::debug!("peer control {control:?}");
                     match control {
                         PeerControl::Offer(offer) => {
                             rtc_control.send(rtc::RtcPeerControl::Offer(offer)).await?;
@@ -88,7 +88,7 @@ pub(crate) async fn peer(
                                 .await?;
                         }
                         PeerControl::Die => {
-                            log::info!("peer control got die");
+                            tracing::info!("peer control got die");
                             break;
                         }
                     }
@@ -99,14 +99,14 @@ pub(crate) async fn peer(
             {
                 Ok(r) => match r {
                     Ok(_) => {
-                        log::info!("peer control done")
+                        tracing::info!("peer control done")
                     }
                     Err(err) => {
-                        log::error!("peer control error {err}");
+                        tracing::error!("peer control error {err}");
                     }
                 },
                 Err(err) => {
-                    log::error!("peer control join error {err}");
+                    tracing::error!("peer control join error {err}");
                 }
             }
         }
@@ -131,11 +131,11 @@ pub(crate) async fn peer(
                 Ok(r) => match r {
                     Ok(_) => {}
                     Err(err) => {
-                        log::error!("audio rx error {err}");
+                        tracing::error!("audio rx error {err}");
                     }
                 },
                 Err(err) => {
-                    log::error!("audio event join error {err}");
+                    tracing::error!("audio event join error {err}");
                 }
             }
         }
@@ -160,11 +160,11 @@ pub(crate) async fn peer(
                 Ok(r) => match r {
                     Ok(_) => {}
                     Err(err) => {
-                        log::error!("video rx error {err}");
+                        tracing::error!("video rx error {err}");
                     }
                 },
                 Err(err) => {
-                    log::error!("video event join error {err}");
+                    tracing::error!("video event join error {err}");
                 }
             }
         }
@@ -187,7 +187,7 @@ pub(crate) async fn peer(
                                 .await?;
                         }
                         rtc::RtcPeerEvent::StateChange(state_change) => {
-                            log::info!("peer state change: {state_change:?}");
+                            tracing::info!("peer state change: {state_change:?}");
                             if let rtc::RtcPeerState::Failed = state_change {
                                 event_tx.send(PeerEvent::Error(PeerError::Unknown)).await?;
                                 break;
@@ -213,11 +213,11 @@ pub(crate) async fn peer(
                 Ok(r) => match r {
                     Ok(_) => {}
                     Err(err) => {
-                        log::error!("rtc_event error {err}");
+                        tracing::error!("rtc_event error {err}");
                     }
                 },
                 Err(err) => {
-                    log::error!("rtc_event join error {err}");
+                    tracing::error!("rtc_event join error {err}");
                 }
             }
         }

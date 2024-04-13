@@ -277,7 +277,7 @@ impl Home {
                     (0.0, 0.0),
                     |(total_count, total_time), ((last, last_time), (count, time))| {
                         (
-                            total_count + ((count - last) as f32 / (1000.0 * 1000.0)),
+                            total_count + ((count - last) as f32),
                             total_time + (time.duration_since(*last_time).as_secs_f32()),
                         )
                     },
@@ -297,7 +297,7 @@ impl Home {
                         "NaN".into()
                     },
                     if let Some(rolling_avg) = rolling_avg {
-                        format!("{:>4.2}", rolling_avg)
+                        format!("{:>4.2}", rolling_avg / (1000.0 * 1000.0))
                     } else {
                         "NaN".into()
                     },
@@ -310,7 +310,7 @@ impl Home {
             }
             telemetry::Unit::Fps => {
                 format!(
-                    "{:>6}fps ({:>6}fps avg) {:8.2}fs",
+                    "{:>6}fps ({:>6}fps avg) {:8.2}f",
                     if let Some(recent_avg) = recent_avg {
                         format!("{:>4.2}", recent_avg)
                     } else {

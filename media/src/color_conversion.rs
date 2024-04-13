@@ -169,7 +169,7 @@ pub(crate) async fn converter(
                     // do this after getting the sample from the media resource
                     // if let Ok(d) = time.elapsed() {
                     //     if d > std::time::Duration::from_millis(10) {
-                    //         log::info!("cc throwing expired frame (before input) {}ms", d.as_millis());
+                    //         tracing::info!("cc throwing expired frame (before input) {}ms", d.as_millis());
                     //         continue;
                     //     }
                     // }
@@ -207,7 +207,7 @@ pub(crate) async fn converter(
                                 // do this after getting the sample from the media resource
                                 // if let Ok(d) = time.elapsed() {
                                 //     if d > std::time::Duration::from_millis(10) {
-                                //         log::info!("cc throwing expired frame {}ms", d.as_millis());
+                                //         tracing::info!("cc throwing expired frame {}ms", d.as_millis());
                                 //         return Ok(None);
                                 //     }
                                 // }
@@ -228,7 +228,7 @@ pub(crate) async fn converter(
                                 Ok(Some((output_texture, crate::Timestamp::new_hns(timestamp_hns))))
                             }
                             Err(err) => {
-                                // log::warn!("output flags {}", output_buffers[0].dwStatus);
+                                // tracing::warn!("output flags {}", output_buffers[0].dwStatus);
                                 Err(err)
                             }
                         }
@@ -238,37 +238,37 @@ pub(crate) async fn converter(
                         .ProcessInput(0, &sample, 0)
                         .map_err(|err| err.code());
 
-                    log::trace!("cc process input {result:?}");
+                    tracing::trace!("cc process input {result:?}");
 
                     match result
                     {
                         Ok(_) | Err(MF_E_NOTACCEPTING) => {
                             let output_result = process_output().map_err(|err| err.code());
 
-                            log::trace!("cc process output {output_result:?}");
+                            tracing::trace!("cc process output {output_result:?}");
 
                             match output_result {
                                 Ok(Some((output_texture, timestamp))) => {
                                     match event_tx.try_send(ConvertEvent::Frame(output_texture.clone(), timestamp)) {
                                         Ok(_) => {},
                                         Err(err) => match err {
-                                            mpsc::error::TrySendError::Full(_) => log::info!("cc backpressured"),
-                                            mpsc::error::TrySendError::Closed(_) => { log::warn!("cc event closed"); return Err(eyre!("cc event closed")); },
+                                            mpsc::error::TrySendError::Full(_) => tracing::info!("cc backpressured"),
+                                            mpsc::error::TrySendError::Closed(_) => { tracing::warn!("cc event closed"); return Err(eyre!("cc event closed")); },
                                         },
                                     }
                                 }
                                 Ok(None) => {
                                     // Continue trying to get more frames
-                                    log::trace!("cc trying to get more frames")
+                                    tracing::trace!("cc trying to get more frames")
                                 }
                                 Err(MF_E_TRANSFORM_NEED_MORE_INPUT) => {
-                                    log::trace!("cc needs more input");
+                                    tracing::trace!("cc needs more input");
                                 }
                                 Err(MF_E_TRANSFORM_STREAM_CHANGE) => {
                                     unreachable!("Not expecting a stream format change");
                                 }
                                 Err(err) => {
-                                    // log::error!("No idea what to do with {err}");
+                                    // tracing::error!("No idea what to do with {err}");
                                     // break;
                                     todo!("No idea what to do with {err}")
                                 }
@@ -283,8 +283,8 @@ pub(crate) async fn converter(
             .await
             .unwrap()
             {
-                Ok(_) => log::warn!("cc exit Ok"),
-                Err(err) => log::error!("cc exit err {err} {err:?}"),
+                Ok(_) => tracing::warn!("cc exit Ok"),
+                Err(err) => tracing::error!("cc exit err {err} {err:?}"),
             }
         }
     });

@@ -100,7 +100,7 @@ pub async fn h264_decoder(
 
                 for unit in nal_units(&buffer.data) {
                     if let Ok(Some(output)) = decoder.decode(unit) {
-                        log::debug!("decoder timestamp was {:?}", output.timestamp());
+                        tracing::debug!("decoder timestamp was {:?}", output.timestamp());
 
                         staging_texture.map_mut(&context, |data, dest_stride| {
                             let (y_stride, u_stride, v_stride) = output.strides_yuv();
@@ -149,8 +149,8 @@ pub async fn h264_decoder(
         .await
         .unwrap()
         {
-            Ok(_) => log::info!("h264 decoder down ok"),
-            Err(err) => log::warn!("h264 encoder down err {err} {err:?}"),
+            Ok(_) => tracing::info!("h264 decoder down ok"),
+            Err(err) => tracing::warn!("h264 encoder down err {err} {err:?}"),
         }
     });
 

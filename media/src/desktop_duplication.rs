@@ -85,7 +85,7 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
                 };
 
                 for mode in modes {
-                    // log::info!("mode {mode:?}");
+                    // tracing::info!("mode {mode:?}");
                     if best_mode.is_none() {
                         best_mode = Some(mode);
                         continue;
@@ -106,14 +106,14 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
                 }
             }
 
-            log::info!("best mode would be {best_mode:?}");
+            tracing::info!("best mode would be {best_mode:?}");
 
             let duplicated = unsafe { primary.DuplicateOutput(&device) }?;
 
             let mut desc = DXGI_OUTDUPL_DESC::default();
             unsafe { duplicated.GetDesc(&mut desc) };
 
-            log::info!("output desc {desc:?}");
+            tracing::info!("output desc {desc:?}");
 
             let (device_width, device_height) = (desc.ModeDesc.Width, desc.ModeDesc.Height);
 
@@ -231,7 +231,7 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
                             }
                             _ => {}
                         }
-                        log::error!("desktop duplication error: {err} {err:?}");
+                        tracing::error!("desktop duplication error: {err} {err:?}");
                         break;
                     }
                 }
@@ -242,8 +242,8 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
         .await
         .unwrap()
         {
-            Ok(_) => log::warn!("media::desktop_duplication::desktop_duplication exit Ok"),
-            Err(err) => log::error!(
+            Ok(_) => tracing::warn!("media::desktop_duplication::desktop_duplication exit Ok"),
+            Err(err) => tracing::error!(
                 "media::desktop_duplication::desktop_duplication exit err {err} {err:?}"
             ),
         }
@@ -253,6 +253,7 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
 }
 
 pub async fn duplicate_desktop(
+    encoder_api: Encoder,
     width: u32,
     height: u32,
     framerate: u32,
@@ -261,9 +262,7 @@ pub async fn duplicate_desktop(
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
     let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
-    let (h264_control, mut h264_event) = Encoder::MediaFoundation
-        .run(width, height, framerate, bitrate)
-        .await?;
+    let (h264_control, mut h264_event) = encoder_api.run(width, height, framerate, bitrate).await?;
 
     let (convert_control, mut convert_event) = color_conversion::converter(
         width,
@@ -295,7 +294,7 @@ pub async fn duplicate_desktop(
         .await
         {
             Ok(_) => {}
-            Err(err) => log::error!("dd event err {err}"),
+            Err(err) => tracing::error!("dd event err {err}"),
         }
     });
 
@@ -315,7 +314,7 @@ pub async fn duplicate_desktop(
         .await
         {
             Ok(_) => {}
-            Err(err) => log::error!("convert event err {err}"),
+            Err(err) => tracing::error!("convert event err {err}"),
         }
     });
 
@@ -336,7 +335,7 @@ pub async fn duplicate_desktop(
             .await
             {
                 Ok(_) => {}
-                Err(err) => log::error!("encoder event err {err}"),
+                Err(err) => tracing::error!("encoder event err {err}"),
             }
         }
     });

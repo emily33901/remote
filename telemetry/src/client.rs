@@ -60,7 +60,7 @@ pub async fn watch_channel<T: Send + 'static>(sender: &mpsc::Sender<T>, name: &s
             {
                 Ok(ok) => {}
                 Err(err) => {
-                    log::error!("watch_channel failed {err}");
+                    tracing::error!("watch_channel failed {err}");
                 }
             }
         }
@@ -121,7 +121,7 @@ pub async fn watch_counter(counter: &Counter, unit: crate::Unit, name: &str) {
             {
                 Ok(ok) => {}
                 Err(err) => {
-                    log::error!("watch_counter failed {err}");
+                    tracing::error!("watch_counter failed {err}");
                 }
             }
         }
@@ -130,7 +130,7 @@ pub async fn watch_counter(counter: &Counter, unit: crate::Unit, name: &str) {
 
 pub async fn sink() {
     tokio::spawn(async move {
-        log::info!("starting telemetry sink");
+        tracing::info!("starting telemetry sink");
         let (tx, mut rx) = mpsc::channel(100);
         STATS_SINK.set(tx).unwrap();
 
@@ -140,7 +140,7 @@ pub async fn sink() {
             let rx = rx.clone();
             match async move {
                 let stream = tokio::net::TcpStream::connect("[::1]:33901").await?;
-                log::info!("telemetry connected");
+                tracing::info!("telemetry connected");
                 let mut bincode_writer = AsyncBincodeWriter::from(stream).for_async();
 
                 while let Some(event) = rx.lock().await.recv().await {
@@ -153,7 +153,7 @@ pub async fn sink() {
             {
                 Ok(ok) => {}
                 Err(err) => {
-                    log::error!("telemetry sink went down {err}");
+                    tracing::error!("telemetry sink went down {err}");
                 }
             }
         }

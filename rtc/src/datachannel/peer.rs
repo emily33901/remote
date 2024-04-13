@@ -60,7 +60,7 @@ impl DataChannelHandler for DCH {
                     .await
                     .take()
                     .expect("expected channel control");
-                log::debug!("!! took channel {our_label} control");
+                tracing::debug!("!! took channel {our_label} control");
                 let mut more_can_be_sent = more_can_be_sent_holder
                     .lock()
                     .await
@@ -102,7 +102,9 @@ impl DataChannelHandler for DCH {
                             {
                                 Ok(c) => channel = c,
                                 Err(err) => {
-                                    log::error!("failed to send data to channel, assuming dead");
+                                    tracing::error!(
+                                        "failed to send data to channel, assuming dead"
+                                    );
                                     break;
                                 }
                             }
@@ -112,7 +114,7 @@ impl DataChannelHandler for DCH {
                             //         sent_counter.update(len);
                             //     }
                             //     Err(err) => {
-                            //         log::warn!("channel {our_label} unable to send {err}");
+                            //         tracing::warn!("channel {our_label} unable to send {err}");
                             //     }
                             // }
 
@@ -122,7 +124,7 @@ impl DataChannelHandler for DCH {
 
                             if buffered_total > MAX_BUFFERED_AMOUNT {
                                 // Wait for the signal that more can be sent
-                                log::warn!(
+                                tracing::warn!(
                                     "!! {our_label} buffered_total too large, waiting for low mark"
                                 );
                                 let _ = more_can_be_sent.recv().await;
@@ -141,11 +143,11 @@ impl DataChannelHandler for DCH {
     }
 
     fn on_closed(&mut self) {
-        log::warn!("channel {} closed", self.our_label);
+        tracing::warn!("channel {} closed", self.our_label);
     }
 
     fn on_error(&mut self, err: &str) {
-        log::error!("channel {} closed", self.our_label);
+        tracing::error!("channel {} closed", self.our_label);
     }
 
     fn on_message(&mut self, msg: &[u8]) {
@@ -157,7 +159,7 @@ impl DataChannelHandler for DCH {
     }
 
     fn on_buffered_amount_low(&mut self) {
-        log::warn!("channel {} buffered amount low", self.our_label);
+        tracing::warn!("channel {} buffered amount low", self.our_label);
 
         self.runtime.spawn({
             let more_can_be_sent_tx = self.more_can_be_sent_tx.clone();
@@ -168,7 +170,7 @@ impl DataChannelHandler for DCH {
     }
 
     fn on_available(&mut self) {
-        // log::warn!("channel {} buffered amount low", self.our_label);
+        // tracing::warn!("channel {} buffered amount low", self.our_label);
     }
 }
 
