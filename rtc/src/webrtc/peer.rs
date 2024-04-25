@@ -72,25 +72,31 @@ pub(crate) async fn rtc_peer(
     };
 
     // Create a new RTCPeerConnection
-    let peer_connection = Arc::new(api.new_peer_connection(config).await?);
+    let peer_connection = Arc::new(super::RTCPeerConnectionHolder(
+        api.new_peer_connection(config).await?,
+    ));
 
     // Set the handler for Peer connection state
     // This will notify you when the peer has connected/disconnected
     peer_connection.on_peer_connection_state_change({
         let event_tx = event_tx.clone();
+        let control_tx = control_tx.downgrade();
         Box::new(move |s: RTCPeerConnectionState| {
             let event_tx = event_tx.clone();
+            let control_tx = control_tx.clone();
 
             tracing::debug!("Peer Connection State has changed: {s}");
 
-            if s == RTCPeerConnectionState::Failed {
-                // Wait until PeerConnection has had no network activity for 30 seconds or another failure. It may be reconnected using an ICE Restart.
-                // Use webrtc.PeerConnectionStateDisconnected if you are interested in detecting faster timeout.
-                // Note that the PeerConnection may come back from PeerConnectionStateDisconnected.
-                tracing::error!("Peer Connection has gone to failed exiting");
-            }
-
             Box::pin(async move {
+                if s == RTCPeerConnectionState::Failed {
+                    // Wait until PeerConnection has had no network activity for 30 seconds or another failure. It may be reconnected using an ICE Restart.
+                    // Use webrtc.PeerConnectionStateDisconnected if you are interested in detecting faster timeout.
+                    // Note that the PeerConnection may come back from PeerConnectionStateDisconnected.
+                    if let Some(control_tx) = control_tx.upgrade() {
+                        let _ = control_tx.send(RtcPeerControl::Failed).await;
+                    }
+                }
+
                 event_tx
                     .send(RtcPeerEvent::StateChange(match s {
                         RTCPeerConnectionState::Unspecified => todo!(),
@@ -109,18 +115,20 @@ pub(crate) async fn rtc_peer(
 
     peer_connection.on_signaling_state_change({
         let event_tx = event_tx.clone();
-        let peer_connection = peer_connection.clone();
+        let peer_connection = Arc::downgrade(&peer_connection);
         Box::new(move |s: RTCSignalingState| {
             let event_tx = event_tx.clone();
             let peer_connection = peer_connection.clone();
 
             Box::pin(async move {
-                if s == RTCSignalingState::HaveLocalOffer {
-                    let offer = peer_connection.local_description().await.unwrap();
-                    event_tx
-                        .send(RtcPeerEvent::Offer(offer.sdp.clone()))
-                        .await
-                        .unwrap();
+                if let Some(peer_connection) = peer_connection.upgrade() {
+                    if s == RTCSignalingState::HaveLocalOffer {
+                        let offer = peer_connection.local_description().await.unwrap();
+                        event_tx
+                            .send(RtcPeerEvent::Offer(offer.sdp.clone()))
+                            .await
+                            .unwrap();
+                    }
                 }
             })
         })
@@ -142,84 +150,80 @@ pub(crate) async fn rtc_peer(
     });
 
     tokio::spawn({
-        // TODO(emily): Keep weak here
-        let peer_connection = Arc::downgrade(&peer_connection);
+        let peer_connection = peer_connection.clone();
         let event_tx = event_tx.clone();
         async move {
             let (pending_candidates_tx, mut pending_candidates_rx) =
                 mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
             while let Some(control) = control_rx.recv().await {
-                if let Some(peer_connection) = peer_connection.upgrade() {
-                    match control {
-                        RtcPeerControl::IceCandidate(candidate) => {
-                            if peer_connection.remote_description().await.is_some() {
-                                peer_connection
-                                    .add_ice_candidate(RTCIceCandidateInit {
-                                        candidate: candidate,
-                                        ..Default::default()
-                                    })
-                                    .await
-                                    .unwrap();
-                            } else {
-                                tracing::debug!(
-                                    "storing candidate until remote description arrives"
-                                );
-                                pending_candidates_tx.send(candidate).await.unwrap();
-                            }
-                        }
-                        RtcPeerControl::Offer(offer) => {
+                match control {
+                    RtcPeerControl::IceCandidate(candidate) => {
+                        if peer_connection.remote_description().await.is_some() {
                             peer_connection
-                                .set_remote_description(
-                                    RTCSessionDescription::offer(offer).unwrap(),
-                                )
+                                .add_ice_candidate(RTCIceCandidateInit {
+                                    candidate: candidate,
+                                    ..Default::default()
+                                })
                                 .await
                                 .unwrap();
-
-                            let answer = peer_connection.create_answer(None).await.unwrap();
-
-                            event_tx
-                                .send(RtcPeerEvent::Answer(answer.sdp.clone()))
-                                .await
-                                .unwrap();
-
-                            peer_connection.set_local_description(answer).await.unwrap();
-
-                            while let Ok(candidate) = pending_candidates_rx.try_recv() {
-                                tracing::debug!("adding stored candidate");
-                                peer_connection
-                                    .add_ice_candidate(RTCIceCandidateInit {
-                                        candidate,
-                                        ..Default::default()
-                                    })
-                                    .await
-                                    .unwrap();
-                            }
-                        }
-                        RtcPeerControl::Answer(answer) => {
-                            peer_connection
-                                .set_remote_description(
-                                    RTCSessionDescription::answer(answer).unwrap(),
-                                )
-                                .await
-                                .unwrap();
-
-                            while let Ok(candidate) = pending_candidates_rx.try_recv() {
-                                tracing::debug!("adding stored candidate");
-                                peer_connection
-                                    .add_ice_candidate(RTCIceCandidateInit {
-                                        candidate,
-                                        ..Default::default()
-                                    })
-                                    .await
-                                    .unwrap();
-                            }
+                        } else {
+                            tracing::debug!("storing candidate until remote description arrives");
+                            pending_candidates_tx.send(candidate).await.unwrap();
                         }
                     }
-                } else {
-                    break;
+                    RtcPeerControl::Offer(offer) => {
+                        peer_connection
+                            .set_remote_description(RTCSessionDescription::offer(offer).unwrap())
+                            .await
+                            .unwrap();
+
+                        let answer = peer_connection.create_answer(None).await.unwrap();
+
+                        event_tx
+                            .send(RtcPeerEvent::Answer(answer.sdp.clone()))
+                            .await
+                            .unwrap();
+
+                        peer_connection.set_local_description(answer).await.unwrap();
+
+                        while let Ok(candidate) = pending_candidates_rx.try_recv() {
+                            tracing::debug!("adding stored candidate");
+                            peer_connection
+                                .add_ice_candidate(RTCIceCandidateInit {
+                                    candidate,
+                                    ..Default::default()
+                                })
+                                .await
+                                .unwrap();
+                        }
+                    }
+                    RtcPeerControl::Answer(answer) => {
+                        peer_connection
+                            .set_remote_description(RTCSessionDescription::answer(answer).unwrap())
+                            .await
+                            .unwrap();
+
+                        while let Ok(candidate) = pending_candidates_rx.try_recv() {
+                            tracing::debug!("adding stored candidate");
+                            peer_connection
+                                .add_ice_candidate(RTCIceCandidateInit {
+                                    candidate,
+                                    ..Default::default()
+                                })
+                                .await
+                                .unwrap();
+                        }
+                    }
+                    RtcPeerControl::Failed => {
+                        tracing::debug!("Peer failed, bailing rtc control");
+                        break;
+                    }
                 }
             }
+
+            tracing::info!("rtc control going down");
+            peer_connection.close().await.unwrap();
         }
     });
 

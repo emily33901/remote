@@ -32,6 +32,7 @@ pub enum RtcPeerControl {
     IceCandidate(String),
     Offer(String),
     Answer(String),
+    Failed,
 }
 
 pub enum ChannelEvent {
@@ -51,7 +52,7 @@ pub trait DataChannel: Send + Sync {}
 #[async_trait::async_trait]
 pub trait PeerConnection: Send + Sync {
     async fn channel(
-        self: Arc<Self>,
+        self: &Self,
         our_label: &str,
         controlling: bool,
         channel_options: Option<ChannelOptions>,

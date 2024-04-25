@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Weak},
+};
 
 use tokio::sync::{mpsc, Mutex};
 use webrtc::{
@@ -210,7 +213,7 @@ async fn on_datachannel(
 
 pub(crate) async fn channel(
     storage: ChannelStorage,
-    peer_connection: Arc<RTCPeerConnection>,
+    peer_connection: &RTCPeerConnection,
     our_label: &str,
     controlling: bool,
     channel_options: Option<RTCDataChannelInit>,

@@ -15,7 +15,7 @@ pub(crate) enum AudioControl {
 }
 
 pub(crate) async fn audio_channel(
-    peer_connection: Arc<dyn PeerConnection>,
+    peer_connection: &dyn PeerConnection,
     controlling: bool,
 ) -> Result<(mpsc::Sender<AudioControl>, mpsc::Receiver<AudioEvent>)> {
     let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);

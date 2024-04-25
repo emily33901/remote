@@ -22,7 +22,7 @@ pub(crate) enum VideoControl {
 }
 
 pub(crate) async fn video_channel(
-    peer_connection: Arc<dyn PeerConnection>,
+    peer_connection: &dyn PeerConnection,
     controlling: bool,
 ) -> Result<(mpsc::Sender<VideoControl>, mpsc::Receiver<VideoEvent>)> {
     let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
