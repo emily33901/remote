@@ -2,7 +2,7 @@ use std::mem::MaybeUninit;
 
 use eyre::{eyre, Result};
 use windows::{
-    core::{ComInterface, PCSTR},
+    core::{Interface, PCSTR},
     Win32::{
         Foundation::{CloseHandle, HWND, TRUE},
         Graphics::{
@@ -11,11 +11,12 @@ use windows::{
             Dxgi::{
                 Common::{
                     DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12,
-                    DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8_UNORM,
+                    DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+                    DXGI_FORMAT_R8_UNORM,
                 },
                 IDXGIKeyedMutex, IDXGIResource1, IDXGISwapChain, DXGI_ERROR_DEVICE_REMOVED,
                 DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE, DXGI_SWAP_CHAIN_DESC,
-                DXGI_USAGE_RENDER_TARGET_OUTPUT,
+                DXGI_SWAP_EFFECT_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT,
             },
         },
     },
@@ -87,7 +88,7 @@ pub fn create_device_and_swapchain(
                     Numerator: 60,
                     Denominator: 1,
                 },
-                Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+                Format: DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
                 ..Default::default()
             },
             SampleDesc: windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC {
@@ -135,7 +136,7 @@ impl From<TextureFormat> for DXGI_FORMAT {
         match value {
             TextureFormat::NV12 => DXGI_FORMAT_NV12,
             TextureFormat::BGRA => DXGI_FORMAT_B8G8R8A8_UNORM,
-            TextureFormat::RGBA => DXGI_FORMAT_R8G8B8A8_UNORM,
+            TextureFormat::RGBA => DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
             TextureFormat::R => DXGI_FORMAT_R8_UNORM,
         }
     }

@@ -4,6 +4,7 @@ mod config;
 mod logic;
 mod peer;
 mod player;
+mod ui;
 mod video;
 
 use crate::config::Config;
@@ -28,6 +29,7 @@ const ARBITRARY_CHANNEL_LIMIT: usize = 10;
 #[derive(Debug, Clone)]
 enum Command {
     Peer,
+    Ui,
 }
 
 #[derive(Debug)]
@@ -60,6 +62,7 @@ impl FromStr for Command {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "peer" => Ok(Self::Peer),
+            "ui" => Ok(Self::Ui),
             _ => Err(CommandParseError),
         }
     }
@@ -76,15 +79,22 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Configure logger at runtime
     let args = Args::parse();
 
+    // Make sure we can load the dotenv and create a config from it.
     dotenv::dotenv()?;
-
     let config = Config::load();
 
+    let filter = tracing_subscriber::EnvFilter::builder()
+        .with_default_directive(LevelFilter::DEBUG.into())
+        .from_env()?
+        .add_directive("webrtc_sctp::association=info".parse()?)
+        .add_directive("webrtc_sctp::association::association_internal=info".parse()?)
+        .add_directive("webrtc_sctp::stream=info".parse()?);
+
     tracing_subscriber::fmt::fmt()
-        .with_max_level(LevelFilter::INFO)
+        .with_env_filter(filter)
+        // .with_max_level(LevelFilter::DEBUG)
         .pretty()
         .init();
 
@@ -97,9 +107,9 @@ async fn main() -> Result<()> {
     }));
 
     let command = args.command.as_str().parse()?;
-
     match command {
-        Command::Peer => Ok(peer(&config.signal_server, &args.produce).await?),
+        Command::Ui => Ok(ui::ui(&args.produce).await?),
+        Command::Peer => Ok(peer(&args.produce).await?),
     }
 }
 
@@ -223,12 +233,12 @@ async fn peer_connected(
     Ok(())
 }
 
-async fn peer(address: &str, produce: &bool) -> Result<()> {
+async fn peer(produce: &bool) -> Result<()> {
     let config = Config::load();
 
     telemetry::client::sink().await;
 
-    let (signal_tx, mut signal_rx) = signal::client(address).await?;
+    let (signal_tx, mut signal_rx) = signal::client(&config.signal_server).await?;
 
     let our_peer_id = Arc::new(Mutex::new(None));
     let last_connection_request = Arc::new(Mutex::new(None));
@@ -476,6 +486,8 @@ async fn peer(address: &str, produce: &bool) -> Result<()> {
                     }
                 }
             }
+
+            tracing::warn!("stdin is done");
 
             eyre::Ok(())
         }

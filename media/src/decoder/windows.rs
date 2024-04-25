@@ -1,5 +1,5 @@
 use ::windows::{
-    core::ComInterface,
+    core::Interface,
     Win32::{
         Graphics::Direct3D11::{ID3D11Device, ID3D11DeviceContext},
         Media::MediaFoundation::*,

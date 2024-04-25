@@ -5,7 +5,7 @@ use std::{
 use eyre::{eyre, Result};
 use tokio::sync::mpsc;
 use windows::{
-    core::ComInterface,
+    core::Interface,
     Win32::{
         Graphics::Direct3D11::ID3D11Texture2D,
         Media::MediaFoundation::*,

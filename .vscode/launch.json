@@ -11,15 +11,12 @@
             "program": "${workspaceFolder}/target/debug/remote.exe",
             "args": [
                 "peer",
-                "--address",    
-                "ws://[::1]:33901",
-                "--name",
-                "a"
             ],
             "stopAtEntry": false,
-            "cwd": "${workspaceFolder}/target/debug/",
+            "cwd": "${workspaceFolder}/",
             "environment": [],
-            "console": "internalConsole"
+            "console": "integratedTerminal",
+            "preLaunchTask": "rust: cargo build",
         }
     ]
 }

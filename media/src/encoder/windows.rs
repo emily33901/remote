@@ -1,6 +1,6 @@
 use std::time::UNIX_EPOCH;
 
-use ::windows::{core::ComInterface, Win32::Media::MediaFoundation::*};
+use ::windows::{core::Interface, Win32::Media::MediaFoundation::*};
 use eyre::{eyre, Result};
 
 use tokio::sync::mpsc::{self};

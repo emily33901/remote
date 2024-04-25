@@ -49,9 +49,9 @@ pub(crate) async fn peer(
     telemetry::client::watch_channel(&control_tx, "peer-control").await;
     telemetry::client::watch_channel(&event_tx, "peer-event").await;
 
-    logic_channel(peer_connection.clone(), controlling).await?;
-    let (audio_tx, mut audio_rx) = audio_channel(peer_connection.clone(), controlling).await?;
-    let (video_tx, mut video_rx) = video_channel(peer_connection.clone(), controlling).await?;
+    logic_channel(peer_connection.as_ref(), controlling).await?;
+    let (audio_tx, mut audio_rx) = audio_channel(peer_connection.as_ref(), controlling).await?;
+    let (video_tx, mut video_rx) = video_channel(peer_connection.as_ref(), controlling).await?;
 
     tokio::spawn({
         let rtc_control = rtc_control.clone();

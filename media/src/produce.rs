@@ -3,7 +3,7 @@ use std::mem::{ManuallyDrop, MaybeUninit};
 use eyre::Result;
 use tokio::sync::mpsc;
 use windows::{
-    core::{ComInterface, IUnknown, HSTRING},
+    core::{IUnknown, Interface, HSTRING},
     Win32::{
         Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D},
         Media::MediaFoundation::*,

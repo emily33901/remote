@@ -1,7 +1,7 @@
 use eyre::Result;
 use tokio::sync::mpsc;
 use windows::{
-    core::ComInterface,
+    core::Interface,
     Win32::{
         Graphics::{
             Direct3D11::{

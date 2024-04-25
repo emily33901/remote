@@ -78,8 +78,8 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
                             }
                         }
                         tracing::debug!(
-                            "removing {} unfinished packets that expired",
-                            remove_ids.len()
+                            remove_ids = remove_ids.len(),
+                            "removing unfinished packets that expired",
                         );
                         if remove_ids.len() > 0 {}
                         let mut chunks_removed = 0;
@@ -87,7 +87,7 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
                             let cs = chunk_arrangement.remove(&id).unwrap();
                             chunks_removed += cs.len()
                         }
-                        tracing::debug!("removed {} chunks", chunks_removed);
+                        tracing::debug!(chunks_removed);
                     }
 
                     async fn handle_control<
