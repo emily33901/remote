@@ -505,7 +505,7 @@ pub async fn client(
     tracing::info!("client signal connected");
 
     tokio::spawn({
-        let control_tx = control_tx.clone();
+        let control_tx = control_tx.downgrade();
         async move {
             loop {
                 match futures::select! {
@@ -519,16 +519,20 @@ pub async fn client(
                         }
                     }
                     msg = read.next().fuse() => {
-                        match msg {
-                            Some(Ok(msg)) => handle_message(control_tx.clone(), event_tx.clone(), msg).await,
-                            None => {
-                                tracing::warn!("error reading from websocket (None)");
-                                break
-                            },
-                            Some(Err(err)) => {
-                                tracing::warn!("error reading from websocket ({err})");
-                                break
-                            },
+                        if let Some(control_tx) = control_tx.upgrade() {
+                            match msg {
+                                Some(Ok(msg)) => handle_message(control_tx.clone(), event_tx.clone(), msg).await,
+                                None => {
+                                    tracing::warn!("error reading from websocket (None)");
+                                    break
+                                },
+                                Some(Err(err)) => {
+                                    tracing::warn!("error reading from websocket ({err})");
+                                    break
+                                },
+                            }
+                        } else {
+                            break;
                         }
                     }
                 } {
@@ -539,6 +543,8 @@ pub async fn client(
                     }
                 }
             }
+
+            tracing::info!("signal client done");
         }
     });
 
