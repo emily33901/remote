@@ -30,7 +30,7 @@ pub(crate) async fn audio_channel(
         let _tx = tx.clone();
         let event_tx = event_tx.clone();
         async move {
-            match tokio::spawn(async move {
+            match async move {
                 while let Some(event) = rx.recv().await {
                     match event {
                         ChannelEvent::Open => {}
@@ -42,17 +42,12 @@ pub(crate) async fn audio_channel(
                 }
 
                 eyre::Ok(())
-            })
+            }
             .await
             {
-                Ok(r) => match r {
-                    Ok(_) => {}
-                    Err(err) => {
-                        tracing::error!("audio channel event error {err}");
-                    }
-                },
+                Ok(_) => {}
                 Err(err) => {
-                    tracing::error!("audio channel event join error {err}");
+                    tracing::error!("audio channel event error {err}");
                 }
             }
         }
@@ -64,8 +59,6 @@ pub(crate) async fn audio_channel(
             match tokio::spawn(async move {
                 while let Some(control) = control_rx.recv().await {
                     match control {
-                        // TODO(emily): we should be pulling as much data as possible out of the
-                        // channel here and passing to ChunkControl.
                         AudioControl::Audio(audio) => tx.send(ChannelControl::Send(audio)).await?,
                     }
                 }

@@ -51,7 +51,7 @@ pub(crate) async fn video_channel(
         let _tx = tx.clone();
         let assembly_tx = assembly_tx.clone();
         async move {
-            match tokio::spawn(async move {
+            match async move {
                 while let Some(event) = rx.recv().await {
                     match event {
                         ChannelEvent::Open => {}
@@ -64,17 +64,12 @@ pub(crate) async fn video_channel(
                 }
 
                 eyre::Ok(())
-            })
+            }
             .await
             {
-                Ok(r) => match r {
-                    Ok(_) => {}
-                    Err(err) => {
-                        tracing::error!("video channel event error {err}");
-                    }
-                },
+                Ok(_) => {}
                 Err(err) => {
-                    tracing::error!("video channel event join error {err}");
+                    tracing::error!("video channel event error {err}");
                 }
             }
         }
@@ -83,7 +78,7 @@ pub(crate) async fn video_channel(
     tokio::spawn({
         let chunk_tx = chunk_tx.clone();
         async move {
-            match tokio::spawn(async move {
+            match async move {
                 while let Some(control) = control_rx.recv().await {
                     match control {
                         VideoControl::Video(video) => {
@@ -104,17 +99,12 @@ pub(crate) async fn video_channel(
                     }
                 }
                 eyre::Ok(())
-            })
+            }
             .await
             {
-                Ok(r) => match r {
-                    Ok(_) => {}
-                    Err(err) => {
-                        tracing::error!("video channel control error {err}");
-                    }
-                },
+                Ok(_) => {}
                 Err(err) => {
-                    tracing::error!("video channel control join error {err}");
+                    tracing::error!("video channel control error {err}");
                 }
             }
         }

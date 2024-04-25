@@ -85,7 +85,7 @@ pub(crate) async fn rtc_peer(
             let event_tx = event_tx.clone();
             let control_tx = control_tx.clone();
 
-            tracing::debug!("Peer Connection State has changed: {s}");
+            tracing::debug!("peer Connection State has changed: {s}");
 
             Box::pin(async move {
                 if s == RTCPeerConnectionState::Failed {
@@ -97,7 +97,7 @@ pub(crate) async fn rtc_peer(
                     }
                 }
 
-                event_tx
+                let _ = event_tx
                     .send(RtcPeerEvent::StateChange(match s {
                         RTCPeerConnectionState::Unspecified => todo!(),
                         RTCPeerConnectionState::New => RtcPeerState::New,
@@ -107,8 +107,7 @@ pub(crate) async fn rtc_peer(
                         RTCPeerConnectionState::Failed => RtcPeerState::Failed,
                         RTCPeerConnectionState::Closed => RtcPeerState::Closed,
                     }))
-                    .await
-                    .unwrap()
+                    .await;
             })
         })
     });

@@ -363,18 +363,14 @@ impl UIPeer {
                         let zelf = Arc::downgrade(&strong_zelf);
 
                         async move {
+                            let remote_peer =
+                                RemotePeer::connected(true, tx, our_peer_id, their_peer_id.clone())
+                                    .await?;
+
+                            let control = remote_peer.control.clone();
+
                             if let Some(zelf) = zelf.upgrade() {
                                 let mut zelf = zelf.lock().await;
-
-                                let remote_peer = RemotePeer::connected(
-                                    true,
-                                    tx,
-                                    our_peer_id,
-                                    their_peer_id.clone(),
-                                )
-                                .await?;
-
-                                let control = remote_peer.control.clone();
 
                                 zelf.remote_peers.insert(their_peer_id.clone(), remote_peer);
 

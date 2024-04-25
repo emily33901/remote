@@ -35,7 +35,7 @@ pub(crate) enum PeerEvent {
 
 pub(crate) async fn peer(
     api: rtc::Api,
-    _our_peer_id: PeerId,
+    our_peer_id: PeerId,
     their_peer_id: PeerId,
     signalling_control: mpsc::Sender<SignallingControl>,
     controlling: bool,
@@ -113,69 +113,68 @@ pub(crate) async fn peer(
     });
 
     tokio::spawn({
-        let event_tx = event_tx.clone();
+        let event_tx = event_tx.downgrade();
         async move {
-            match tokio::spawn(async move {
+            match async move {
                 while let Some(event) = audio_rx.recv().await {
-                    match event {
-                        crate::audio::AudioEvent::Audio(audio) => {
-                            event_tx.send(PeerEvent::Audio(audio)).await?;
+                    if let Some(event_tx) = event_tx.upgrade() {
+                        match event {
+                            crate::audio::AudioEvent::Audio(audio) => {
+                                event_tx.send(PeerEvent::Audio(audio)).await?;
+                            }
                         }
+                    } else {
+                        break;
                     }
                 }
 
                 eyre::Ok(())
-            })
+            }
             .await
             {
-                Ok(r) => match r {
-                    Ok(_) => {}
-                    Err(err) => {
-                        tracing::error!("audio rx error {err}");
-                    }
-                },
+                Ok(_) => {}
                 Err(err) => {
-                    tracing::error!("audio event join error {err}");
+                    tracing::error!("audio rx error {err}");
                 }
             }
         }
     });
 
     tokio::spawn({
-        let event_tx = event_tx.clone();
+        let event_tx = event_tx.downgrade();
         async move {
-            match tokio::spawn(async move {
+            match async move {
                 while let Some(event) = video_rx.recv().await {
-                    match event {
-                        crate::video::VideoEvent::Video(video) => {
-                            event_tx.send(PeerEvent::Video(video)).await?;
+                    if let Some(event_tx) = event_tx.upgrade() {
+                        match event {
+                            crate::video::VideoEvent::Video(video) => {
+                                event_tx.send(PeerEvent::Video(video)).await?;
+                            }
                         }
+                    } else {
+                        break;
                     }
                 }
 
                 eyre::Ok(())
-            })
+            }
             .await
             {
-                Ok(r) => match r {
-                    Ok(_) => {}
-                    Err(err) => {
-                        tracing::error!("video rx error {err}");
-                    }
-                },
+                Ok(_) => {}
                 Err(err) => {
-                    tracing::error!("video event join error {err}");
+                    tracing::error!("video rx error {err}");
                 }
             }
         }
     });
 
     tokio::spawn({
+        let our_peer_id = our_peer_id.clone();
         let their_peer_id = their_peer_id.clone();
         let signalling_control = signalling_control.clone();
-        let event_tx = event_tx.clone();
+        let event_tx = event_tx.downgrade();
         async move {
-            match tokio::spawn(async move {
+            match async move {
                 while let Some(event) = rtc_event.recv().await {
                     match event {
                         rtc::RtcPeerEvent::IceCandidate(candidate) => {
@@ -189,7 +188,11 @@ pub(crate) async fn peer(
                         rtc::RtcPeerEvent::StateChange(state_change) => {
                             tracing::info!("peer state change: {state_change:?}");
                             if let rtc::RtcPeerState::Failed = state_change {
-                                event_tx.send(PeerEvent::Error(PeerError::Unknown)).await?;
+                                if let Some(event_tx) = event_tx.upgrade() {
+                                    event_tx.send(PeerEvent::Error(PeerError::Unknown)).await?;
+                                } else {
+                                    tracing::warn!(our_peer_id, "state change failed but no event_tx to tell peer that it failed?");
+                                }
                                 break;
                             }
                         }
@@ -207,17 +210,12 @@ pub(crate) async fn peer(
                 }
 
                 eyre::Ok(())
-            })
+            }
             .await
             {
-                Ok(r) => match r {
-                    Ok(_) => {}
-                    Err(err) => {
-                        tracing::error!("rtc_event error {err}");
-                    }
-                },
+                Ok(_) => {}
                 Err(err) => {
-                    tracing::error!("rtc_event join error {err}");
+                    tracing::error!("rtc_event error {err}");
                 }
             }
         }
