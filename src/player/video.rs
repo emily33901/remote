@@ -1,89 +1,66 @@
+use std::cell::Cell;
+
 use eyre::{eyre, Result};
 use tokio::sync::{mpsc, mpsc::error::TryRecvError};
 
 use windows::{
-    core::s,
+    core::{s, HSTRING},
     Win32::{
         Foundation::{HWND, LPARAM, LRESULT, S_OK, WPARAM},
         Graphics::{
             Direct3D::*,
             Direct3D11::*,
-            Dxgi::Common::{
-                DXGI_FORMAT_R32G32_FLOAT, DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8_UNORM,
+            Dxgi::{
+                Common::{
+                    DXGI_FORMAT, DXGI_FORMAT_R32G32_FLOAT, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+                    DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8_UNORM,
+                },
+                IDXGIFactory, IDXGISwapChain,
             },
         },
         System::LibraryLoader::GetModuleHandleA,
         UI::WindowsAndMessaging::{
-            CreateWindowExA, DefWindowProcA, DispatchMessageA, LoadCursorW, PeekMessageA,
-            PostQuitMessage, RegisterClassExA, CS_HREDRAW, CS_VREDRAW, CW_USEDEFAULT, IDC_ARROW,
-            MSG, PM_REMOVE, WINDOW_EX_STYLE, WM_CREATE, WM_DESTROY, WNDCLASSEXA, WNDCLASS_STYLES,
-            WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_SYSMENU, WS_VISIBLE,
+            DispatchMessageA, PeekMessageA, TranslateMessage, MSG, PM_REMOVE,
         },
     },
+};
+
+use winit::{
+    dpi::PhysicalSize,
+    event::{Event, WindowEvent},
+    event_loop::{EventLoop, EventLoopBuilder},
+    platform::windows::EventLoopBuilderExtWindows,
+    raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawWindowHandle},
+    window::WindowBuilder,
 };
 
 use crate::ARBITRARY_CHANNEL_LIMIT;
 
 use media::dx::{self, compile_shader, copy_texture, create_device_and_swapchain};
 
-extern "system" fn wndproc(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    unsafe {
-        match message {
-            WM_CREATE => LRESULT(0),
-
-            WM_DESTROY => {
-                PostQuitMessage(0);
-                LRESULT(0)
-            }
-
-            _ => DefWindowProcA(window, message, wparam, lparam),
-        }
-    }
+fn create_render_target_for_swap_chain(
+    device: &ID3D11Device,
+    swap_chain: &IDXGISwapChain,
+) -> Result<ID3D11RenderTargetView> {
+    let swap_chain_texture = unsafe { swap_chain.GetBuffer::<ID3D11Texture2D>(0) }?;
+    let mut render_target = None;
+    unsafe { device.CreateRenderTargetView(&swap_chain_texture, None, Some(&mut render_target)) }?;
+    Ok(render_target.unwrap())
 }
 
-fn create_window(name: &str) -> Result<HWND> {
-    unsafe {
-        let instance = GetModuleHandleA(None)?;
-        debug_assert!(instance.0 != 0);
+fn resize_swap_chain_and_render_target(
+    device: &ID3D11Device,
+    swap_chain: &IDXGISwapChain,
+    render_target: &mut Option<ID3D11RenderTargetView>,
+    new_width: u32,
+    new_height: u32,
+    new_format: DXGI_FORMAT,
+) -> Result<()> {
+    render_target.take();
 
-        // TODO(emily): Don't leak this string
-        let name = format!("remote-{name}");
-        let window_class = windows::core::PCSTR(name.as_ptr());
-
-        let wc = WNDCLASSEXA {
-            cbSize: std::mem::size_of::<WNDCLASSEXA>() as u32,
-            hCursor: LoadCursorW(None, IDC_ARROW)?,
-            hInstance: instance.into(),
-            lpszClassName: window_class,
-
-            style: WNDCLASS_STYLES(CS_HREDRAW.0 | CS_VREDRAW.0),
-            lpfnWndProc: Some(wndproc),
-            ..Default::default()
-        };
-
-        let atom = RegisterClassExA(&wc);
-        debug_assert!(atom != 0);
-
-        let window_handle = CreateWindowExA(
-            WINDOW_EX_STYLE::default(),
-            window_class,
-            window_class,
-            WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_SYSMENU | WS_MINIMIZEBOX,
-            CW_USEDEFAULT,
-            CW_USEDEFAULT,
-            1920,
-            1080,
-            None,
-            None,
-            instance,
-            None,
-        );
-
-        std::mem::forget(name);
-        // ShowWindow(window_handle, SW_SHOW);
-
-        Ok(window_handle)
-    }
+    unsafe { swap_chain.ResizeBuffers(1, new_width, new_height, new_format, 0) }?;
+    render_target.replace(create_render_target_for_swap_chain(device, swap_chain)?);
+    Ok(())
 }
 
 pub(crate) fn sink(
@@ -103,27 +80,31 @@ pub(crate) fn sink(
             telemetry::client::watch_channel(&tx, &format!("player-sink-{}", name)).await;
 
             match tokio::task::spawn_blocking(move || -> eyre::Result<()> {
-                let (device, context, swap_chain) =
-                    create_device_and_swapchain(create_window(&name)?, width, height)?;
+                let event_loop = EventLoopBuilder::new().with_any_thread(true).build()?;
+                let window = WindowBuilder::new()
+                    .with_title(format!("remote-player-{name}"))
+                    .with_inner_size(PhysicalSize::new(width, height))
+                    .build(&event_loop)?;
 
-                let back_buffer: ID3D11Texture2D = unsafe { swap_chain.GetBuffer(0) }?;
-                let mut render_target: Option<ID3D11RenderTargetView> = None;
-                unsafe {
-                    device.CreateRenderTargetView(
-                        &back_buffer,
-                        None,
-                        Some(&mut render_target as *mut _),
-                    )
-                }?;
+                let window_handle =
+                    if let RawWindowHandle::Win32(raw) = window.window_handle()?.as_raw() {
+                        HWND(raw.hwnd.get())
+                    } else {
+                        panic!("unexpected RawWindowHandle variant");
+                    };
+
+                let (device, context, swap_chain) =
+                    create_device_and_swapchain(window_handle, width, height)?;
+
+                let mut render_target =
+                    Some(create_render_target_for_swap_chain(&device, &swap_chain)?);
+
+                let render_target = render_target.unwrap();
 
                 let texture =
                     dx::TextureBuilder::new(&device, width, height, dx::TextureFormat::NV12)
                         .bind_shader_resource()
                         .build()?;
-
-                unsafe { context.OMSetRenderTargets(Some(&[render_target.clone()]), None) };
-
-                let render_target = render_target.unwrap();
 
                 let viewport = D3D11_VIEWPORT {
                     TopLeftX: 0.0,
@@ -375,6 +356,7 @@ pub(crate) fn sink(
                     unsafe {
                         let mut message = MSG::default();
                         while PeekMessageA(&mut message, None, 0, 0, PM_REMOVE).into() {
+                            TranslateMessage(&message);
                             DispatchMessageA(&message);
                         }
                     }

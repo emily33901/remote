@@ -1,5 +1,5 @@
 use crate::audio::audio_channel;
-use crate::logic::logic_channel;
+use crate::logic::{self, logic_channel};
 use crate::rtc::{self};
 use crate::video::video_channel;
 use crate::{PeerId, ARBITRARY_CHANNEL_LIMIT};
@@ -8,6 +8,7 @@ use signal::SignallingControl;
 
 use eyre::Result;
 use tokio::sync::mpsc;
+use tracing::Instrument;
 
 #[derive(Debug)]
 pub(crate) enum PeerError {
@@ -23,19 +24,26 @@ pub(crate) enum PeerControl {
     Audio(Vec<u8>),
     Video(VideoBuffer),
 
+    RequestStream(logic::PeerStreamRequest),
+    RequestStreamResponse(logic::PeerStreamRequestResponse),
+
     Die,
 }
 
 #[derive(Debug)]
 pub(crate) enum PeerEvent {
+    StreamRequest(logic::PeerStreamRequest),
+    RequestStreamResponse(logic::PeerStreamRequestResponse),
+
     Audio(Vec<u8>),
     Video(VideoBuffer),
     Error(PeerError),
 }
 
+#[tracing::instrument(skip(api, signalling_control))]
 pub(crate) async fn peer(
     api: rtc::Api,
-    _our_peer_id: PeerId,
+    our_peer_id: PeerId,
     their_peer_id: PeerId,
     signalling_control: mpsc::Sender<SignallingControl>,
     controlling: bool,
@@ -49,15 +57,17 @@ pub(crate) async fn peer(
     telemetry::client::watch_channel(&control_tx, "peer-control").await;
     telemetry::client::watch_channel(&event_tx, "peer-event").await;
 
-    logic_channel(peer_connection.clone(), controlling).await?;
-    let (audio_tx, mut audio_rx) = audio_channel(peer_connection.clone(), controlling).await?;
-    let (video_tx, mut video_rx) = video_channel(peer_connection.clone(), controlling).await?;
+    let (logic_tx, mut logic_rx) = logic_channel(peer_connection.as_ref(), controlling).await?;
+    let (audio_tx, mut audio_rx) = audio_channel(peer_connection.as_ref(), controlling).await?;
+    let (video_tx, mut video_rx) = video_channel(peer_connection.as_ref(), controlling).await?;
 
     tokio::spawn({
         let rtc_control = rtc_control.clone();
         let peer_connection = peer_connection.clone();
+        let our_peer_id = our_peer_id.clone();
+        let span = tracing::span!(tracing::Level::DEBUG, "PeerControl");
         async move {
-            match tokio::spawn(async move {
+            match async move {
                 // keep peer connection alive
                 let _peer_connection = peer_connection;
 
@@ -87,6 +97,16 @@ pub(crate) async fn peer(
                                 .send(crate::video::VideoControl::Video(video))
                                 .await?;
                         }
+                        PeerControl::RequestStream(request) => {
+                            logic_tx
+                                .send(crate::logic::LogicControl::RequestStream(request))
+                                .await?;
+                        }
+                        PeerControl::RequestStreamResponse(response) => {
+                            logic_tx
+                                .send(crate::logic::LogicControl::RequestStreamResponse(response))
+                                .await?;
+                        }
                         PeerControl::Die => {
                             tracing::info!("peer control got die");
                             break;
@@ -94,28 +114,26 @@ pub(crate) async fn peer(
                     }
                 }
                 eyre::Ok(())
-            })
+            }
             .await
             {
-                Ok(r) => match r {
-                    Ok(_) => {
-                        tracing::info!("peer control done")
-                    }
-                    Err(err) => {
-                        tracing::error!("peer control error {err}");
-                    }
-                },
+                Ok(_) => {
+                    tracing::info!("peer control done")
+                }
                 Err(err) => {
-                    tracing::error!("peer control join error {err}");
+                    tracing::error!("peer control error {err}");
                 }
             }
         }
+        .instrument(span)
+        .in_current_span()
     });
 
     tokio::spawn({
-        let event_tx = event_tx.clone();
+        let event_tx = event_tx.clone(); // .downgrade();
+        let span = tracing::span!(tracing::Level::DEBUG, "AudioEvent");
         async move {
-            match tokio::spawn(async move {
+            match async move {
                 while let Some(event) = audio_rx.recv().await {
                     match event {
                         crate::audio::AudioEvent::Audio(audio) => {
@@ -125,26 +143,58 @@ pub(crate) async fn peer(
                 }
 
                 eyre::Ok(())
-            })
+            }
             .await
             {
-                Ok(r) => match r {
-                    Ok(_) => {}
-                    Err(err) => {
-                        tracing::error!("audio rx error {err}");
-                    }
-                },
+                Ok(_) => {}
                 Err(err) => {
-                    tracing::error!("audio event join error {err}");
+                    tracing::error!("audio rx error {err}");
                 }
             }
         }
+        .instrument(span)
+        .in_current_span()
     });
 
     tokio::spawn({
-        let event_tx = event_tx.clone();
+        let event_tx = event_tx.clone(); // .downgrade();
+        let span =
+            tracing::span!(tracing::Level::DEBUG, "LogicEvent", %our_peer_id, %their_peer_id);
         async move {
-            match tokio::spawn(async move {
+            match async move {
+                while let Some(event) = logic_rx.recv().await {
+                    match event {
+                        logic::LogicEvent::StreamRequest(request) => {
+                            event_tx.send(PeerEvent::StreamRequest(request)).await?;
+                        }
+                        logic::LogicEvent::StreamRequestResponse(response) => {
+                            event_tx
+                                .send(PeerEvent::RequestStreamResponse(response))
+                                .await?;
+                        }
+                    }
+                }
+
+                eyre::Ok(())
+            }
+            .await
+            {
+                Ok(_) => {}
+                Err(err) => {
+                    tracing::error!("audio rx error {err}");
+                }
+            }
+        }
+        .instrument(span)
+        .in_current_span()
+    });
+
+    tokio::spawn({
+        let event_tx = event_tx.clone(); // .downgrade();
+        let span =
+            tracing::span!(tracing::Level::DEBUG, "VideoEvent", %our_peer_id, %their_peer_id);
+        async move {
+            match async move {
                 while let Some(event) = video_rx.recv().await {
                     match event {
                         crate::video::VideoEvent::Video(video) => {
@@ -154,28 +204,27 @@ pub(crate) async fn peer(
                 }
 
                 eyre::Ok(())
-            })
+            }
             .await
             {
-                Ok(r) => match r {
-                    Ok(_) => {}
-                    Err(err) => {
-                        tracing::error!("video rx error {err}");
-                    }
-                },
+                Ok(_) => {}
                 Err(err) => {
-                    tracing::error!("video event join error {err}");
+                    tracing::error!("video rx error {err}");
                 }
             }
         }
+        .instrument(span)
+        .in_current_span()
     });
 
     tokio::spawn({
+        let our_peer_id = our_peer_id.clone();
         let their_peer_id = their_peer_id.clone();
         let signalling_control = signalling_control.clone();
-        let event_tx = event_tx.clone();
+        let event_tx = event_tx.downgrade();
+        let span = tracing::span!(tracing::Level::DEBUG, "RtcPeerEvent");
         async move {
-            match tokio::spawn(async move {
+            match async move {
                 while let Some(event) = rtc_event.recv().await {
                     match event {
                         rtc::RtcPeerEvent::IceCandidate(candidate) => {
@@ -189,7 +238,11 @@ pub(crate) async fn peer(
                         rtc::RtcPeerEvent::StateChange(state_change) => {
                             tracing::info!("peer state change: {state_change:?}");
                             if let rtc::RtcPeerState::Failed = state_change {
-                                event_tx.send(PeerEvent::Error(PeerError::Unknown)).await?;
+                                if let Some(event_tx) = event_tx.upgrade() {
+                                    event_tx.send(PeerEvent::Error(PeerError::Unknown)).await?;
+                                } else {
+                                    tracing::warn!(our_peer_id, "state change failed but no event_tx to tell peer that it failed?");
+                                }
                                 break;
                             }
                         }
@@ -207,20 +260,17 @@ pub(crate) async fn peer(
                 }
 
                 eyre::Ok(())
-            })
+            }
             .await
             {
-                Ok(r) => match r {
-                    Ok(_) => {}
-                    Err(err) => {
-                        tracing::error!("rtc_event error {err}");
-                    }
-                },
+                Ok(_) => {}
                 Err(err) => {
-                    tracing::error!("rtc_event join error {err}");
+                    tracing::error!("rtc_event error {err}");
                 }
             }
         }
+        .instrument(span)
+        .in_current_span()
     });
 
     peer_connection.offer(controlling).await?;

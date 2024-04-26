@@ -1,7 +1,7 @@
 use eyre::Result;
 use tokio::sync::mpsc;
 use windows::{
-    core::ComInterface,
+    core::Interface,
     Win32::{
         Graphics::{
             Direct3D11::{
@@ -106,14 +106,14 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
                 }
             }
 
-            tracing::info!("best mode would be {best_mode:?}");
+            tracing::info!(?best_mode);
 
             let duplicated = unsafe { primary.DuplicateOutput(&device) }?;
 
             let mut desc = DXGI_OUTDUPL_DESC::default();
             unsafe { duplicated.GetDesc(&mut desc) };
 
-            tracing::info!("output desc {desc:?}");
+            tracing::info!(?desc);
 
             let (device_width, device_height) = (desc.ModeDesc.Width, desc.ModeDesc.Height);
 

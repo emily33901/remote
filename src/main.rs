@@ -4,6 +4,7 @@ mod config;
 mod logic;
 mod peer;
 mod player;
+mod ui;
 mod video;
 
 use crate::config::Config;
@@ -21,12 +22,14 @@ use signal::{ConnectionId, PeerId};
 use tokio::sync::{mpsc, Mutex};
 use tracing::level_filters::LevelFilter;
 use uuid::Uuid;
+use windows::Win32::Graphics::Direct3D11::D3D11_TRACE_INPUT_GS_INSTANCE_ID_REGISTER;
 
 const ARBITRARY_CHANNEL_LIMIT: usize = 10;
 
 #[derive(Debug, Clone)]
 enum Command {
     Peer,
+    Ui,
 }
 
 #[derive(Debug)]
@@ -59,6 +62,7 @@ impl FromStr for Command {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "peer" => Ok(Self::Peer),
+            "ui" => Ok(Self::Ui),
             _ => Err(CommandParseError),
         }
     }
@@ -67,8 +71,6 @@ impl FromStr for Command {
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    #[arg(short, long)]
-    address: String,
     #[arg(short, long, action)]
     produce: bool,
 
@@ -77,19 +79,26 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Configure logger at runtime
     let args = Args::parse();
 
+    // Make sure we can load the dotenv and create a config from it.
     dotenv::dotenv()?;
-
     let config = Config::load();
 
+    let filter = tracing_subscriber::EnvFilter::builder()
+        .with_default_directive(LevelFilter::DEBUG.into())
+        .from_env()?
+        .add_directive("webrtc_sctp::association=info".parse()?)
+        .add_directive("webrtc_sctp::association::association_internal=info".parse()?)
+        .add_directive("webrtc_sctp::stream=info".parse()?);
+
     tracing_subscriber::fmt::fmt()
-        .with_max_level(LevelFilter::DEBUG)
+        .with_env_filter(filter)
+        // .with_max_level(LevelFilter::DEBUG)
         .pretty()
         .init();
 
-    tracing::info!(args.command, args.address, "remote");
+    tracing::info!(args.command, config.signal_server, "remote");
 
     std::panic::set_hook(Box::new(|info| {
         let backtrace = std::backtrace::Backtrace::capture();
@@ -98,9 +107,9 @@ async fn main() -> Result<()> {
     }));
 
     let command = args.command.as_str().parse()?;
-
     match command {
-        Command::Peer => Ok(peer(&args.address, &args.produce).await?),
+        Command::Ui => Ok(ui::ui().await?),
+        Command::Peer => Ok(peer(&args.produce).await?),
     }
 }
 
@@ -216,6 +225,12 @@ async fn peer_connected(
                         tracing::warn!("peer event error {error:?}");
                         break;
                     }
+                    peer::PeerEvent::StreamRequest(request) => {
+                        tracing::info!(?request, "stream request")
+                    }
+                    peer::PeerEvent::RequestStreamResponse(response) => {
+                        tracing::info!(?response, "stream response")
+                    }
                 }
             }
         }
@@ -224,12 +239,12 @@ async fn peer_connected(
     Ok(())
 }
 
-async fn peer(address: &str, produce: &bool) -> Result<()> {
+async fn peer(produce: &bool) -> Result<()> {
     let config = Config::load();
 
     telemetry::client::sink().await;
 
-    let (signal_tx, mut signal_rx) = signal::client(address).await?;
+    let (signal_tx, mut signal_rx) = signal::client(&config.signal_server).await?;
 
     let our_peer_id = Arc::new(Mutex::new(None));
     let last_connection_request = Arc::new(Mutex::new(None));
@@ -477,6 +492,8 @@ async fn peer(address: &str, produce: &bool) -> Result<()> {
                     }
                 }
             }
+
+            tracing::warn!("stdin is done");
 
             eyre::Ok(())
         }

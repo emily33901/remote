@@ -1,7 +1,7 @@
 use std::mem::MaybeUninit;
 
 use windows::{
-    core::{ComInterface, IUnknown, PWSTR},
+    core::{IUnknown, Interface, PWSTR},
     Win32::{
         Foundation::FALSE,
         Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D},
@@ -311,7 +311,7 @@ pub(crate) fn make_dxgi_sample(
 }
 
 pub(crate) fn init() -> Result<()> {
-    unsafe { CoInitializeEx(None, COINIT_DISABLE_OLE1DDE | COINIT_MULTITHREADED) }?;
+    unsafe { CoInitializeEx(None, COINIT_DISABLE_OLE1DDE | COINIT_MULTITHREADED) }.ok()?;
     unsafe { MFStartup(MF_VERSION, MFSTARTUP_NOSOCKET)? }
 
     Ok(())

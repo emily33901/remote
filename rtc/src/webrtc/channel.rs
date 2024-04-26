@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Weak},
+};
 
 use tokio::sync::{mpsc, Mutex};
 use webrtc::{
@@ -34,6 +37,7 @@ pub(crate) struct ChannelStorage(
     >,
 );
 
+#[tracing::instrument(skip(channel, event_tx, control_rx, control_tx))]
 async fn on_datachannel(
     channel: Arc<RTCDataChannel>,
     our_label: String,
@@ -54,8 +58,8 @@ async fn on_datachannel(
             let event_tx = event_tx.clone();
             let control_tx = control_tx.clone();
             Box::pin(async move {
-                event_tx.send(ChannelEvent::Close).await.unwrap();
-                control_tx.send(ChannelControl::Close).await.unwrap();
+                let _ = event_tx.send(ChannelEvent::Close).await;
+                let _ = control_tx.send(ChannelControl::Close).await;
             })
         })
     });
@@ -208,9 +212,10 @@ async fn on_datachannel(
     Ok(())
 }
 
+#[tracing::instrument(skip(storage, peer_connection))]
 pub(crate) async fn channel(
     storage: ChannelStorage,
-    peer_connection: Arc<RTCPeerConnection>,
+    peer_connection: &RTCPeerConnection,
     our_label: &str,
     controlling: bool,
     channel_options: Option<RTCDataChannelInit>,

@@ -142,14 +142,6 @@ impl YUVBuffer2 {
 }
 
 impl YUVSource for YUVBuffer2 {
-    fn width(&self) -> i32 {
-        self.width as i32
-    }
-
-    fn height(&self) -> i32 {
-        self.height as i32
-    }
-
     fn y(&self) -> &[u8] {
         &self.yuv[0..self.width * self.height]
     }
@@ -165,15 +157,11 @@ impl YUVSource for YUVBuffer2 {
         &self.yuv[base_v..]
     }
 
-    fn y_stride(&self) -> i32 {
-        self.width as i32
+    fn dimensions(&self) -> (usize, usize) {
+        (self.width, self.height)
     }
 
-    fn u_stride(&self) -> i32 {
-        (self.width / 2) as i32
-    }
-
-    fn v_stride(&self) -> i32 {
-        (self.width / 2) as i32
+    fn strides(&self) -> (usize, usize, usize) {
+        (self.width, (self.width / 2), (self.width / 2))
     }
 }

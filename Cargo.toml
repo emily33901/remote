@@ -48,9 +48,14 @@ rtc = { path = "rtc" }
 scopeguard = "1.2.0"
 signal = { path = "signal" }
 media = { path = "media" }
+egui = { version = "0.27", features = [] }
+winit = "0.29"
+egui-directx11 = "0.3"
+egui-winit = "0.27"
+egui_demo_lib = "0.27.2"
 
 [dependencies.windows]
-version = "0.52.0"
+version = "0.54"
 features = [
     "implement",
     "Foundation",
@@ -81,6 +86,7 @@ features = [
 ]
 
 # [patch.crates-io]
+
 # ring = { git = "https://github.com/awakecoding/ring", branch = "0.16.20_alpha" }
 # webrtc = { git = "https://github.com/emily33901/webrtc/" }
 
