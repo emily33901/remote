@@ -8,7 +8,7 @@ use std::{collections::HashMap, fmt::Display};
 
 use derive_more::{Deref, DerefMut};
 use tokio::runtime::Handle;
-use windows::Win32::Media::MediaFoundation::OPM_CONFIGURE_PARAMETERS;
+use tracing::Instrument;
 
 use crate::peer::PeerControl;
 use clap::Parser;
@@ -63,10 +63,10 @@ fn resize_swap_chain_and_render_target(
 #[derive(Debug)]
 struct RemotePeer {
     control: mpsc::Sender<PeerControl>,
-    tasks: tokio::task::JoinSet<Result<()>>,
 }
 
 impl RemotePeer {
+    #[tracing::instrument(skip(app_event_tx, signalling_control))]
     async fn connected(
         controlling: bool,
         signalling_control: mpsc::Sender<SignallingControl>,
@@ -85,9 +85,7 @@ impl RemotePeer {
         )
         .await?;
 
-        let mut tasks = tokio::task::JoinSet::new();
-
-        tasks.spawn({
+        tokio::spawn({
             let our_peer_id = our_peer_id.clone();
             let peer_control = control.downgrade();
 
@@ -183,12 +181,10 @@ impl RemotePeer {
                 }
                 eyre::Ok(())
             }
+            .in_current_span()
         });
 
-        Ok(Self {
-            control,
-            tasks: tasks,
-        })
+        Ok(Self { control })
     }
 }
 
@@ -221,7 +217,7 @@ impl Drop for _Peer {
 
 impl _Peer {}
 
-#[derive(Clone, Deref, DerefMut)]
+#[derive(Clone, Deref, DerefMut, Debug)]
 struct UIPeer(
     PeerId,
     #[deref]
@@ -241,14 +237,15 @@ impl UIPeer {
     }
 
     /// Create a new peer, blocking waiting for a connection to the signalling server and the id of this peer.
-    async fn new<S: AsRef<str>>(
+    #[tracing::instrument(skip(app_event_tx))]
+    async fn new<S: AsRef<str> + std::fmt::Debug>(
         signalling_address: S,
         app_event_tx: mpsc::Sender<AppEvent>,
     ) -> Result<Self> {
         let (control, mut event_rx) = signal::client(signalling_address.as_ref()).await?;
 
-        // TODO(emily): Hold onto other events that might turn up here, right now we just THROW them away, not
-        // very nice.
+        // TODO(emily): Hold onto other events that might turn up here, right now we just THROW them away,
+        // not very nice.
 
         let (our_peer_id, event_rx) = async {
             while let Some(event) = event_rx.recv().await {
@@ -282,6 +279,7 @@ impl UIPeer {
         zelf.inner().await.peer_tasks.spawn({
             let weak_self = zelf.weak();
             async move { Self::signalling(weak_self, event_rx, control.clone()).await }
+                .in_current_span()
         });
 
         Ok(zelf)
@@ -295,6 +293,7 @@ impl UIPeer {
         MutexGuard::map(self.lock().await, |peer| peer)
     }
 
+    #[tracing::instrument(skip(signal_rx, signal_tx))]
     async fn signalling(
         zelf: Weak<Mutex<_Peer>>,
         mut signal_rx: mpsc::Receiver<SignallingEvent>,
@@ -303,6 +302,9 @@ impl UIPeer {
         while let Some(event) = signal_rx.recv().await {
             let strong_zelf = zelf.upgrade().ok_or(eyre::eyre!("no peer"))?;
             let mut zelf = strong_zelf.lock().await;
+
+            let span = tracing::debug_span!("SignallingEvent", zelf.our_id, zelf.their_id);
+            let _guard = span.enter();
 
             match event {
                 signal::SignallingEvent::Id(id) => {
@@ -529,14 +531,14 @@ impl UIPeer {
     }
 }
 
-#[derive(PartialEq, Default)]
+#[derive(PartialEq, Default, Debug)]
 enum Visible {
     No,
     #[default]
     Yes,
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct PeerWindowState {
     visible: Visible,
     connect_peer_id: String,
@@ -571,6 +573,16 @@ struct App {
     event_tx: mpsc::Sender<AppEvent>,
 }
 
+impl std::fmt::Debug for App {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("App")
+            .field("peers", &self.peers)
+            // .field("event_rx", &self.event_rx)
+            // .field("event_tx", &self.event_tx)
+            .finish()
+    }
+}
+
 impl Default for App {
     fn default() -> Self {
         let (event_tx, event_rx) = mpsc::channel(10);
@@ -584,6 +596,7 @@ impl Default for App {
 }
 
 impl App {
+    #[tracing::instrument(skip(ctx))]
     fn ui(&mut self, ctx: &egui::Context) {
         let ui = egui::Window::new("App");
 
