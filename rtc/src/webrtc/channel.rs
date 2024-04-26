@@ -57,8 +57,8 @@ async fn on_datachannel(
             let event_tx = event_tx.clone();
             let control_tx = control_tx.clone();
             Box::pin(async move {
-                event_tx.send(ChannelEvent::Close).await.unwrap();
-                control_tx.send(ChannelControl::Close).await.unwrap();
+                let _ = event_tx.send(ChannelEvent::Close).await;
+                let _ = control_tx.send(ChannelControl::Close).await;
             })
         })
     });

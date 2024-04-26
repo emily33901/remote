@@ -10,7 +10,7 @@
             "request": "launch",
             "program": "${workspaceFolder}/target/debug/remote.exe",
             "args": [
-                "peer",
+                "ui",
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}/",

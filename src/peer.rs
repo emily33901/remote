@@ -1,5 +1,5 @@
 use crate::audio::audio_channel;
-use crate::logic::logic_channel;
+use crate::logic::{self, logic_channel};
 use crate::rtc::{self};
 use crate::video::video_channel;
 use crate::{PeerId, ARBITRARY_CHANNEL_LIMIT};
@@ -23,11 +23,17 @@ pub(crate) enum PeerControl {
     Audio(Vec<u8>),
     Video(VideoBuffer),
 
+    RequestStream(logic::PeerStreamRequest),
+    RequestStreamResponse(logic::PeerStreamRequestResponse),
+
     Die,
 }
 
 #[derive(Debug)]
 pub(crate) enum PeerEvent {
+    StreamRequest(logic::PeerStreamRequest),
+    RequestStreamResponse(logic::PeerStreamRequestResponse),
+
     Audio(Vec<u8>),
     Video(VideoBuffer),
     Error(PeerError),
@@ -49,15 +55,16 @@ pub(crate) async fn peer(
     telemetry::client::watch_channel(&control_tx, "peer-control").await;
     telemetry::client::watch_channel(&event_tx, "peer-event").await;
 
-    logic_channel(peer_connection.as_ref(), controlling).await?;
+    let (logic_tx, mut logic_rx) = logic_channel(peer_connection.as_ref(), controlling).await?;
     let (audio_tx, mut audio_rx) = audio_channel(peer_connection.as_ref(), controlling).await?;
     let (video_tx, mut video_rx) = video_channel(peer_connection.as_ref(), controlling).await?;
 
     tokio::spawn({
         let rtc_control = rtc_control.clone();
         let peer_connection = peer_connection.clone();
+        let our_peer_id = our_peer_id.clone();
         async move {
-            match tokio::spawn(async move {
+            match async move {
                 // keep peer connection alive
                 let _peer_connection = peer_connection;
 
@@ -87,6 +94,16 @@ pub(crate) async fn peer(
                                 .send(crate::video::VideoControl::Video(video))
                                 .await?;
                         }
+                        PeerControl::RequestStream(request) => {
+                            logic_tx
+                                .send(crate::logic::LogicControl::RequestStream(request))
+                                .await?;
+                        }
+                        PeerControl::RequestStreamResponse(response) => {
+                            logic_tx
+                                .send(crate::logic::LogicControl::RequestStreamResponse(response))
+                                .await?;
+                        }
                         PeerControl::Die => {
                             tracing::info!("peer control got die");
                             break;
@@ -94,19 +111,14 @@ pub(crate) async fn peer(
                     }
                 }
                 eyre::Ok(())
-            })
+            }
             .await
             {
-                Ok(r) => match r {
-                    Ok(_) => {
-                        tracing::info!("peer control done")
-                    }
-                    Err(err) => {
-                        tracing::error!("peer control error {err}");
-                    }
-                },
+                Ok(_) => {
+                    tracing::info!("peer control done")
+                }
                 Err(err) => {
-                    tracing::error!("peer control join error {err}");
+                    tracing::error!("peer control error {err}");
                 }
             }
         }
@@ -125,6 +137,35 @@ pub(crate) async fn peer(
                         }
                     } else {
                         break;
+                    }
+                }
+
+                eyre::Ok(())
+            }
+            .await
+            {
+                Ok(_) => {}
+                Err(err) => {
+                    tracing::error!("audio rx error {err}");
+                }
+            }
+        }
+    });
+
+    tokio::spawn({
+        let event_tx = event_tx.clone(); // .downgrade();
+        async move {
+            match async move {
+                while let Some(event) = logic_rx.recv().await {
+                    match event {
+                        logic::LogicEvent::StreamRequest(request) => {
+                            event_tx.send(PeerEvent::StreamRequest(request)).await?;
+                        }
+                        logic::LogicEvent::StreamRequestResponse(response) => {
+                            event_tx
+                                .send(PeerEvent::RequestStreamResponse(response))
+                                .await?;
+                        }
                     }
                 }
 

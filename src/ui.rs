@@ -1,4 +1,5 @@
 use crate::config::{self, Config};
+use crate::logic::{PeerStreamRequest, PeerStreamRequestResponse};
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::str::FromStr;
@@ -17,7 +18,7 @@ use rtc;
 use signal::{ConnectionId, PeerId};
 use signal::{SignallingControl, SignallingEvent};
 
-use tokio::sync::{mpsc, MappedMutexGuard, Mutex, MutexGuard};
+use tokio::sync::{mpsc, oneshot, MappedMutexGuard, Mutex, MutexGuard};
 use tracing::level_filters::LevelFilter;
 use uuid::Uuid;
 use windows::Win32::Foundation::HWND;
@@ -69,6 +70,7 @@ impl RemotePeer {
     async fn connected(
         controlling: bool,
         signalling_control: mpsc::Sender<SignallingControl>,
+        app_event_tx: mpsc::Sender<AppEvent>,
         our_peer_id: PeerId,
         their_peer_id: PeerId,
     ) -> Result<Self> {
@@ -87,6 +89,7 @@ impl RemotePeer {
 
         tasks.spawn({
             let our_peer_id = our_peer_id.clone();
+            let peer_control = control.downgrade();
 
             async move {
                 // NOTE(emily): Make sure to keep player alive
@@ -104,7 +107,46 @@ impl RemotePeer {
                 // let mut i = 0;
 
                 while let Some(event) = event.recv().await {
-                    tracing::warn!(our_peer_id, ?event, "ignoring peer event");
+                    match event {
+                        crate::peer::PeerEvent::StreamRequest(request) => {
+                            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+
+                            tokio::spawn({
+                                let peer_control = peer_control.clone();
+                                async move {
+                                    if let Ok(response) = response_rx.await {
+                                        if let Some(peer_control) = peer_control.upgrade() {
+                                            let _ = peer_control
+                                                .send(PeerControl::RequestStreamResponse(response))
+                                                .await;
+                                        }
+                                    }
+
+                                    // Sender was dropped without sending anything
+                                    // TODO(emily): Probably reject stream instead of not doing anything
+                                }
+                            });
+
+                            app_event_tx
+                                .send(AppEvent::RemotePeerStreamRequest(
+                                    our_peer_id.clone(),
+                                    (their_peer_id.clone(), request, response_tx),
+                                ))
+                                .await?;
+                        }
+
+                        crate::peer::PeerEvent::RequestStreamResponse(response) => {
+                            tracing::warn!(
+                                ?response,
+                                our_peer_id,
+                                their_peer_id,
+                                "ignoring peer stream request response"
+                            );
+                        }
+                        event => {
+                            tracing::warn!(our_peer_id, ?event, "ignoring peer event");
+                        }
+                    }
                     // match event {
                     //     peer::PeerEvent::Audio(audio) => {
                     //         // tracing::debug!("peer event audio {}", audio.len());
@@ -363,14 +405,19 @@ impl UIPeer {
                         let zelf = Arc::downgrade(&strong_zelf);
 
                         async move {
-                            let remote_peer =
-                                RemotePeer::connected(true, tx, our_peer_id, their_peer_id.clone())
-                                    .await?;
-
-                            let control = remote_peer.control.clone();
-
                             if let Some(zelf) = zelf.upgrade() {
                                 let mut zelf = zelf.lock().await;
+
+                                let remote_peer = RemotePeer::connected(
+                                    true,
+                                    tx,
+                                    zelf.app_event_tx.clone(),
+                                    our_peer_id,
+                                    their_peer_id.clone(),
+                                )
+                                .await?;
+
+                                let control = remote_peer.control.clone();
 
                                 zelf.remote_peers.insert(their_peer_id.clone(), remote_peer);
 
@@ -433,6 +480,7 @@ impl UIPeer {
             let peer = RemotePeer::connected(
                 false,
                 zelf.signal_control.clone(),
+                zelf.app_event_tx.clone(),
                 zelf.our_peer_id.clone(),
                 their_peer_id.clone(),
             )
@@ -464,6 +512,21 @@ impl UIPeer {
             Err(eyre::eyre!("no incoming connection request from peer"))
         }
     }
+
+    async fn request_stream(
+        &self,
+        peer_id: PeerId,
+        peer_stream_request: PeerStreamRequest,
+    ) -> Result<()> {
+        let zelf = self.inner().await;
+        if let Some(peer) = zelf.remote_peers.get(&peer_id) {
+            peer.control
+                .send(PeerControl::RequestStream(peer_stream_request))
+                .await?;
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(PartialEq, Default)]
@@ -479,12 +542,27 @@ struct PeerWindowState {
     connect_peer_id: String,
     connection_requests: HashMap<ConnectionId, PeerId>,
     connected_peers: HashMap<PeerId, mpsc::Sender<PeerControl>>,
+    stream_requests: HashMap<
+        PeerId,
+        (
+            PeerStreamRequest,
+            oneshot::Sender<PeerStreamRequestResponse>,
+        ),
+    >,
 }
 
 enum AppEvent {
     Peer(UIPeer),
     ConnectionRequest(PeerId, (ConnectionId, PeerId)),
     RemotePeerConnected(PeerId, (PeerId, mpsc::Sender<PeerControl>)),
+    RemotePeerStreamRequest(
+        PeerId,
+        (
+            PeerId,
+            PeerStreamRequest,
+            tokio::sync::oneshot::Sender<crate::logic::PeerStreamRequestResponse>,
+        ),
+    ),
 }
 
 struct App {
@@ -556,9 +634,21 @@ impl App {
 
                         ui.heading("Connected Peers");
 
-                        for (peer, control) in &window_state.connected_peers {
+                        for (peer_id, control) in &window_state.connected_peers {
                             ui.horizontal(|ui| {
-                                ui.label(format!("{}", peer));
+                                ui.label(format!("{}", peer_id));
+
+                                if ui.button("request stream").clicked() {
+                                    tokio::spawn({
+                                        let peer = peer.clone();
+                                        let peer_id = peer_id.clone();
+                                        async move {
+                                            peer.request_stream(peer_id, PeerStreamRequest {})
+                                                .await
+                                                .unwrap();
+                                        }
+                                    });
+                                }
                             });
                         }
 
@@ -579,6 +669,29 @@ impl App {
                                     });
                                 }
                             });
+                        }
+
+                        ui.heading("Stream Requests");
+
+                        let mut stream_request_clicked = None;
+
+                        for (peer_id, (request, _)) in &window_state.stream_requests {
+                            ui.horizontal(|ui| {
+                                ui.label(format!("{} {:?}", peer_id, request));
+                                if ui.button("accept").clicked() {
+                                    stream_request_clicked = Some((
+                                        peer_id.clone(),
+                                        PeerStreamRequestResponse::Accept(),
+                                    ));
+                                }
+                            });
+                        }
+
+                        if let Some((peer_id, response)) = stream_request_clicked {
+                            let (_request, response_channel) =
+                                window_state.stream_requests.remove(&peer_id).unwrap();
+
+                            response_channel.send(response).unwrap();
                         }
                     });
                 }
@@ -623,6 +736,13 @@ impl App {
                             })() {
                                 peer_window_state.connection_requests.remove(&connection_id);
                             }
+                        }
+                    }
+                    AppEvent::RemotePeerStreamRequest(our_id, (their_id, request, response_tx)) => {
+                        if let Some((peer_window_state, _)) = self.peers.get_mut(&our_id) {
+                            peer_window_state
+                                .stream_requests
+                                .insert(their_id.clone(), (request, response_tx));
                         }
                     }
                 }

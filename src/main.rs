@@ -225,6 +225,12 @@ async fn peer_connected(
                         tracing::warn!("peer event error {error:?}");
                         break;
                     }
+                    peer::PeerEvent::StreamRequest(request) => {
+                        tracing::info!(?request, "stream request")
+                    }
+                    peer::PeerEvent::RequestStreamResponse(response) => {
+                        tracing::info!(?response, "stream response")
+                    }
                 }
             }
         }
