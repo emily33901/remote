@@ -108,7 +108,7 @@ async fn main() -> Result<()> {
 
     let command = args.command.as_str().parse()?;
     match command {
-        Command::Ui => Ok(ui::ui(&args.produce).await?),
+        Command::Ui => Ok(ui::ui().await?),
         Command::Peer => Ok(peer(&args.produce).await?),
     }
 }

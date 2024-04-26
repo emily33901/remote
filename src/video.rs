@@ -1,6 +1,7 @@
 use std::{sync::Arc, time};
 
 use tokio::sync::mpsc;
+use tracing::Instrument;
 
 use crate::{
     chunk::{assembly, chunk, AssemblyControl, Chunk},
@@ -21,6 +22,7 @@ pub(crate) enum VideoControl {
     Video(VideoBuffer),
 }
 
+#[tracing::instrument(skip(peer_connection))]
 pub(crate) async fn video_channel(
     peer_connection: &dyn PeerConnection,
     controlling: bool,
@@ -50,6 +52,7 @@ pub(crate) async fn video_channel(
     tokio::spawn({
         let _tx = tx.clone();
         let assembly_tx = assembly_tx.clone();
+        let span = tracing::debug_span!("ChannelEvent");
         async move {
             match async move {
                 while let Some(event) = rx.recv().await {
@@ -73,10 +76,13 @@ pub(crate) async fn video_channel(
                 }
             }
         }
+        .instrument(span)
+        .in_current_span()
     });
 
     tokio::spawn({
         let chunk_tx = chunk_tx.clone();
+        let span = tracing::debug_span!("VideoControl");
         async move {
             match async move {
                 while let Some(control) = control_rx.recv().await {
@@ -108,10 +114,13 @@ pub(crate) async fn video_channel(
                 }
             }
         }
+        .instrument(span)
+        .in_current_span()
     });
 
     tokio::spawn({
         let event_tx = event_tx.clone();
+        let span = tracing::debug_span!("AssemblyEvent");
         async move {
             match tokio::spawn(async move {
                 while let Some(control) = assembly_rx.recv().await {
@@ -136,10 +145,13 @@ pub(crate) async fn video_channel(
                 }
             }
         }
+        .instrument(span)
+        .in_current_span()
     });
 
     tokio::spawn({
         let tx = tx.clone();
+        let span = tracing::debug_span!("ChunkEvent");
         async move {
             match tokio::spawn(async move {
                 while let Some(control) = chunk_rx.recv().await {
@@ -166,6 +178,8 @@ pub(crate) async fn video_channel(
                 }
             }
         }
+        .instrument(span)
+        .in_current_span()
     });
 
     Ok((control_tx, event_rx))

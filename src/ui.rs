@@ -751,7 +751,7 @@ impl App {
     }
 }
 
-pub async fn ui(produce: &bool) -> Result<()> {
+pub async fn ui() -> Result<()> {
     // telemetry::client::sink().await;
 
     let mut app = App::default();
@@ -918,98 +918,6 @@ pub async fn ui(produce: &bool) -> Result<()> {
     //         }
     //     });
     // }
-
-    // tokio::task::spawn_blocking({
-    //     let tx = signal_tx.clone();
-    //     let our_peer_id = our_peer_id.clone();
-    //     let last_connection_request = last_connection_request.clone();
-    //     let peer_controls = peer_controls.clone();
-
-    //     move || {
-    //         for line in std::io::stdin().lines() {
-    //             if let Ok(line) = line {
-    //                 let (command, arg) = {
-    //                     let mut split = line.split(" ");
-    //                     (
-    //                         split.next().unwrap_or_default(),
-    //                         split.next().unwrap_or_default(),
-    //                     )
-    //                 };
-
-    //                 let tx = tx.clone();
-    //                 let our_peer_id = our_peer_id.clone();
-    //                 let peer_controls = peer_controls.clone();
-    //                 let connection_peer_id = connection_peer_id.clone();
-
-    //                 match command {
-    //                     "connect" => {
-    //                         // let peer_id = Uuid::from_str(arg)?;
-    //                         let peer_id = arg.into();
-    //                         tx.blocking_send(signal::SignallingControl::RequestConnection(
-    //                             peer_id,
-    //                         ))?;
-    //                     }
-    //                     "accept" => {
-    //                         tracing::debug!("accept '{arg}'");
-    //                         let connection_id = if arg == "" {
-    //                             last_connection_request.try_lock().unwrap().unwrap()
-    //                         } else {
-    //                             Uuid::from_str(arg)?
-    //                         };
-
-    //                         tokio::spawn({
-    //                             let tx = tx.clone();
-
-    //                             async move {
-    //                                 if let Some(peer_id) =
-    //                                     connection_peer_id.lock().await.remove(&connection_id)
-    //                                 {
-    //                                     let our_peer_id =
-    //                                         our_peer_id.lock().await.as_ref().unwrap().clone();
-
-    //                                     assert!(peer_id != our_peer_id);
-
-    //                                     peer_connected(
-    //                                         our_peer_id,
-    //                                         peer_id,
-    //                                         tx,
-    //                                         peer_controls,
-    //                                         false,
-    //                                     )
-    //                                     .await
-    //                                     .unwrap();
-    //                                 } else {
-    //                                     tracing::debug!("Unknown connection id {connection_id}");
-    //                                 }
-    //                             }
-    //                         });
-
-    //                         tx.blocking_send(signal::SignallingControl::AcceptConnection(
-    //                             connection_id,
-    //                         ))?;
-    //                     }
-    //                     "die" => {
-    //                         tokio::spawn(async move {
-    //                             for (_, control) in peer_controls.lock().await.drain() {
-    //                                 control.send(PeerControl::Die).await.unwrap();
-    //                             }
-    //                         });
-    //                     }
-    //                     "quit" | "exit" | "q" => {
-    //                         std::process::exit(0);
-    //                     }
-
-    //                     command => tracing::info!("Unknown command {command}"),
-    //                 }
-    //             }
-    //         }
-
-    //         tracing::warn!("stdin is done");
-
-    //         eyre::Ok(())
-    //     }
-    // })
-    // .await??;
 
     Ok(())
 }

@@ -37,6 +37,7 @@ pub(crate) struct ChannelStorage(
     >,
 );
 
+#[tracing::instrument(skip(channel, event_tx, control_rx, control_tx))]
 async fn on_datachannel(
     channel: Arc<RTCDataChannel>,
     our_label: String,
@@ -211,6 +212,7 @@ async fn on_datachannel(
     Ok(())
 }
 
+#[tracing::instrument(skip(storage, peer_connection))]
 pub(crate) async fn channel(
     storage: ChannelStorage,
     peer_connection: &RTCPeerConnection,

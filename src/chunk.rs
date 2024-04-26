@@ -4,6 +4,7 @@ use eyre::Result;
 use serde::{Deserialize, Serialize};
 
 use tokio::sync::mpsc;
+use tracing::Instrument;
 
 use crate::ARBITRARY_CHANNEL_LIMIT;
 
@@ -46,6 +47,7 @@ pub(crate) enum AssemblyEvent<T> {
     Whole(T),
 }
 
+#[tracing::instrument]
 pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + 'static>() -> Result<
     (
         mpsc::Sender<AssemblyControl>,
@@ -77,7 +79,7 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
                                 }
                             }
                         }
-                        tracing::debug!(
+                        tracing::trace!(
                             remove_ids = remove_ids.len(),
                             "removing unfinished packets that expired",
                         );
@@ -87,7 +89,7 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
                             let cs = chunk_arrangement.remove(&id).unwrap();
                             chunks_removed += cs.len()
                         }
-                        tracing::debug!(chunks_removed);
+                        tracing::trace!(chunks_removed);
                     }
 
                     async fn handle_control<
@@ -105,7 +107,7 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
 
                                 if let Ok(_) = chunk.deadline.elapsed() {
                                     // Ignore elapsed chunk
-                                    tracing::debug!("ignoring elapsed chunk");
+                                    tracing::trace!("ignoring elapsed chunk");
                                     return Ok(());
                                 }
 
@@ -173,12 +175,13 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
                     tracing::error!("assembly control error {err}");
                 }
             }
-        }
+        }.in_current_span()
     });
 
     Ok((control_tx, event_rx))
 }
 
+#[tracing::instrument(skip(chunk_size))]
 pub(crate) async fn chunk<T: Serialize + for<'de> Deserialize<'de> + Send + 'static>(
     chunk_size: usize,
 ) -> Result<(mpsc::Sender<ChunkControl<T>>, mpsc::Receiver<ChunkEvent>)> {
@@ -191,7 +194,7 @@ pub(crate) async fn chunk<T: Serialize + for<'de> Deserialize<'de> + Send + 'sta
     tokio::spawn({
         let event_tx = event_tx.clone();
         async move {
-            match tokio::spawn(async move {
+            match async move {
                 let mut next_chunk_id = 0;
 
                 while let Some(control) = control_rx.recv().await {
@@ -248,20 +251,16 @@ pub(crate) async fn chunk<T: Serialize + for<'de> Deserialize<'de> + Send + 'sta
                     }
                 }
                 eyre::Ok(())
-            })
+            }
             .await
             {
-                Ok(r) => match r {
-                    Ok(_) => {}
-                    Err(err) => {
-                        tracing::error!("assembly control error {err}");
-                    }
-                },
+                Ok(_) => {}
                 Err(err) => {
-                    tracing::error!("assembly control join error {err}");
+                    tracing::error!("assembly control error {err}");
                 }
             }
         }
+        .in_current_span()
     });
 
     Ok((control_tx, event_rx))

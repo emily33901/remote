@@ -66,7 +66,7 @@ pub struct ChannelOptions {
     pub max_retransmits: Option<u16>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum Api {
     WebrtcRs,
     #[cfg(feature = "datachannel")]

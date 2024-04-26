@@ -486,6 +486,7 @@ async fn handle_message(
     }
 }
 
+#[tracing::instrument]
 pub async fn client(
     address: &str,
 ) -> Result<(

@@ -8,6 +8,7 @@ use signal::SignallingControl;
 
 use eyre::Result;
 use tokio::sync::mpsc;
+use tracing::Instrument;
 
 #[derive(Debug)]
 pub(crate) enum PeerError {
@@ -39,6 +40,7 @@ pub(crate) enum PeerEvent {
     Error(PeerError),
 }
 
+#[tracing::instrument(skip(api, signalling_control))]
 pub(crate) async fn peer(
     api: rtc::Api,
     our_peer_id: PeerId,
@@ -63,6 +65,7 @@ pub(crate) async fn peer(
         let rtc_control = rtc_control.clone();
         let peer_connection = peer_connection.clone();
         let our_peer_id = our_peer_id.clone();
+        let span = tracing::span!(tracing::Level::DEBUG, "PeerControl");
         async move {
             match async move {
                 // keep peer connection alive
@@ -122,21 +125,20 @@ pub(crate) async fn peer(
                 }
             }
         }
+        .instrument(span)
+        .in_current_span()
     });
 
     tokio::spawn({
-        let event_tx = event_tx.downgrade();
+        let event_tx = event_tx.clone(); // .downgrade();
+        let span = tracing::span!(tracing::Level::DEBUG, "AudioEvent");
         async move {
             match async move {
                 while let Some(event) = audio_rx.recv().await {
-                    if let Some(event_tx) = event_tx.upgrade() {
-                        match event {
-                            crate::audio::AudioEvent::Audio(audio) => {
-                                event_tx.send(PeerEvent::Audio(audio)).await?;
-                            }
+                    match event {
+                        crate::audio::AudioEvent::Audio(audio) => {
+                            event_tx.send(PeerEvent::Audio(audio)).await?;
                         }
-                    } else {
-                        break;
                     }
                 }
 
@@ -150,10 +152,14 @@ pub(crate) async fn peer(
                 }
             }
         }
+        .instrument(span)
+        .in_current_span()
     });
 
     tokio::spawn({
         let event_tx = event_tx.clone(); // .downgrade();
+        let span =
+            tracing::span!(tracing::Level::DEBUG, "LogicEvent", %our_peer_id, %their_peer_id);
         async move {
             match async move {
                 while let Some(event) = logic_rx.recv().await {
@@ -179,21 +185,21 @@ pub(crate) async fn peer(
                 }
             }
         }
+        .instrument(span)
+        .in_current_span()
     });
 
     tokio::spawn({
-        let event_tx = event_tx.downgrade();
+        let event_tx = event_tx.clone(); // .downgrade();
+        let span =
+            tracing::span!(tracing::Level::DEBUG, "VideoEvent", %our_peer_id, %their_peer_id);
         async move {
             match async move {
                 while let Some(event) = video_rx.recv().await {
-                    if let Some(event_tx) = event_tx.upgrade() {
-                        match event {
-                            crate::video::VideoEvent::Video(video) => {
-                                event_tx.send(PeerEvent::Video(video)).await?;
-                            }
+                    match event {
+                        crate::video::VideoEvent::Video(video) => {
+                            event_tx.send(PeerEvent::Video(video)).await?;
                         }
-                    } else {
-                        break;
                     }
                 }
 
@@ -207,6 +213,8 @@ pub(crate) async fn peer(
                 }
             }
         }
+        .instrument(span)
+        .in_current_span()
     });
 
     tokio::spawn({
@@ -214,6 +222,7 @@ pub(crate) async fn peer(
         let their_peer_id = their_peer_id.clone();
         let signalling_control = signalling_control.clone();
         let event_tx = event_tx.downgrade();
+        let span = tracing::span!(tracing::Level::DEBUG, "RtcPeerEvent");
         async move {
             match async move {
                 while let Some(event) = rtc_event.recv().await {
@@ -260,6 +269,8 @@ pub(crate) async fn peer(
                 }
             }
         }
+        .instrument(span)
+        .in_current_span()
     });
 
     peer_connection.offer(controlling).await?;

@@ -5,6 +5,7 @@ use rtc::{self, ChannelControl, ChannelEvent, PeerConnection};
 use tokio::sync::mpsc;
 
 use eyre::Result;
+use tracing::Instrument;
 
 pub(crate) enum AudioEvent {
     Audio(Vec<u8>),
@@ -14,6 +15,7 @@ pub(crate) enum AudioControl {
     Audio(Vec<u8>),
 }
 
+#[tracing::instrument(skip(peer_connection))]
 pub(crate) async fn audio_channel(
     peer_connection: &dyn PeerConnection,
     controlling: bool,
@@ -29,6 +31,7 @@ pub(crate) async fn audio_channel(
     tokio::spawn({
         let _tx = tx.clone();
         let event_tx = event_tx.clone();
+        let span = tracing::debug_span!("ChannelEvent");
         async move {
             match async move {
                 while let Some(event) = rx.recv().await {
@@ -51,10 +54,13 @@ pub(crate) async fn audio_channel(
                 }
             }
         }
+        .instrument(span)
+        .in_current_span()
     });
 
     tokio::spawn({
         let tx = tx.clone();
+        let span = tracing::debug_span!("AudioControl");
         async move {
             match tokio::spawn(async move {
                 while let Some(control) = control_rx.recv().await {
@@ -78,6 +84,8 @@ pub(crate) async fn audio_channel(
                 }
             }
         }
+        .instrument(span)
+        .in_current_span()
     });
 
     Ok((control_tx, event_rx))
