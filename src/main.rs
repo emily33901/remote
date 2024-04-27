@@ -23,7 +23,6 @@ use tokio::sync::{mpsc, Mutex};
 use tracing::level_filters::LevelFilter;
 use uuid::Uuid;
 
-
 const ARBITRARY_CHANNEL_LIMIT: usize = 10;
 
 #[derive(Debug, Clone)]

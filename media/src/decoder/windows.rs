@@ -274,7 +274,7 @@ unsafe fn hardware(
                         // break;
                     }
                     Err(MF_E_TRANSFORM_NEED_MORE_INPUT) => {
-                        tracing::debug!("need more input");
+                        tracing::trace!("need more input");
                         break;
                     }
                     Err(MF_E_TRANSFORM_STREAM_CHANGE) => {

@@ -28,7 +28,7 @@ pub enum EncoderEvent {
     Data(VideoBuffer),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum Encoder {
     MediaFoundation,
     X264,
@@ -36,6 +36,7 @@ pub enum Encoder {
 }
 
 impl Encoder {
+    #[tracing::instrument]
     pub async fn run(
         &self,
         width: u32,

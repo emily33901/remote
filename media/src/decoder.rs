@@ -16,12 +16,14 @@ pub enum DecoderEvent {
     Frame(ID3D11Texture2D, crate::Timestamp),
 }
 
+#[derive(Debug)]
 pub enum Decoder {
     OpenH264,
     MediaFoundation,
 }
 
 impl Decoder {
+    #[tracing::instrument]
     pub async fn run(
         &self,
         width: u32,

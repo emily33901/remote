@@ -177,10 +177,10 @@ pub(crate) async fn peer(
             match async move {
                 while let Some(event) = logic_rx.recv().await {
                     match event {
-                        logic::LogicEvent::StreamRequest(request) => {
+                        logic::LogicMessage::StreamRequest(request) => {
                             event_tx.send(PeerEvent::StreamRequest(request)).await?;
                         }
-                        logic::LogicEvent::StreamRequestResponse(response) => {
+                        logic::LogicMessage::StreamRequestResponse(response) => {
                             event_tx
                                 .send(PeerEvent::RequestStreamResponse(response))
                                 .await?;

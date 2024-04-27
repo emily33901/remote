@@ -1,10 +1,8 @@
-
-
-use eyre::{Result};
+use eyre::Result;
 use tokio::sync::{mpsc, mpsc::error::TryRecvError};
 
 use windows::{
-    core::{s},
+    core::s,
     Win32::{
         Foundation::{HWND, S_OK},
         Graphics::{
@@ -12,9 +10,10 @@ use windows::{
             Direct3D11::*,
             Dxgi::{
                 Common::{
-                    DXGI_FORMAT, DXGI_FORMAT_R32G32_FLOAT,
-                    DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8_UNORM,
-                }, IDXGISwapChain,
+                    DXGI_FORMAT, DXGI_FORMAT_R32G32_FLOAT, DXGI_FORMAT_R8G8_UNORM,
+                    DXGI_FORMAT_R8_UNORM,
+                },
+                IDXGISwapChain,
             },
         },
         UI::WindowsAndMessaging::{
@@ -25,7 +24,7 @@ use windows::{
 
 use winit::{
     dpi::PhysicalSize,
-    event_loop::{EventLoopBuilder},
+    event_loop::EventLoopBuilder,
     platform::windows::EventLoopBuilderExtWindows,
     raw_window_handle::{HasWindowHandle, RawWindowHandle},
     window::WindowBuilder,

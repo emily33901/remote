@@ -1,5 +1,6 @@
 use eyre::Result;
 use tokio::sync::mpsc;
+use tracing::Instrument;
 use windows::{
     core::Interface,
     Win32::{
@@ -35,12 +36,17 @@ pub(crate) enum DDEvent {
     Frame(ID3D11Texture2D, crate::Timestamp),
 }
 
+#[tracing::instrument]
 pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Receiver<DDEvent>)> {
     let (control_tx, _control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
+    let span = tracing::Span::current();
+
     tokio::spawn(async move {
         match tokio::task::spawn_blocking(move || {
+            let _span_guard = span.enter();
+
             let (device, _context) = dx::create_device()?;
             let (_device2, _context2) = dx::create_device()?;
 
@@ -242,7 +248,7 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
         .await
         .unwrap()
         {
-            Ok(_) => tracing::warn!("media::desktop_duplication::desktop_duplication exit Ok"),
+            Ok(_) => tracing::info!("media::desktop_duplication::desktop_duplication exit Ok"),
             Err(err) => tracing::error!(
                 "media::desktop_duplication::desktop_duplication exit err {err} {err:?}"
             ),

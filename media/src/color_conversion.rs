@@ -1,15 +1,10 @@
-use std::{
-    time::UNIX_EPOCH,
-};
+use std::time::UNIX_EPOCH;
 
 use eyre::{eyre, Result};
 use tokio::sync::mpsc;
 use windows::{
     core::Interface,
-    Win32::{
-        Graphics::Direct3D11::ID3D11Texture2D,
-        Media::MediaFoundation::*,
-    },
+    Win32::{Graphics::Direct3D11::ID3D11Texture2D, Media::MediaFoundation::*},
 };
 
 use crate::ARBITRARY_CHANNEL_LIMIT;
@@ -26,7 +21,7 @@ pub(crate) enum ConvertEvent {
     Frame(ID3D11Texture2D, crate::Timestamp),
 }
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub(crate) enum Format {
     NV12,
     BGRA,
@@ -50,6 +45,7 @@ impl From<Format> for super::dx::TextureFormat {
     }
 }
 
+#[tracing::instrument]
 pub(crate) async fn converter(
     width: u32,
     height: u32,
@@ -115,7 +111,6 @@ pub(crate) async fn converter(
 
                 attributes.set_u32(&MF_LOW_LATENCY, 1)?;
 
-
                 {
                     let input_type = MFCreateMediaType()?;
 
@@ -173,6 +168,8 @@ pub(crate) async fn converter(
                     //         continue;
                     //     }
                     // }
+
+                    // NOTE(emily): cc requires that the input texture be bind_render_target and bind_shader_resource
 
                     let texture = super::dx::TextureBuilder::new(&device, width, height, input_format.into()).bind_render_target().bind_shader_resource().build()?;
 
@@ -283,7 +280,7 @@ pub(crate) async fn converter(
             .await
             .unwrap()
             {
-                Ok(_) => tracing::warn!("cc exit Ok"),
+                Ok(_) => tracing::info!("cc exit Ok"),
                 Err(err) => tracing::error!("cc exit err {err} {err:?}"),
             }
         }
