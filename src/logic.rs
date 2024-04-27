@@ -8,7 +8,7 @@ use rtc::{ChannelControl, ChannelEvent, PeerConnection};
 
 use crate::ARBITRARY_CHANNEL_LIMIT;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct Mode {
     pub(crate) width: u32,
     pub(crate) height: u32,

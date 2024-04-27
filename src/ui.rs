@@ -1,5 +1,5 @@
 use crate::config::{self, Config};
-use crate::logic::{PeerStreamRequest, PeerStreamRequestResponse};
+use crate::logic::{Mode, PeerStreamRequest, PeerStreamRequestResponse};
 use crate::player::video::NV12TextureRender;
 
 use std::collections::HashMap;
@@ -115,7 +115,7 @@ impl RemotePeer {
 
                                             if let PeerStreamRequestResponse::Accept { mode, bitrate } = &response {
                                                 // TODO(emily): Pass mode and bitrate
-                                                Self::start_streaming(&peer_control.downgrade());
+                                                Self::start_streaming(&peer_control.downgrade(), mode, bitrate);
                                             }
 
                                             let _ = peer_control
@@ -196,7 +196,7 @@ impl RemotePeer {
     }
 
     #[tracing::instrument]
-    fn start_streaming(peer_control: &mpsc::WeakSender<PeerControl>) {
+    fn start_streaming(peer_control: &mpsc::WeakSender<PeerControl>, mode: &Mode, bitrate: &u32) {
         // TODO(emily): Thinking that here we can return 2 channels, one for video_tx and one for audio_tx.
         // these could even come from higher up in peer instead of just sending to peer-control. This would also avoid
         // the 'bottleneck' from sending everything through peer control.
@@ -208,6 +208,8 @@ impl RemotePeer {
 
         tokio::spawn({
             let weak_control = peer_control.clone();
+            let mode = mode.clone();
+            let bitrate = bitrate.clone();
             async move {
                 let config = Config::load();
 
@@ -215,19 +217,19 @@ impl RemotePeer {
                     media::produce::produce(
                         config.encoder_api,
                         file,
-                        config.width,
-                        config.height,
-                        config.framerate,
-                        config.bitrate,
+                        mode.width,
+                        mode.height,
+                        mode.refresh_rate,
+                        bitrate,
                     )
                     .await?
                 } else {
                     media::desktop_duplication::duplicate_desktop(
                         config.encoder_api,
-                        config.width,
-                        config.height,
-                        config.framerate,
-                        config.bitrate,
+                        mode.width,
+                        mode.height,
+                        mode.refresh_rate,
+                        bitrate,
                     )
                     .await?
                 };
