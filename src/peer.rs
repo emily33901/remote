@@ -77,7 +77,7 @@ pub(crate) async fn peer(
     tokio::spawn({
         let rtc_control = rtc_control.clone();
         let peer_connection = peer_connection.clone();
-        let our_peer_id = our_peer_id.clone();
+        let _our_peer_id = our_peer_id.clone();
         let span = tracing::span!(tracing::Level::DEBUG, "PeerControl");
         async move {
             match async move {

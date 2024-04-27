@@ -1,24 +1,22 @@
-use std::cell::Cell;
 
-use eyre::{eyre, Result};
+
+use eyre::{Result};
 use tokio::sync::{mpsc, mpsc::error::TryRecvError};
 
 use windows::{
-    core::{s, HSTRING},
+    core::{s},
     Win32::{
-        Foundation::{HWND, LPARAM, LRESULT, S_OK, WPARAM},
+        Foundation::{HWND, S_OK},
         Graphics::{
             Direct3D::*,
             Direct3D11::*,
             Dxgi::{
                 Common::{
-                    DXGI_FORMAT, DXGI_FORMAT_R32G32_FLOAT, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
+                    DXGI_FORMAT, DXGI_FORMAT_R32G32_FLOAT,
                     DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8_UNORM,
-                },
-                IDXGIFactory, IDXGISwapChain,
+                }, IDXGISwapChain,
             },
         },
-        System::LibraryLoader::GetModuleHandleA,
         UI::WindowsAndMessaging::{
             DispatchMessageA, PeekMessageA, TranslateMessage, MSG, PM_REMOVE,
         },
@@ -27,10 +25,9 @@ use windows::{
 
 use winit::{
     dpi::PhysicalSize,
-    event::{Event, WindowEvent},
-    event_loop::{EventLoop, EventLoopBuilder},
+    event_loop::{EventLoopBuilder},
     platform::windows::EventLoopBuilderExtWindows,
-    raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawWindowHandle},
+    raw_window_handle::{HasWindowHandle, RawWindowHandle},
     window::WindowBuilder,
 };
 
@@ -215,7 +212,7 @@ impl TextureRender {
             },
         ];
 
-        let topology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+        let _topology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 
         let buffer_desc = D3D11_BUFFER_DESC {
             Usage: D3D11_USAGE_DEFAULT,
@@ -414,7 +411,7 @@ pub(crate) fn sink(
                 let (device, context, swap_chain) =
                     create_device_and_swapchain(window_handle, width, height)?;
 
-                let mut render_target =
+                let render_target =
                     Some(create_render_target_for_swap_chain(&device, &swap_chain)?);
 
                 let render_target = render_target.unwrap();
@@ -658,7 +655,7 @@ pub(crate) fn sink(
                                     last_texture = Some((frame, time));
                                 }
                                 Err(TryRecvError::Empty) => {
-                                    if let Some((frame, time)) = last_texture {
+                                    if let Some((frame, _time)) = last_texture {
                                         copy_texture(&texture, &frame, None)?;
                                     }
                                     break;

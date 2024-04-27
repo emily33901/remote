@@ -1,41 +1,40 @@
 use crate::config::{self, Config};
 use crate::logic::{PeerStreamRequest, PeerStreamRequestResponse};
 use crate::player::video::TextureRender;
-use std::cell::RefCell;
-use std::collections::HashSet;
-use std::str::FromStr;
+
+
+
 use std::sync::{Arc, Weak};
-use std::{collections::HashMap, fmt::Display};
+use std::{collections::HashMap};
 
 use derive_more::{Deref, DerefMut};
-use futures::channel::mpsc::TryRecvError;
+
 use media::decoder::DecoderEvent;
 use media::VideoBuffer;
-use tokio::runtime::Handle;
+
 use tracing::Instrument;
 
 use crate::peer::PeerControl;
-use clap::Parser;
+
 use eyre::Result;
 use media::dx::create_device_and_swapchain;
-use rtc;
+
 use signal::{ConnectionId, PeerId};
 use signal::{SignallingControl, SignallingEvent};
 
-use tokio::sync::{mpsc, oneshot, MappedMutexGuard, Mutex, MutexGuard};
-use tracing::level_filters::LevelFilter;
-use uuid::Uuid;
+use tokio::sync::{mpsc, oneshot, Mutex, MutexGuard};
+
+
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11Device, ID3D11RenderTargetView, ID3D11Texture2D,
-    D3D11_TRACE_INPUT_GS_INSTANCE_ID_REGISTER,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB};
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
 use winit::dpi::PhysicalSize;
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::EventLoopBuilder;
-use winit::platform::windows::EventLoopBuilderExtWindows;
+
 use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawWindowHandle};
 use winit::window::WindowBuilder;
 
@@ -452,7 +451,7 @@ impl UIPeer {
             let _guard = span.enter();
 
             match event {
-                signal::SignallingEvent::Id(id) => {
+                signal::SignallingEvent::Id(_id) => {
                     unreachable!("We should only ever get our peer_id once");
                 }
                 signal::SignallingEvent::ConectionRequest(peer_id, connection_id) => {
@@ -824,7 +823,7 @@ impl App {
 
                         ui.heading("Connected Peers");
 
-                        for (their_peer_id, control) in &window_state.connected_peers {
+                        for (their_peer_id, _control) in &window_state.connected_peers {
                             ui.horizontal(|ui| {
                                 ui.label(format!("{}", their_peer_id));
 
@@ -859,7 +858,7 @@ impl App {
 
                                 loop {
                                     match decoder_event.try_recv() {
-                                        Ok(DecoderEvent::Frame(t, time)) => {
+                                        Ok(DecoderEvent::Frame(t, _time)) => {
                                             texture = TextureResult::Texture(t)
                                         }
                                         Err(err) => {
@@ -1062,7 +1061,7 @@ pub async fn ui() -> Result<()> {
 
     let mut egui_demo = egui_demo_lib::DemoWindows::default();
 
-    event_loop.run(move |event, control_flow| match event {
+    event_loop.run(move |event, _control_flow| match event {
         Event::AboutToWait => window.request_redraw(),
         Event::WindowEvent { window_id, event } => {
             if window_id != window.id() {
@@ -1076,7 +1075,7 @@ pub async fn ui() -> Result<()> {
             match event {
                 WindowEvent::CloseRequested => {
                     std::process::exit(0);
-                    control_flow.exit()
+                    // control_flow.exit()
                 }
                 WindowEvent::Resized(PhysicalSize {
                     width: new_width,
