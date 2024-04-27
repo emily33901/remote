@@ -63,6 +63,324 @@ fn resize_swap_chain_and_render_target(
     Ok(())
 }
 
+pub(crate) struct TextureRender {
+    sampler_state: ID3D11SamplerState,
+    vertex_shader: ID3D11VertexShader,
+    pixel_shader: ID3D11PixelShader,
+    vertex_buffer: ID3D11Buffer,
+    texture: ID3D11Texture2D,
+    texture_chrom_view: ID3D11ShaderResourceView,
+    texture_lum_view: ID3D11ShaderResourceView,
+    input_layout: ID3D11InputLayout,
+}
+
+#[repr(C)]
+struct Vertex {
+    x: f32,
+    y: f32,
+    u: f32,
+    v: f32,
+}
+
+impl TextureRender {
+    pub fn new(device: &ID3D11Device, width: u32, height: u32) -> Result<Self> {
+        let context = unsafe { device.GetImmediateContext()? };
+
+        let texture = dx::TextureBuilder::new(&device, width, height, dx::TextureFormat::NV12)
+            .bind_shader_resource()
+            .build()?;
+
+        let sample_desc = D3D11_SAMPLER_DESC {
+            Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
+            AddressU: D3D11_TEXTURE_ADDRESS_CLAMP,
+            AddressV: D3D11_TEXTURE_ADDRESS_CLAMP,
+            AddressW: D3D11_TEXTURE_ADDRESS_CLAMP,
+            ComparisonFunc: D3D11_COMPARISON_NEVER,
+            MinLOD: 0.0,
+            MaxLOD: f32::MAX,
+            ..Default::default()
+        };
+
+        let mut sampler_state: Option<ID3D11SamplerState> = None;
+        unsafe { device.CreateSamplerState(&sample_desc, Some(&mut sampler_state as *mut _)) }?;
+
+        unsafe { context.PSSetSamplers(0, Some(&[sampler_state.clone()])) };
+
+        let vertex_shader_blob =
+            compile_shader(include_str!("shader.hlsl"), s!("vs_main"), s!("vs_5_0"))?;
+        let mut vertex_shader: Option<ID3D11VertexShader> = None;
+        unsafe {
+            let vertex_shader_blob_buffer = std::slice::from_raw_parts(
+                vertex_shader_blob.GetBufferPointer() as *const u8,
+                vertex_shader_blob.GetBufferSize(),
+            );
+            device.CreateVertexShader(
+                vertex_shader_blob_buffer,
+                None,
+                Some(&mut vertex_shader as *mut _),
+            )
+        }?;
+
+        let vertex_shader = vertex_shader.unwrap();
+
+        let pixel_shader_blob =
+            compile_shader(include_str!("shader.hlsl"), s!("ps_main"), s!("ps_5_0"))?;
+        let mut pixel_shader: Option<ID3D11PixelShader> = None;
+        unsafe {
+            let pixel_shader_blob_buffer = std::slice::from_raw_parts(
+                pixel_shader_blob.GetBufferPointer() as *const u8,
+                pixel_shader_blob.GetBufferSize(),
+            );
+            device.CreatePixelShader(
+                pixel_shader_blob_buffer,
+                None,
+                Some(&mut pixel_shader as *mut _),
+            )
+        }?;
+
+        let pixel_shader = pixel_shader.unwrap();
+
+        let pipeline_items = &[
+            D3D11_INPUT_ELEMENT_DESC {
+                SemanticName: s!("POS"),
+                SemanticIndex: 0,
+                Format: DXGI_FORMAT_R32G32_FLOAT,
+                InputSlot: 0,
+                AlignedByteOffset: 0,
+                InputSlotClass: D3D11_INPUT_PER_VERTEX_DATA,
+                InstanceDataStepRate: 0,
+            },
+            D3D11_INPUT_ELEMENT_DESC {
+                SemanticName: s!("TEX"),
+                SemanticIndex: 0,
+                Format: DXGI_FORMAT_R32G32_FLOAT,
+                InputSlot: 0,
+                AlignedByteOffset: D3D11_APPEND_ALIGNED_ELEMENT,
+                InputSlotClass: D3D11_INPUT_PER_VERTEX_DATA,
+                InstanceDataStepRate: 0,
+            },
+        ];
+
+        let mut input_layout: Option<ID3D11InputLayout> = None;
+        unsafe {
+            let vertex_shader_blob_buffer = std::slice::from_raw_parts(
+                vertex_shader_blob.GetBufferPointer() as *const u8,
+                vertex_shader_blob.GetBufferSize(),
+            );
+            device.CreateInputLayout(
+                pipeline_items,
+                vertex_shader_blob_buffer,
+                Some(&mut input_layout as *mut _),
+            )
+        }?;
+
+        let input_layout = input_layout.unwrap();
+
+        let verticies = &[
+            Vertex {
+                x: -1.0,
+                y: 1.0,
+                u: 0.0,
+                v: 0.0,
+            },
+            Vertex {
+                x: 1.0,
+                y: -1.0,
+                u: 1.0,
+                v: 1.0,
+            },
+            Vertex {
+                x: -1.0,
+                y: -1.0,
+                u: 0.0,
+                v: 1.0,
+            },
+            Vertex {
+                x: -1.0,
+                y: 1.0,
+                u: 0.0,
+                v: 0.0,
+            },
+            Vertex {
+                x: 1.0,
+                y: 1.0,
+                u: 1.0,
+                v: 0.0,
+            },
+            Vertex {
+                x: 1.0,
+                y: -1.0,
+                u: 1.0,
+                v: 1.0,
+            },
+        ];
+
+        let topology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+
+        let buffer_desc = D3D11_BUFFER_DESC {
+            Usage: D3D11_USAGE_DEFAULT,
+            ByteWidth: (verticies.len() * std::mem::size_of::<Vertex>()) as u32,
+            BindFlags: D3D11_BIND_VERTEX_BUFFER.0 as u32,
+            ..Default::default()
+        };
+
+        let subresource_data = D3D11_SUBRESOURCE_DATA {
+            pSysMem: verticies.as_ptr() as *const std::ffi::c_void,
+            ..Default::default()
+        };
+
+        let mut vertex_buffer: Option<ID3D11Buffer> = None;
+
+        unsafe {
+            device.CreateBuffer(
+                &buffer_desc as *const _,
+                Some(&subresource_data as *const _),
+                Some(&mut vertex_buffer as *mut _),
+            )
+        }?;
+
+        let mut texture_lum_view: Option<ID3D11ShaderResourceView> = None;
+
+        unsafe {
+            let mut texture_view_desc: D3D11_SHADER_RESOURCE_VIEW_DESC =
+                D3D11_SHADER_RESOURCE_VIEW_DESC {
+                    Format: DXGI_FORMAT_R8_UNORM,
+                    ViewDimension: D3D11_SRV_DIMENSION_TEXTURE2D,
+                    ..Default::default()
+                };
+
+            texture_view_desc.Anonymous.Texture2D = D3D11_TEX2D_SRV {
+                MostDetailedMip: 0,
+                MipLevels: 1,
+            };
+
+            device.CreateShaderResourceView(
+                &texture,
+                Some(&texture_view_desc as *const _),
+                Some(&mut texture_lum_view as *mut _),
+            )
+        }?;
+
+        let mut texture_chrom_view: Option<ID3D11ShaderResourceView> = None;
+
+        unsafe {
+            let mut texture_view_desc: D3D11_SHADER_RESOURCE_VIEW_DESC =
+                D3D11_SHADER_RESOURCE_VIEW_DESC {
+                    Format: DXGI_FORMAT_R8G8_UNORM,
+                    ViewDimension: D3D11_SRV_DIMENSION_TEXTURE2D,
+                    ..Default::default()
+                };
+
+            texture_view_desc.Anonymous.Texture2D = D3D11_TEX2D_SRV {
+                MostDetailedMip: 0,
+                MipLevels: 1,
+            };
+
+            device.CreateShaderResourceView(
+                &texture,
+                Some(&texture_view_desc),
+                Some(&mut texture_chrom_view),
+            )
+        }?;
+
+        Ok(Self {
+            sampler_state: sampler_state.unwrap(),
+            vertex_shader,
+            pixel_shader,
+            vertex_buffer: vertex_buffer.unwrap(),
+            texture: texture,
+            texture_chrom_view: texture_chrom_view.unwrap(),
+            texture_lum_view: texture_lum_view.unwrap(),
+            input_layout: input_layout,
+        })
+    }
+
+    pub(crate) fn render_texture(
+        &self,
+        texture: &ID3D11Texture2D,
+        device: &ID3D11Device,
+    ) -> Result<()> {
+        dx::copy_texture(&self.texture, texture, None)?;
+
+        let topology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+
+        let context = unsafe { device.GetImmediateContext()? };
+
+        unsafe {
+            context.IASetInputLayout(&self.input_layout);
+            context.VSSetShader(&self.vertex_shader, None);
+            context.PSSetShader(&self.pixel_shader, None);
+        }
+
+        unsafe {
+            context.PSSetShaderResources(
+                0,
+                Some(&[
+                    Some(self.texture_lum_view.clone()),
+                    Some(self.texture_chrom_view.clone()),
+                ]),
+            );
+            context.PSSetSamplers(0, Some(&[Some(self.sampler_state.clone())]));
+        }
+
+        unsafe {
+            let mut offset = 0_u32;
+            let stride = std::mem::size_of::<Vertex>() as u32;
+            context.IASetVertexBuffers(
+                0,
+                1,
+                Some(&Some(self.vertex_buffer.clone()) as *const _),
+                Some(&stride as *const _),
+                Some(&mut offset),
+            );
+            context.IASetPrimitiveTopology(topology);
+        }
+
+        const VERTICES: &[Vertex; 6] = &[
+            Vertex {
+                x: -1.0,
+                y: 1.0,
+                u: 0.0,
+                v: 0.0,
+            },
+            Vertex {
+                x: 1.0,
+                y: -1.0,
+                u: 1.0,
+                v: 1.0,
+            },
+            Vertex {
+                x: -1.0,
+                y: -1.0,
+                u: 0.0,
+                v: 1.0,
+            },
+            Vertex {
+                x: -1.0,
+                y: 1.0,
+                u: 0.0,
+                v: 0.0,
+            },
+            Vertex {
+                x: 1.0,
+                y: 1.0,
+                u: 1.0,
+                v: 0.0,
+            },
+            Vertex {
+                x: 1.0,
+                y: -1.0,
+                u: 1.0,
+                v: 1.0,
+            },
+        ];
+
+        unsafe { context.Draw(VERTICES.len() as u32, 0) };
+
+        Ok(())
+    }
+}
+
 pub(crate) fn sink(
     width: u32,
     height: u32,
@@ -315,8 +633,8 @@ pub(crate) fn sink(
 
                     device.CreateShaderResourceView(
                         &texture,
-                        Some(&texture_view_desc as *const _),
-                        Some(&mut texture_chrom_view as *mut _),
+                        Some(&texture_view_desc),
+                        Some(&mut texture_chrom_view),
                     )
                 }?;
 

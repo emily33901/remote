@@ -21,6 +21,8 @@ async fn try_send_telemetry_event(event: TelemetryEvent) {
 }
 
 pub async fn watch_channel<T: Send + 'static>(sender: &mpsc::Sender<T>, name: &str) {
+    return;
+
     let id = next_id();
     tokio::spawn({
         let sender = sender.downgrade();
@@ -81,6 +83,7 @@ impl Counter {
 }
 
 pub async fn watch_counter(counter: &Counter, unit: crate::Unit, name: &str) {
+    return;
     let id = next_id();
     tokio::spawn({
         let counter = Arc::downgrade(&counter.0);
@@ -129,6 +132,7 @@ pub async fn watch_counter(counter: &Counter, unit: crate::Unit, name: &str) {
 }
 
 pub async fn sink() {
+    return;
     tokio::spawn(async move {
         tracing::info!("starting telemetry sink");
         let (tx, mut rx) = mpsc::channel(100);

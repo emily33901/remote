@@ -1,7 +1,7 @@
 use std::mem::MaybeUninit;
 
 use windows::{
-    core::{IUnknown, Interface, PWSTR},
+    core::{IUnknown, Interface, Param, PWSTR},
     Win32::{
         Foundation::FALSE,
         Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D},
@@ -117,7 +117,7 @@ pub(crate) trait IMFAttributesExt {
 
     fn get_string(&self, key: &windows::core::GUID) -> windows::core::Result<String>;
 
-    fn set_unknown<T: windows::core::IntoParam<IUnknown>>(
+    fn set_unknown<T: windows::core::Param<IUnknown>>(
         &self,
         key: &windows::core::GUID,
         value: T,
@@ -178,7 +178,7 @@ impl IMFAttributesExt for IMFAttributes {
         Ok(String::from_utf16_lossy(slice))
     }
 
-    fn set_unknown<T: windows::core::IntoParam<IUnknown>>(
+    fn set_unknown<T: windows::core::Param<IUnknown>>(
         &self,
         key: &windows::core::GUID,
         value: T,
@@ -250,7 +250,7 @@ impl IMFAttributesExt for IMFMediaType {
         Ok(String::from_utf16_lossy(slice))
     }
 
-    fn set_unknown<T: windows::core::IntoParam<IUnknown>>(
+    fn set_unknown<T: Param<IUnknown>>(
         &self,
         key: &windows::core::GUID,
         value: T,

@@ -1,5 +1,6 @@
 use crate::config::{self, Config};
 use crate::logic::{PeerStreamRequest, PeerStreamRequestResponse};
+use crate::player::video::TextureRender;
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::str::FromStr;
@@ -7,6 +8,9 @@ use std::sync::{Arc, Weak};
 use std::{collections::HashMap, fmt::Display};
 
 use derive_more::{Deref, DerefMut};
+use futures::channel::mpsc::TryRecvError;
+use media::decoder::DecoderEvent;
+use media::VideoBuffer;
 use tokio::runtime::Handle;
 use tracing::Instrument;
 
@@ -60,9 +64,18 @@ fn resize_swap_chain_and_render_target(
     Ok(())
 }
 
-#[derive(Debug)]
 struct RemotePeer {
+    peer_id: PeerId,
     control: mpsc::Sender<PeerControl>,
+}
+
+impl std::fmt::Debug for RemotePeer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RemotePeer")
+            .field("peer_id", &self.peer_id)
+            // .field("control", &self.control)
+            .finish()
+    }
 }
 
 impl RemotePeer {
@@ -88,6 +101,7 @@ impl RemotePeer {
         tokio::spawn({
             let our_peer_id = our_peer_id.clone();
             let peer_control = control.downgrade();
+            let their_peer_id = their_peer_id.clone();
 
             async move {
                 // NOTE(emily): Make sure to keep player alive
@@ -104,6 +118,9 @@ impl RemotePeer {
 
                 // let mut i = 0;
 
+                let mut decoder_control: Option<mpsc::Sender<media::decoder::DecoderControl>> =
+                    None;
+
                 while let Some(event) = event.recv().await {
                     match event {
                         crate::peer::PeerEvent::StreamRequest(request) => {
@@ -114,6 +131,11 @@ impl RemotePeer {
                                 async move {
                                     if let Ok(response) = response_rx.await {
                                         if let Some(peer_control) = peer_control.upgrade() {
+
+                                            if let PeerStreamRequestResponse::Accept() = &response {
+                                                Self::start_streaming(&peer_control.downgrade());
+                                            }
+
                                             let _ = peer_control
                                                 .send(PeerControl::RequestStreamResponse(response))
                                                 .await;
@@ -133,13 +155,56 @@ impl RemotePeer {
                                 .await?;
                         }
 
-                        crate::peer::PeerEvent::RequestStreamResponse(response) => {
-                            tracing::warn!(
-                                ?response,
-                                our_peer_id,
-                                their_peer_id,
-                                "ignoring peer stream request response"
-                            );
+                        crate::peer::PeerEvent::RequestStreamResponse(response) => match response {
+                            PeerStreamRequestResponse::Accept() => {
+                                tracing::info!("they accepted my stream request, make a decoder here instead of lazily when receiving video");
+                            }
+                            _ => {
+                                tracing::warn!(
+                                    ?response,
+                                    our_peer_id,
+                                    their_peer_id,
+                                    "ignoring peer stream request response Reject"
+                                );
+                            }
+                        },
+                        crate::peer::PeerEvent::Video(video) => {
+                            let config = Config::load();
+
+                            if let Some(decoder_control) = &decoder_control {
+                                decoder_control
+                                    .send(media::decoder::DecoderControl::Data(video))
+                                    .await?;
+                            } else {
+                                let (control, event) = config
+                                    .decoder_api
+                                    .run(
+                                        config.width,
+                                        config.height,
+                                        config.framerate,
+                                        config.bitrate,
+                                    )
+                                    .await?;
+
+                                control
+                                    .send(media::decoder::DecoderControl::Data(video))
+                                    .await?;
+
+                                decoder_control = Some(control);
+
+                                app_event_tx
+                                    .send(AppEvent::DecoderEvent(
+                                        our_peer_id.clone(),
+                                        (their_peer_id.clone(), event),
+                                    ))
+                                    .await?;
+                            }
+
+                            // TODO(emily):
+                            // Make a decoder
+                            // keep control around here
+                            // pass event up through AppEvent to the window_state
+                            // window_state can then pull from there and render as needed
                         }
                         event => {
                             tracing::warn!(our_peer_id, ?event, "ignoring peer event");
@@ -184,7 +249,70 @@ impl RemotePeer {
             .in_current_span()
         });
 
-        Ok(Self { control })
+        Ok(Self {
+            peer_id: their_peer_id.clone(),
+            control,
+        })
+    }
+
+    #[tracing::instrument]
+    fn start_streaming(peer_control: &mpsc::WeakSender<PeerControl>) {
+        // TODO(emily): Thinking that here we can return 2 channels, one for video_tx and one for audio_tx.
+        // these could even come from higher up in peer instead of just sending to peer-control. This would also avoid
+        // the 'bottleneck' from sending everything through peer control.
+        // returning channels here would also allow us to pass media through from higher up in the application
+        // (maybe from a single desktop duplication instance instead of the one for each peer that we would have right
+        // now).
+
+        // For now this is fine.
+
+        tokio::spawn({
+            let weak_control = peer_control.clone();
+            async move {
+                let config = Config::load();
+
+                let (_tx, mut rx) = if let Some(file) = config.media_filename.as_ref() {
+                    media::produce::produce(
+                        config.encoder_api,
+                        file,
+                        config.width,
+                        config.height,
+                        config.framerate,
+                        config.bitrate,
+                    )
+                    .await?
+                } else {
+                    media::desktop_duplication::duplicate_desktop(
+                        config.encoder_api,
+                        config.width,
+                        config.height,
+                        config.framerate,
+                        config.bitrate,
+                    )
+                    .await?
+                };
+
+                while let Some(event) = rx.recv().await {
+                    if let Some(control) = weak_control.upgrade() {
+                        match event {
+                            media::produce::MediaEvent::Audio(audio) => {
+                                tracing::trace!("produce audio {}", audio.len());
+                                control.send(PeerControl::Audio(audio)).await.unwrap();
+                            }
+                            media::produce::MediaEvent::Video(video) => {
+                                tracing::trace!("produce video {}", video.data.len());
+                                control.send(PeerControl::Video(video)).await.unwrap();
+                            }
+                        }
+                    } else {
+                        break;
+                    }
+                }
+
+                eyre::Ok(())
+            }
+            .in_current_span()
+        });
     }
 }
 
@@ -198,7 +326,6 @@ impl Drop for RemotePeer {
     }
 }
 
-#[derive(Debug)]
 struct _Peer {
     our_peer_id: PeerId,
     last_connection_request: Option<String>,
@@ -207,6 +334,20 @@ struct _Peer {
     signal_control: mpsc::Sender<SignallingControl>,
     app_event_tx: mpsc::Sender<AppEvent>,
     peer_tasks: tokio::task::JoinSet<Result<()>>,
+}
+
+impl std::fmt::Debug for _Peer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("_Peer")
+            .field("our_peer_id", &self.our_peer_id)
+            .field("last_connection_request", &self.last_connection_request)
+            .field("remote_peers", &self.remote_peers)
+            .field("connection_peer_id", &self.connection_peer_id)
+            // .field("signal_control", &self.signal_control)
+            // .field("app_event_tx", &self.app_event_tx)
+            .field("peer_tasks", &self.peer_tasks)
+            .finish()
+    }
 }
 
 impl Drop for _Peer {
@@ -227,7 +368,11 @@ struct UIPeer(
 
 impl Drop for UIPeer {
     fn drop(&mut self) {
-        tracing::info!(our_peer_id = self.0, "UIPeer::drop");
+        tracing::info!(
+            our_peer_id = self.0,
+            strong_count = Arc::strong_count(&self.1),
+            "UIPeer::drop"
+        );
     }
 }
 
@@ -303,7 +448,7 @@ impl UIPeer {
             let strong_zelf = zelf.upgrade().ok_or(eyre::eyre!("no peer"))?;
             let mut zelf = strong_zelf.lock().await;
 
-            let span = tracing::debug_span!("SignallingEvent", zelf.our_id, zelf.their_id);
+            let span = tracing::debug_span!("SignallingEvent", zelf.our_peer_id);
             let _guard = span.enter();
 
             match event {
@@ -311,12 +456,7 @@ impl UIPeer {
                     unreachable!("We should only ever get our peer_id once");
                 }
                 signal::SignallingEvent::ConectionRequest(peer_id, connection_id) => {
-                    tracing::info!(
-                        zelf.our_peer_id,
-                        peer_id,
-                        ?connection_id,
-                        "connection request"
-                    );
+                    tracing::info!(peer_id, ?connection_id, "connection request");
                     zelf.last_connection_request = Some(connection_id.to_string());
                     zelf.connection_peer_id
                         .insert(connection_id.clone(), peer_id.clone());
@@ -331,8 +471,7 @@ impl UIPeer {
                         .await;
                 }
                 signal::SignallingEvent::Offer(peer_id, offer) => {
-                    let our_peer_id = zelf.our_peer_id.clone();
-                    tracing::info!(our_peer_id, peer_id, offer, "offer");
+                    tracing::info!(peer_id, offer, "offer");
 
                     let remote_peers = &mut zelf.remote_peers;
                     if let Some(peer_data) = remote_peers.get(&peer_id) {
@@ -342,18 +481,11 @@ impl UIPeer {
                             .await
                             .unwrap();
                     } else {
-                        tracing::debug!(
-                            our_peer_id,
-                            peer_id,
-                            ?remote_peers,
-                            "got offer for unknown peer"
-                        );
+                        tracing::debug!(peer_id, ?remote_peers, "got offer for unknown peer");
                     }
                 }
                 signal::SignallingEvent::Answer(peer_id, answer) => {
-                    let our_peer_id = zelf.our_peer_id.clone();
-
-                    tracing::info!(zelf.our_peer_id, peer_id, answer, "answer");
+                    tracing::info!(peer_id, answer, "answer");
 
                     let remote_peers = &mut zelf.remote_peers;
                     if let Some(remote_peer) = remote_peers.get(&peer_id) {
@@ -364,7 +496,6 @@ impl UIPeer {
                             .unwrap();
                     } else {
                         tracing::debug!(
-                            our_peer_id,
                             peer_id,
                             ?remote_peers,
                             "got answer for unknown peer {peer_id}"
@@ -372,9 +503,7 @@ impl UIPeer {
                     }
                 }
                 signal::SignallingEvent::IceCandidate(peer_id, ice_candidate) => {
-                    let our_peer_id = zelf.our_peer_id.clone();
-
-                    tracing::info!(our_peer_id, peer_id, ?ice_candidate, "ice candidate");
+                    tracing::info!(peer_id, ?ice_candidate, "ice candidate");
 
                     let remote_peers = &mut zelf.remote_peers;
                     if let Some(remote_peer) = remote_peers.get(&peer_id) {
@@ -385,7 +514,6 @@ impl UIPeer {
                             .unwrap();
                     } else {
                         tracing::debug!(
-                            our_peer_id,
                             peer_id,
                             ?remote_peers,
                             "got ice candidate for unknown peer"
@@ -395,10 +523,9 @@ impl UIPeer {
                 signal::SignallingEvent::ConnectionAccepted(peer_id, connection_id) => {
                     // NOTE(emily): We sent the request so we are controlling
                     let our_peer_id = zelf.our_peer_id.clone();
-
                     assert!(peer_id != our_peer_id);
 
-                    tracing::info!(our_peer_id, peer_id, ?connection_id, "connection accepted");
+                    tracing::info!(peer_id, ?connection_id, "connection accepted");
 
                     zelf.peer_tasks.spawn({
                         let our_peer_id = our_peer_id;
@@ -529,6 +656,30 @@ impl UIPeer {
 
         Ok(())
     }
+
+    #[tracing::instrument]
+    async fn submit_audio(&self, their_peer_id: &PeerId, audio: Vec<u8>) -> Result<()> {
+        let zelf = self.inner().await;
+        if let Some(peer) = zelf.remote_peers.get(their_peer_id) {
+            peer.control.send(PeerControl::Audio(audio)).await?;
+        } else {
+            tracing::warn!("no such peer");
+        }
+
+        Ok(())
+    }
+
+    #[tracing::instrument]
+    async fn submit_video(&self, their_peer_id: &PeerId, video: VideoBuffer) -> Result<()> {
+        let zelf = self.inner().await;
+        if let Some(peer) = zelf.remote_peers.get(their_peer_id) {
+            peer.control.send(PeerControl::Video(video)).await?;
+        } else {
+            tracing::warn!("no such peer");
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(PartialEq, Default, Debug)]
@@ -538,7 +689,7 @@ enum Visible {
     Yes,
 }
 
-#[derive(Default, Debug)]
+#[derive(Default)]
 struct PeerWindowState {
     visible: Visible,
     connect_peer_id: String,
@@ -551,6 +702,28 @@ struct PeerWindowState {
             oneshot::Sender<PeerStreamRequestResponse>,
         ),
     >,
+
+    stream_texture_renderer: Arc<std::sync::OnceLock<TextureRender>>,
+    media_decoder_event: HashMap<
+        PeerId,
+        (
+            Option<ID3D11Texture2D>,
+            mpsc::Receiver<media::decoder::DecoderEvent>,
+        ),
+    >,
+}
+
+impl std::fmt::Debug for PeerWindowState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PeerWindowState")
+            .field("visible", &self.visible)
+            .field("connect_peer_id", &self.connect_peer_id)
+            .field("connection_requests", &self.connection_requests)
+            .field("connected_peers", &self.connected_peers)
+            .field("stream_requests", &self.stream_requests)
+            // .field("stream_texture_renderer", &self.stream_texture_renderer)
+            .finish()
+    }
 }
 
 enum AppEvent {
@@ -564,6 +737,10 @@ enum AppEvent {
             PeerStreamRequest,
             tokio::sync::oneshot::Sender<crate::logic::PeerStreamRequestResponse>,
         ),
+    ),
+    DecoderEvent(
+        PeerId,
+        (PeerId, mpsc::Receiver<media::decoder::DecoderEvent>),
     ),
 }
 
@@ -647,14 +824,14 @@ impl App {
 
                         ui.heading("Connected Peers");
 
-                        for (peer_id, control) in &window_state.connected_peers {
+                        for (their_peer_id, control) in &window_state.connected_peers {
                             ui.horizontal(|ui| {
-                                ui.label(format!("{}", peer_id));
+                                ui.label(format!("{}", their_peer_id));
 
                                 if ui.button("request stream").clicked() {
                                     tokio::spawn({
                                         let peer = peer.clone();
-                                        let peer_id = peer_id.clone();
+                                        let peer_id = their_peer_id.clone();
                                         async move {
                                             peer.request_stream(peer_id, PeerStreamRequest {})
                                                 .await
@@ -663,6 +840,82 @@ impl App {
                                     });
                                 }
                             });
+
+                            let (rect, _) = ui.allocate_exact_size(
+                                egui::Vec2::splat(300.0),
+                                egui::Sense::focusable_noninteractive(),
+                            );
+
+                            enum TextureResult {
+                                Done,
+                                Empty(Option<ID3D11Texture2D>),
+                                Texture(ID3D11Texture2D),
+                            }
+
+                            if let Some((last_texture, decoder_event)) =
+                                window_state.media_decoder_event.get_mut(their_peer_id)
+                            {
+                                let mut texture = TextureResult::Empty(last_texture.clone());
+
+                                loop {
+                                    match decoder_event.try_recv() {
+                                        Ok(DecoderEvent::Frame(t, time)) => {
+                                            texture = TextureResult::Texture(t)
+                                        }
+                                        Err(err) => {
+                                            if let mpsc::error::TryRecvError::Disconnected = err {
+                                                texture = TextureResult::Done;
+                                            }
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                match texture {
+                                    TextureResult::Done => {
+                                        window_state
+                                            .media_decoder_event
+                                            .remove(their_peer_id)
+                                            .unwrap();
+                                    }
+                                    TextureResult::Empty(None) => {}
+                                    TextureResult::Empty(Some(texture))
+                                    | TextureResult::Texture(texture) => {
+                                        *last_texture = Some(texture.clone());
+
+                                        let cb = egui::PaintCallback {
+                                            rect: rect,
+                                            callback: std::sync::Arc::new(
+                                                egui_directx11::CallbackFn::new({
+                                                    let texture_renderer = window_state
+                                                        .stream_texture_renderer
+                                                        .clone();
+                                                    move |_info, renderer| {
+                                                        let texture_renderer = texture_renderer
+                                                            .get_or_init(|| {
+                                                                TextureRender::new(
+                                                                    renderer.device(),
+                                                                    1920,
+                                                                    1080,
+                                                                )
+                                                                .unwrap()
+                                                            });
+
+                                                        texture_renderer
+                                                            .render_texture(
+                                                                &texture,
+                                                                renderer.device(),
+                                                            )
+                                                            .unwrap();
+                                                        // texture_renderer.render_texture(texture, device);
+                                                    }
+                                                }),
+                                            ),
+                                        };
+                                        ui.painter().add(cb);
+                                    }
+                                }
+                            }
                         }
 
                         ui.heading("Connection Requests");
@@ -756,6 +1009,14 @@ impl App {
                             peer_window_state
                                 .stream_requests
                                 .insert(their_id.clone(), (request, response_tx));
+                        }
+                    }
+
+                    AppEvent::DecoderEvent(our_id, (their_id, decoder_event)) => {
+                        if let Some((peer_window_state, _)) = self.peers.get_mut(&our_id) {
+                            peer_window_state
+                                .media_decoder_event
+                                .insert(their_id, (None, decoder_event));
                         }
                     }
                 }
@@ -866,69 +1127,7 @@ pub async fn ui() -> Result<()> {
 
     // if *produce {
     //     tokio::task::spawn({
-    //         let _tx = signal_tx.clone();
-    //         let _our_peer_id = our_peer_id.clone();
-    //         let _last_connection_request = last_connection_request.clone();
-    //         let peer_controls = peer_controls.clone();
-    //         async move {
-    //             match async move {
-    //                 // let maybe_file = std::env::var("media_filename").ok();
 
-    //                 let (_tx, mut rx) = if let Some(file) = config.media_filename.as_ref() {
-    //                     media::produce::produce(
-    //                         config.encoder_api,
-    //                         file,
-    //                         config.width,
-    //                         config.height,
-    //                         config.framerate,
-    //                         config.bitrate,
-    //                     )
-    //                     .await?
-    //                 } else {
-    //                     media::desktop_duplication::duplicate_desktop(
-    //                         config.encoder_api,
-    //                         config.width,
-    //                         config.height,
-    //                         config.framerate,
-    //                         config.bitrate,
-    //                     )
-    //                     .await?
-    //                 };
-
-    //                 while let Some(event) = rx.recv().await {
-    //                     match event {
-    //                         media::produce::MediaEvent::Audio(audio) => {
-    //                             tracing::trace!("produce audio {}", audio.len());
-    //                             let peer_controls = peer_controls.lock().await;
-    //                             for (_, control) in peer_controls.iter() {
-    //                                 control.send(PeerControl::Audio(audio.clone())).await?;
-    //                             }
-    //                         }
-    //                         media::produce::MediaEvent::Video(video) => {
-    //                             // tracing::debug!("throwing video");
-    //                             tracing::trace!("produce video {}", video.data.len());
-    //                             let peer_controls = peer_controls.lock().await;
-    //                             for (_, control) in peer_controls.iter() {
-    //                                 control.send(PeerControl::Video(video.clone())).await?;
-    //                             }
-    //                         }
-    //                     }
-    //                 }
-
-    //                 eyre::Ok(())
-    //             }
-    //             .await
-    //             {
-    //                 Ok(_) => {
-    //                     tracing::info!("produce down ok")
-    //                 }
-    //                 Err(err) => {
-    //                     tracing::error!("produce down err {err}")
-    //                 }
-    //             }
-
-    //             eyre::Ok(())
-    //         }
     //     });
     // }
 
