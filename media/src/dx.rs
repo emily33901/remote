@@ -453,7 +453,7 @@ pub fn compile_shader(data: &str, entry_point: PCSTR, target: PCSTR) -> Result<I
     }
 }
 
-pub(crate) trait ID3D11Texture2DExt {
+pub trait ID3D11Texture2DExt {
     fn map<F: Fn(&[u8], usize) -> Result<()>>(
         &self,
         context: &ID3D11DeviceContext,

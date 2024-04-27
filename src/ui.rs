@@ -1,6 +1,6 @@
 use crate::config::{self, Config};
 use crate::logic::{PeerStreamRequest, PeerStreamRequestResponse};
-use crate::player::video::TextureRender;
+use crate::player::video::NV12TextureRender;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
@@ -139,37 +139,16 @@ impl RemotePeer {
 
                         crate::peer::PeerEvent::RequestStreamResponse(response) => match response {
                             PeerStreamRequestResponse::Accept{ mode, bitrate } => {
-                                tracing::info!("they accepted my stream request, make a decoder here instead of lazily when receiving video");
-                            }
-                            _ => {
-                                tracing::warn!(
-                                    ?response,
-                                    our_peer_id,
-                                    their_peer_id,
-                                    "ignoring peer stream request response Reject"
-                                );
-                            }
-                        },
-                        crate::peer::PeerEvent::Video(video) => {
-                            let config = Config::load();
+                                tracing::info!(?mode, bitrate, "stream accepted");
 
-                            if let Some(decoder_control) = &decoder_control {
-                                decoder_control
-                                    .send(media::decoder::DecoderControl::Data(video))
-                                    .await?;
-                            } else {
                                 let (control, event) = config
                                     .decoder_api
                                     .run(
-                                        config.width,
-                                        config.height,
-                                        config.framerate,
-                                        config.bitrate,
+                                        mode.width,
+                                        mode.height,
+                                        mode.refresh_rate,
+                                        bitrate,
                                     )
-                                    .await?;
-
-                                control
-                                    .send(media::decoder::DecoderControl::Data(video))
                                     .await?;
 
                                 decoder_control = Some(control);
@@ -180,6 +159,23 @@ impl RemotePeer {
                                         (their_peer_id.clone(), event),
                                     ))
                                     .await?;
+                            }
+                            _ => {
+                                tracing::warn!(
+                                    ?response,
+                                    our_peer_id,
+                                    their_peer_id,
+                                    "ignoring peer stream request response Reject or Negotiate"
+                                );
+                            }
+                        },
+                        crate::peer::PeerEvent::Video(video) => {
+                            if let Some(decoder_control) = &decoder_control {
+                                decoder_control
+                                    .send(media::decoder::DecoderControl::Data(video))
+                                    .await?;
+                            } else {
+                                tracing::warn!("got video when we were not expecting video (we dont have a decoder)");
                             }
 
                         }
@@ -647,7 +643,7 @@ struct PeerWindowState {
         ),
     >,
 
-    stream_texture_renderer: Arc<std::sync::OnceLock<TextureRender>>,
+    stream_texture_renderer: Arc<std::sync::OnceLock<NV12TextureRender>>,
     media_decoder_event: HashMap<
         PeerId,
         (
@@ -761,14 +757,12 @@ impl PeerWindowState {
                                     let texture_renderer = self.stream_texture_renderer.clone();
                                     move |_info, renderer| {
                                         let texture_renderer = texture_renderer.get_or_init(|| {
-                                            TextureRender::new(renderer.device(), 1920, 1080)
-                                                .unwrap()
+                                            NV12TextureRender::new(renderer.device()).unwrap()
                                         });
 
                                         texture_renderer
                                             .render_texture(&texture, renderer.device())
                                             .unwrap();
-                                        // texture_renderer.render_texture(texture, device);
                                     }
                                 })),
                             };
