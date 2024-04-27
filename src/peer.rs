@@ -112,12 +112,12 @@ pub(crate) async fn peer(
                         }
                         PeerControl::RequestStream(request) => {
                             logic_tx
-                                .send(crate::logic::LogicControl::RequestStream(request))
+                                .send(crate::logic::LogicMessage::StreamRequest(request))
                                 .await?;
                         }
                         PeerControl::RequestStreamResponse(response) => {
                             logic_tx
-                                .send(crate::logic::LogicControl::RequestStreamResponse(response))
+                                .send(crate::logic::LogicMessage::StreamRequestResponse(response))
                                 .await?;
                         }
                         PeerControl::Die => {

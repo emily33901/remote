@@ -453,7 +453,7 @@ pub fn compile_shader(data: &str, entry_point: PCSTR, target: PCSTR) -> Result<I
     }
 }
 
-pub(crate) trait MapTextureExt {
+pub(crate) trait ID3D11Texture2DExt {
     fn map<F: Fn(&[u8], usize) -> Result<()>>(
         &self,
         context: &ID3D11DeviceContext,
@@ -464,9 +464,11 @@ pub(crate) trait MapTextureExt {
         context: &ID3D11DeviceContext,
         f: F,
     ) -> Result<()>;
+
+    fn desc(&self) -> D3D11_TEXTURE2D_DESC;
 }
 
-impl MapTextureExt for ID3D11Texture2D {
+impl ID3D11Texture2DExt for ID3D11Texture2D {
     fn map<F: FnOnce(&[u8], usize) -> Result<()>>(
         &self,
         context: &ID3D11DeviceContext,
@@ -548,5 +550,13 @@ impl MapTextureExt for ID3D11Texture2D {
         }
 
         Ok(())
+    }
+
+    fn desc(&self) -> D3D11_TEXTURE2D_DESC {
+        unsafe {
+            let mut desc = D3D11_TEXTURE2D_DESC::default();
+            self.GetDesc(&mut desc);
+            desc
+        }
     }
 }

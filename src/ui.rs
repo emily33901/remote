@@ -113,7 +113,8 @@ impl RemotePeer {
                                     if let Ok(response) = response_rx.await {
                                         if let Some(peer_control) = peer_control.upgrade() {
 
-                                            if let PeerStreamRequestResponse::Accept() = &response {
+                                            if let PeerStreamRequestResponse::Accept { mode, bitrate } = &response {
+                                                // TODO(emily): Pass mode and bitrate
                                                 Self::start_streaming(&peer_control.downgrade());
                                             }
 
@@ -137,7 +138,7 @@ impl RemotePeer {
                         }
 
                         crate::peer::PeerEvent::RequestStreamResponse(response) => match response {
-                            PeerStreamRequestResponse::Accept() => {
+                            PeerStreamRequestResponse::Accept{ mode, bitrate } => {
                                 tracing::info!("they accepted my stream request, make a decoder here instead of lazily when receiving video");
                             }
                             _ => {
@@ -702,9 +703,15 @@ impl PeerWindowState {
                             let peer = peer.clone();
                             let peer_id = their_peer_id.clone();
                             async move {
-                                peer.request_stream(peer_id, PeerStreamRequest {})
-                                    .await
-                                    .unwrap();
+                                peer.request_stream(
+                                    peer_id,
+                                    PeerStreamRequest {
+                                        preferred_mode: None,
+                                        preferred_bitrate: None,
+                                    },
+                                )
+                                .await
+                                .unwrap();
                             }
                         });
                     }
@@ -798,8 +805,19 @@ impl PeerWindowState {
                 ui.horizontal(|ui| {
                     ui.label(format!("{} {:?}", peer_id, request));
                     if ui.button("accept").clicked() {
-                        stream_request_clicked =
-                            Some((peer_id.clone(), PeerStreamRequestResponse::Accept()));
+                        let config = Config::load();
+
+                        stream_request_clicked = Some((
+                            peer_id.clone(),
+                            PeerStreamRequestResponse::Accept {
+                                mode: crate::logic::Mode {
+                                    width: config.width,
+                                    height: config.height,
+                                    refresh_rate: config.framerate,
+                                },
+                                bitrate: config.bitrate,
+                            },
+                        ));
                     }
                 });
             }

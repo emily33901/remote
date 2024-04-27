@@ -11,7 +11,7 @@ use tokio::sync::mpsc;
 use crate::{VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
 
 use crate::{
-    dx::{copy_texture, MapTextureExt, TextureCPUAccess, TextureUsage},
+    dx::{copy_texture, ID3D11Texture2DExt, TextureCPUAccess, TextureUsage},
     mf::{self, IMFAttributesExt, IMFDXGIBufferExt},
 };
 

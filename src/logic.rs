@@ -10,15 +10,15 @@ use crate::ARBITRARY_CHANNEL_LIMIT;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct Mode {
-    width: u32,
-    height: u32,
-    refresh_rate: u32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) refresh_rate: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct PeerStreamRequest {
-    preferred_mode: Option<Mode>,
-    preferred_bitrate: Option<u32>,
+    pub(crate) preferred_mode: Option<Mode>,
+    pub(crate) preferred_bitrate: Option<u32>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -56,7 +56,7 @@ pub(crate) async fn logic_channel(
                             let message = bincode::deserialize(&data).unwrap();
 
                             tracing::debug!(?message);
-                            event_tx.send(event).await?;
+                            event_tx.send(message).await?;
                         }
                     }
                 }

@@ -13,7 +13,7 @@ use crate::{
 use crate::{mf::debug_video_format, VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
 
 use crate::{
-    dx::MapTextureExt,
+    dx::ID3D11Texture2DExt,
     mf::{self, IMFAttributesExt},
 };
 

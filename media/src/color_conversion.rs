@@ -7,7 +7,7 @@ use windows::{
     Win32::{Graphics::Direct3D11::ID3D11Texture2D, Media::MediaFoundation::*},
 };
 
-use crate::ARBITRARY_CHANNEL_LIMIT;
+use crate::{dx::ID3D11Texture2DExt, ARBITRARY_CHANNEL_LIMIT};
 
 use super::{
     dx::copy_texture,
@@ -47,8 +47,8 @@ impl From<Format> for super::dx::TextureFormat {
 
 #[tracing::instrument]
 pub(crate) async fn converter(
-    width: u32,
-    height: u32,
+    output_width: u32,
+    output_height: u32,
     target_framerate: u32,
     input_format: Format,
     output_format: Format,
@@ -59,9 +59,15 @@ pub(crate) async fn converter(
     telemetry::client::watch_channel(&control_tx, "color-converter-control").await;
     telemetry::client::watch_channel(&event_tx, "color-converter-event").await;
 
+    let span = tracing::Span::current();
+
     tokio::spawn({
         async move {
             match tokio::task::spawn_blocking(move || unsafe {
+                let _guard = span.enter();
+
+                tracing::debug!("starting");
+
                 mf::init()?;
 
                 let (device, _context) = super::dx::create_device()?;
@@ -111,13 +117,16 @@ pub(crate) async fn converter(
 
                 attributes.set_u32(&MF_LOW_LATENCY, 1)?;
 
+                let set_format_types = |input_width, input_height| -> Result<()> {
+
+
                 {
                     let input_type = MFCreateMediaType()?;
 
                     input_type.set_guid(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
                     input_type.set_guid(&MF_MT_SUBTYPE, &input_format.into())?;
 
-                    input_type.set_fraction(&MF_MT_FRAME_SIZE, width, height)?;
+                    input_type.set_fraction(&MF_MT_FRAME_SIZE, input_width, input_height)?;
                     input_type.set_u32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
 
                     transform.SetInputType(0, &input_type, 0)?;
@@ -128,7 +137,7 @@ pub(crate) async fn converter(
 
                     let format = output_type.get_guid(&MF_MT_SUBTYPE)?;
 
-                    output_type.set_fraction(&MF_MT_FRAME_SIZE, width, height)?;
+                    output_type.set_fraction(&MF_MT_FRAME_SIZE, output_width, output_height)?;
 
                     if format == output_format.into() {
                         transform.SetOutputType(0, &output_type, 0)?;
@@ -136,49 +145,71 @@ pub(crate) async fn converter(
                     }
                 }
 
+                Ok(())
+            };
+
+            set_format_types(output_width, output_height)?;
+
+                let  (mut last_input_width ,mut last_input_height) = (output_width, output_height);
+
                 loop {
                     let ConvertControl::Frame(frame, time) = {
                         let mut control = None;
-    
+
+                        // TODO(emily): Properly handle TryRecvErr::Disconnected.
+                        // Right now we will never exit when we see that, I think that is probably
+                        // wrong.
                         while let Ok(new_control) = control_rx.try_recv() {
                             control = Some(new_control);
                         }
-    
+
                         // If we didn't get a frame then wait for one now
                         if control.is_none() {
                             control = Some(
                                 control_rx
                                     .blocking_recv()
-                                    .ok_or(eyre!("cc control closed"))?,
+                                    .ok_or(eyre!("ConvertControl channel closed"))?,
                             );
-                            // match control_rx.blocking_recv() {
-                            //     Some(control) => Some(control),
-                            //     None => return Err(eyre::eyre!("encoder control closed")),
-                            // };
                         };
 
                         control.unwrap()
                     };
 
-                    // NOTE(emily): If this frame elapsed then throw it before trying to make a texture,
-                    // do this after getting the sample from the media resource
-                    // if let Ok(d) = time.elapsed() {
-                    //     if d > std::time::Duration::from_millis(10) {
-                    //         tracing::info!("cc throwing expired frame (before input) {}ms", d.as_millis());
-                    //         continue;
-                    //     }
-                    // }
-
                     // NOTE(emily): cc requires that the input texture be bind_render_target and bind_shader_resource
 
-                    let texture = super::dx::TextureBuilder::new(&device, width, height, input_format.into()).bind_render_target().bind_shader_resource().build()?;
+                    let sample = {
+
+                    let (width, height) = {
+                        let desc = frame.desc();
+                        (desc.Width, desc.Height)
+                    };
+
+                    if width != last_input_width || height != last_input_height {
+                        tracing::debug!(width, height, last_input_width, last_input_height, "input changed");
+                        // Change input type according to
+                        // https://learn.microsoft.com/en-us/windows/win32/medfound/handling-stream-changes
+                        // drain mft
+                        transform.ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0)?;
+                        let mut status = 0;
+                        while let Err(MF_E_TRANSFORM_NEED_MORE_INPUT) = transform.ProcessOutput(0, &mut [],  &mut status).map_err(|e| e.code()) {}
+
+                        // Set the input type
+                        set_format_types(width, height)?;
+                        // Update our last types
+                        (last_input_width, last_input_height) = (width, height);
+                    }
+
+                    let texture =
+                        super::dx::TextureBuilder::new(&device, width, height, input_format.into())
+                            .bind_render_target()
+                            .bind_shader_resource()
+                            .build()?;
 
                     super::dx::copy_texture(&texture, &frame, None)?;
+                    make_dxgi_sample(&texture, None)?
+                };
 
-                    let sample = make_dxgi_sample(&texture, None)?;
-
-                    sample
-                        .SetSampleTime(time.hns())?;
+                    sample.SetSampleTime(time.hns())?;
                     sample.SetSampleDuration(10_000_000 / target_framerate as i64)?;
 
                     let process_output = || -> Result<Option<(ID3D11Texture2D, crate::Timestamp)>, windows::core::Error> {
@@ -200,19 +231,10 @@ pub(crate) async fn converter(
 
                                 let (texture, subresource_index) = dxgi_buffer.texture()?;
 
-                                // NOTE(emily): If this frame elapsed then throw it before trying to make a texture,
-                                // do this after getting the sample from the media resource
-                                // if let Ok(d) = time.elapsed() {
-                                //     if d > std::time::Duration::from_millis(10) {
-                                //         tracing::info!("cc throwing expired frame {}ms", d.as_millis());
-                                //         return Ok(None);
-                                //     }
-                                // }
-
                                 let output_texture = super::dx::TextureBuilder::new(
                                     &device,
-                                    width,
-                                    height,
+                                    output_width,
+                                    output_height,
                                     output_format.into(),
                                 )
                                 .keyed_mutex()
@@ -225,11 +247,11 @@ pub(crate) async fn converter(
                                 Ok(Some((output_texture, crate::Timestamp::new_hns(timestamp_hns))))
                             }
                             Err(err) => {
-                                // tracing::warn!("output flags {}", output_buffers[0].dwStatus);
                                 Err(err)
                             }
                         }
                     };
+
 
                     let result = transform
                         .ProcessInput(0, &sample, 0)
@@ -237,8 +259,7 @@ pub(crate) async fn converter(
 
                     tracing::trace!("cc process input {result:?}");
 
-                    match result
-                    {
+                    match result {
                         Ok(_) | Err(MF_E_NOTACCEPTING) => {
                             let output_result = process_output().map_err(|err| err.code());
 
@@ -246,20 +267,28 @@ pub(crate) async fn converter(
 
                             match output_result {
                                 Ok(Some((output_texture, timestamp))) => {
-                                    match event_tx.try_send(ConvertEvent::Frame(output_texture.clone(), timestamp)) {
-                                        Ok(_) => {},
+                                    match event_tx.try_send(ConvertEvent::Frame(
+                                        output_texture.clone(),
+                                        timestamp,
+                                    )) {
+                                        Ok(_) => {}
                                         Err(err) => match err {
-                                            mpsc::error::TrySendError::Full(_) => tracing::info!("cc backpressured"),
-                                            mpsc::error::TrySendError::Closed(_) => { tracing::warn!("cc event closed"); return Err(eyre!("cc event closed")); },
+                                            mpsc::error::TrySendError::Full(_) => {
+                                                tracing::info!("backpressured")
+                                            }
+                                            mpsc::error::TrySendError::Closed(_) => {
+                                                tracing::info!("event closed");
+                                                return Err(eyre!("event closed"));
+                                            }
                                         },
                                     }
                                 }
                                 Ok(None) => {
                                     // Continue trying to get more frames
-                                    tracing::trace!("cc trying to get more frames")
+                                    tracing::trace!("trying to get more frames")
                                 }
                                 Err(MF_E_TRANSFORM_NEED_MORE_INPUT) => {
-                                    tracing::trace!("cc needs more input");
+                                    tracing::trace!("needs more input");
                                 }
                                 Err(MF_E_TRANSFORM_STREAM_CHANGE) => {
                                     unreachable!("Not expecting a stream format change");
@@ -270,7 +299,7 @@ pub(crate) async fn converter(
                                     todo!("No idea what to do with {err}")
                                 }
                             };
-                        },
+                        }
                         Err(err) => todo!("No idea what to do with {err}"),
                     }
                 }
@@ -280,8 +309,8 @@ pub(crate) async fn converter(
             .await
             .unwrap()
             {
-                Ok(_) => tracing::info!("cc exit Ok"),
-                Err(err) => tracing::error!("cc exit err {err} {err:?}"),
+                Ok(_) => tracing::info!("exit Ok"),
+                Err(err) => tracing::error!("exit err {err} {err:?}"),
             }
         }
     });
