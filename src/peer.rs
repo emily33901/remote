@@ -30,7 +30,6 @@ pub(crate) enum PeerControl {
     Die,
 }
 
-#[derive(Debug)]
 pub(crate) enum PeerEvent {
     StreamRequest(logic::PeerStreamRequest),
     RequestStreamResponse(logic::PeerStreamRequestResponse),
@@ -38,6 +37,20 @@ pub(crate) enum PeerEvent {
     Audio(Vec<u8>),
     Video(VideoBuffer),
     Error(PeerError),
+}
+
+impl std::fmt::Debug for PeerEvent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::StreamRequest(arg0) => f.debug_tuple("StreamRequest").field(arg0).finish(),
+            Self::RequestStreamResponse(arg0) => {
+                f.debug_tuple("RequestStreamResponse").field(arg0).finish()
+            }
+            Self::Audio(arg0) => f.debug_tuple("Audio").field(&arg0.len()).finish(),
+            Self::Video(arg0) => f.debug_tuple("Video").field(arg0).finish(),
+            Self::Error(arg0) => f.debug_tuple("Error").field(arg0).finish(),
+        }
+    }
 }
 
 #[tracing::instrument(skip(api, signalling_control))]
@@ -64,7 +77,7 @@ pub(crate) async fn peer(
     tokio::spawn({
         let rtc_control = rtc_control.clone();
         let peer_connection = peer_connection.clone();
-        let our_peer_id = our_peer_id.clone();
+        let _our_peer_id = our_peer_id.clone();
         let span = tracing::span!(tracing::Level::DEBUG, "PeerControl");
         async move {
             match async move {

@@ -1,6 +1,6 @@
 use media::{decoder::Decoder, encoder::Encoder};
 
-use eyre::Result;
+
 use once_cell::sync::OnceCell;
 use std::str::FromStr;
 

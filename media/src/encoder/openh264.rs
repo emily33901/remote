@@ -9,6 +9,7 @@ use openh264::{
 
 use eyre::{eyre, Result};
 use tokio::sync::mpsc;
+use tracing::Instrument;
 
 use crate::{dx::MapTextureExt, ARBITRARY_CHANNEL_LIMIT};
 
@@ -57,6 +58,7 @@ fn nv12_to_i420(
     }
 }
 
+#[tracing::instrument]
 pub async fn h264_encoder(
     width: u32,
     height: u32,

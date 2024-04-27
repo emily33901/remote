@@ -50,12 +50,12 @@ signal = { path = "signal" }
 media = { path = "media" }
 egui = { version = "0.27", features = [] }
 winit = "0.29"
-egui-directx11 = "0.3"
+egui-directx11 = { path = "egui-directx11" }
 egui-winit = "0.27"
 egui_demo_lib = "0.27.2"
 
 [dependencies.windows]
-version = "0.54"
+version = "0.56"
 features = [
     "implement",
     "Foundation",

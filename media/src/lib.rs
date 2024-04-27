@@ -48,13 +48,25 @@ impl Timestamp {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct VideoBuffer {
     pub data: Vec<u8>,
     pub sequence_header: Option<Vec<u8>>,
     pub time: crate::Timestamp,
     pub duration: std::time::Duration,
     pub key_frame: FrameIsKeyframe,
+}
+
+impl std::fmt::Debug for VideoBuffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VideoBuffer")
+            .field("data", &self.data.len())
+            .field("sequence_header", &self.sequence_header)
+            .field("time", &self.time)
+            .field("duration", &self.duration)
+            .field("key_frame", &self.key_frame)
+            .finish()
+    }
 }
 
 const ARBITRARY_CHANNEL_LIMIT: usize = 10;

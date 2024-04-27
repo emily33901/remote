@@ -1,3 +1,6 @@
 [submodule "openh264-rs"]
 	path = openh264-rs
 	url = https://github.com/ralfbiedert/openh264-rs
+[submodule "egui-directx11"]
+	path = egui-directx11
+	url = https://github.com/Nekomaru-PKU/egui-directx11
