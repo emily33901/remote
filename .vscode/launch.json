@@ -30,7 +30,7 @@
             "cwd": "${workspaceFolder}/",
             "environment": [],
             "console": "integratedTerminal",
-            "preLaunchTask": "rust: cargo build",
+            "preLaunchTask": "rust: cargo build release",
         }
     ]
 }
