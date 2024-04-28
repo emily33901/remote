@@ -9,17 +9,18 @@
 			],
 			"group": {
 				"kind": "build",
-				"isDefault": true
+				// "isDefault": true
 			},
 			"label": "rust: cargo build"
 		},
 		{
-			"type": "cargo",
-			"command": "build",
+			"type": "shell",
+			"command": "cargo",
 			"problemMatcher": [
 				"$rustc"
 			],
 			"args": [
+				"build",
 				"--release"
 			],
 			"group": {

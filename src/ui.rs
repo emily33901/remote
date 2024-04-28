@@ -1,11 +1,9 @@
 use crate::config::{self, Config};
-use crate::logic::{PeerStreamRequest, PeerStreamRequestResponse};
-use crate::player::video::TextureRender;
+use crate::logic::{Mode, PeerStreamRequest, PeerStreamRequestResponse};
+use crate::player::video::NV12TextureRender;
 
-
-
+use std::collections::HashMap;
 use std::sync::{Arc, Weak};
-use std::{collections::HashMap};
 
 use derive_more::{Deref, DerefMut};
 
@@ -24,11 +22,8 @@ use signal::{SignallingControl, SignallingEvent};
 
 use tokio::sync::{mpsc, oneshot, Mutex, MutexGuard};
 
-
 use windows::Win32::Foundation::HWND;
-use windows::Win32::Graphics::Direct3D11::{
-    ID3D11Device, ID3D11RenderTargetView, ID3D11Texture2D,
-};
+use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11RenderTargetView, ID3D11Texture2D};
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB};
 use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
 use winit::dpi::PhysicalSize;
@@ -103,19 +98,6 @@ impl RemotePeer {
             let their_peer_id = their_peer_id.clone();
 
             async move {
-                // NOTE(emily): Make sure to keep player alive
-                // let _player = audio_player;
-
-                // let file_sink = media::file_sink::file_sink(
-                //     std::path::Path::new(&format!("test-{our_peer_id}.mp4")),
-                //     width,
-                //     height,
-                //     framerate,
-                //     bitrate,
-                // )
-                // .unwrap();
-
-                // let mut i = 0;
 
                 let mut decoder_control: Option<mpsc::Sender<media::decoder::DecoderControl>> =
                     None;
@@ -131,8 +113,9 @@ impl RemotePeer {
                                     if let Ok(response) = response_rx.await {
                                         if let Some(peer_control) = peer_control.upgrade() {
 
-                                            if let PeerStreamRequestResponse::Accept() = &response {
-                                                Self::start_streaming(&peer_control.downgrade());
+                                            if let PeerStreamRequestResponse::Accept { mode, bitrate } = &response {
+                                                // TODO(emily): Pass mode and bitrate
+                                                Self::start_streaming(&peer_control.downgrade(), mode, bitrate);
                                             }
 
                                             let _ = peer_control
@@ -143,7 +126,7 @@ impl RemotePeer {
 
                                     // Sender was dropped without sending anything
                                     // TODO(emily): Probably reject stream instead of not doing anything
-                                }
+                                }.in_current_span()
                             });
 
                             app_event_tx
@@ -155,38 +138,17 @@ impl RemotePeer {
                         }
 
                         crate::peer::PeerEvent::RequestStreamResponse(response) => match response {
-                            PeerStreamRequestResponse::Accept() => {
-                                tracing::info!("they accepted my stream request, make a decoder here instead of lazily when receiving video");
-                            }
-                            _ => {
-                                tracing::warn!(
-                                    ?response,
-                                    our_peer_id,
-                                    their_peer_id,
-                                    "ignoring peer stream request response Reject"
-                                );
-                            }
-                        },
-                        crate::peer::PeerEvent::Video(video) => {
-                            let config = Config::load();
+                            PeerStreamRequestResponse::Accept{ mode, bitrate } => {
+                                tracing::info!(?mode, bitrate, "stream accepted");
 
-                            if let Some(decoder_control) = &decoder_control {
-                                decoder_control
-                                    .send(media::decoder::DecoderControl::Data(video))
-                                    .await?;
-                            } else {
                                 let (control, event) = config
                                     .decoder_api
                                     .run(
-                                        config.width,
-                                        config.height,
-                                        config.framerate,
-                                        config.bitrate,
+                                        mode.width,
+                                        mode.height,
+                                        mode.refresh_rate,
+                                        bitrate,
                                     )
-                                    .await?;
-
-                                control
-                                    .send(media::decoder::DecoderControl::Data(video))
                                     .await?;
 
                                 decoder_control = Some(control);
@@ -198,50 +160,29 @@ impl RemotePeer {
                                     ))
                                     .await?;
                             }
+                            _ => {
+                                tracing::warn!(
+                                    ?response,
+                                    our_peer_id,
+                                    their_peer_id,
+                                    "ignoring peer stream request response Reject or Negotiate"
+                                );
+                            }
+                        },
+                        crate::peer::PeerEvent::Video(video) => {
+                            if let Some(decoder_control) = &decoder_control {
+                                decoder_control
+                                    .send(media::decoder::DecoderControl::Data(video))
+                                    .await?;
+                            } else {
+                                tracing::warn!("got video when we were not expecting video (we dont have a decoder)");
+                            }
 
-                            // TODO(emily):
-                            // Make a decoder
-                            // keep control around here
-                            // pass event up through AppEvent to the window_state
-                            // window_state can then pull from there and render as needed
                         }
                         event => {
                             tracing::warn!(our_peer_id, ?event, "ignoring peer event");
                         }
                     }
-                    // match event {
-                    //     peer::PeerEvent::Audio(audio) => {
-                    //         // tracing::debug!("peer event audio {}", audio.len());
-                    //         audio_sink_tx.send(audio).await.unwrap();
-                    //         // audio_sink_tx.send(audio).await.unwrap();
-                    //     }
-                    //     peer::PeerEvent::Video(video) => {
-                    //         // tracing::debug!("peer event video {}", video.data.len());
-                    //         h264_control
-                    //             .send(media::decoder::DecoderControl::Data(video.clone()))
-                    //             .await
-                    //             .unwrap();
-
-                    //         // match i {
-                    //         //     0..=1000 => file_sink
-                    //         //         .send(media::file_sink::FileSinkControl::Video(video))
-                    //         //         .await
-                    //         //         .unwrap(),
-                    //         //     1001 => file_sink
-                    //         //         .send(media::file_sink::FileSinkControl::Done)
-                    //         //         .await
-                    //         //         .unwrap(),
-                    //         //     _ => {
-                    //         //         tracing::info!("!! DONE")
-                    //         //     }
-                    //         // }
-                    //         // i += 1;
-                    //     }
-                    //     peer::PeerEvent::Error(error) => {
-                    //         tracing::warn!("peer event error {error:?}");
-                    //         break;
-                    //     }
-                    // }
                 }
                 eyre::Ok(())
             }
@@ -255,7 +196,7 @@ impl RemotePeer {
     }
 
     #[tracing::instrument]
-    fn start_streaming(peer_control: &mpsc::WeakSender<PeerControl>) {
+    fn start_streaming(peer_control: &mpsc::WeakSender<PeerControl>, mode: &Mode, bitrate: &u32) {
         // TODO(emily): Thinking that here we can return 2 channels, one for video_tx and one for audio_tx.
         // these could even come from higher up in peer instead of just sending to peer-control. This would also avoid
         // the 'bottleneck' from sending everything through peer control.
@@ -267,6 +208,8 @@ impl RemotePeer {
 
         tokio::spawn({
             let weak_control = peer_control.clone();
+            let mode = mode.clone();
+            let bitrate = bitrate.clone();
             async move {
                 let config = Config::load();
 
@@ -274,19 +217,19 @@ impl RemotePeer {
                     media::produce::produce(
                         config.encoder_api,
                         file,
-                        config.width,
-                        config.height,
-                        config.framerate,
-                        config.bitrate,
+                        mode.width,
+                        mode.height,
+                        mode.refresh_rate,
+                        bitrate,
                     )
                     .await?
                 } else {
                     media::desktop_duplication::duplicate_desktop(
                         config.encoder_api,
-                        config.width,
-                        config.height,
-                        config.framerate,
-                        config.bitrate,
+                        mode.width,
+                        mode.height,
+                        mode.refresh_rate,
+                        bitrate,
                     )
                     .await?
                 };
@@ -702,7 +645,7 @@ struct PeerWindowState {
         ),
     >,
 
-    stream_texture_renderer: Arc<std::sync::OnceLock<TextureRender>>,
+    stream_texture_renderer: Arc<std::sync::OnceLock<NV12TextureRender>>,
     media_decoder_event: HashMap<
         PeerId,
         (
@@ -710,6 +653,180 @@ struct PeerWindowState {
             mpsc::Receiver<media::decoder::DecoderEvent>,
         ),
     >,
+}
+
+enum ShouldRemove {
+    Yes,
+    No,
+}
+
+impl PeerWindowState {
+    fn ui(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, peer: &UIPeer) -> ShouldRemove {
+        let mut result = ShouldRemove::No;
+
+        let id = peer.our_id();
+        ui.horizontal(|ui| {
+            ui.label(id);
+
+            ui.selectable_value(&mut self.visible, Visible::No, "hide");
+            ui.selectable_value(&mut self.visible, Visible::Yes, "show");
+
+            if ui.button("disconnect").clicked() {
+                result = ShouldRemove::Yes;
+            }
+        });
+
+        egui::Window::new(format!("Peer {id}")).show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.text_edit_singleline(&mut self.connect_peer_id);
+                if ui.button("connect").clicked() {
+                    tokio::spawn({
+                        let connect_peer_id = self.connect_peer_id.clone();
+                        let peer = peer.clone();
+                        async move {
+                            peer.connect(connect_peer_id.clone()).await.unwrap();
+                        }
+                    });
+                }
+            });
+
+            ui.heading("Connected Peers");
+
+            for (their_peer_id, _control) in &self.connected_peers {
+                ui.horizontal(|ui| {
+                    ui.label(format!("{}", their_peer_id));
+
+                    if ui.button("request stream").clicked() {
+                        tokio::spawn({
+                            let peer = peer.clone();
+                            let peer_id = their_peer_id.clone();
+                            async move {
+                                peer.request_stream(
+                                    peer_id,
+                                    PeerStreamRequest {
+                                        preferred_mode: None,
+                                        preferred_bitrate: None,
+                                    },
+                                )
+                                .await
+                                .unwrap();
+                            }
+                        });
+                    }
+                });
+
+                let (rect, _) = ui.allocate_exact_size(
+                    egui::Vec2::splat(300.0),
+                    egui::Sense::focusable_noninteractive(),
+                );
+
+                enum TextureResult {
+                    Done,
+                    Empty(Option<ID3D11Texture2D>),
+                    Texture(ID3D11Texture2D),
+                }
+
+                if let Some((last_texture, decoder_event)) =
+                    self.media_decoder_event.get_mut(their_peer_id)
+                {
+                    let mut texture = TextureResult::Empty(last_texture.clone());
+
+                    loop {
+                        match decoder_event.try_recv() {
+                            Ok(DecoderEvent::Frame(t, _time)) => {
+                                texture = TextureResult::Texture(t)
+                            }
+                            Err(err) => {
+                                if let mpsc::error::TryRecvError::Disconnected = err {
+                                    texture = TextureResult::Done;
+                                }
+                                break;
+                            }
+                        }
+                    }
+
+                    match texture {
+                        TextureResult::Done => {
+                            self.media_decoder_event.remove(their_peer_id).unwrap();
+                        }
+                        TextureResult::Empty(None) => {}
+                        TextureResult::Empty(Some(texture)) | TextureResult::Texture(texture) => {
+                            *last_texture = Some(texture.clone());
+
+                            let cb = egui::PaintCallback {
+                                rect: rect,
+                                callback: std::sync::Arc::new(egui_directx11::CallbackFn::new({
+                                    let texture_renderer = self.stream_texture_renderer.clone();
+                                    move |_info, renderer| {
+                                        let texture_renderer = texture_renderer.get_or_init(|| {
+                                            NV12TextureRender::new(renderer.device()).unwrap()
+                                        });
+
+                                        texture_renderer
+                                            .render_texture(&texture, renderer.device())
+                                            .unwrap();
+                                    }
+                                })),
+                            };
+                            ui.painter().add(cb);
+                        }
+                    }
+                }
+            }
+
+            ui.heading("Connection Requests");
+
+            for (c_id, p_id) in &self.connection_requests {
+                ui.horizontal(|ui| {
+                    ui.label(format!("{}", p_id));
+                    ui.label(format!("{}", c_id));
+
+                    if ui.button("accept").clicked() {
+                        tokio::spawn({
+                            let peer = peer.clone();
+                            let p_id = p_id.clone();
+                            async move {
+                                peer.accept_connection(&p_id).await.unwrap();
+                            }
+                        });
+                    }
+                });
+            }
+
+            ui.heading("Stream Requests");
+
+            let mut stream_request_clicked = None;
+
+            for (peer_id, (request, _)) in &self.stream_requests {
+                ui.horizontal(|ui| {
+                    ui.label(format!("{} {:?}", peer_id, request));
+                    if ui.button("accept").clicked() {
+                        let config = Config::load();
+
+                        stream_request_clicked = Some((
+                            peer_id.clone(),
+                            PeerStreamRequestResponse::Accept {
+                                mode: crate::logic::Mode {
+                                    width: config.width,
+                                    height: config.height,
+                                    refresh_rate: config.framerate,
+                                },
+                                bitrate: config.bitrate,
+                            },
+                        ));
+                    }
+                });
+            }
+
+            if let Some((peer_id, response)) = stream_request_clicked {
+                let (_request, response_channel) = self.stream_requests.remove(&peer_id).unwrap();
+
+                response_channel.send(response).unwrap();
+            }
+        });
+
+        result
+    }
 }
 
 impl std::fmt::Debug for PeerWindowState {
@@ -796,169 +913,12 @@ impl App {
 
             {
                 for (id, (window_state, peer)) in self.peers.iter_mut() {
-                    ui.horizontal(|ui| {
-                        ui.label(id);
-
-                        ui.selectable_value(&mut window_state.visible, Visible::No, "hide");
-                        ui.selectable_value(&mut window_state.visible, Visible::Yes, "show");
-
-                        if ui.button("disconnect").clicked() {
+                    match window_state.ui(ctx, ui, peer) {
+                        ShouldRemove::Yes => {
                             remove_peers.push(id.clone());
                         }
-                    });
-
-                    egui::Window::new(format!("Peer {id}")).show(ctx, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.text_edit_singleline(&mut window_state.connect_peer_id);
-                            if ui.button("connect").clicked() {
-                                tokio::spawn({
-                                    let connect_peer_id = window_state.connect_peer_id.clone();
-                                    let peer = peer.clone();
-                                    async move {
-                                        peer.connect(connect_peer_id.clone()).await.unwrap();
-                                    }
-                                });
-                            }
-                        });
-
-                        ui.heading("Connected Peers");
-
-                        for (their_peer_id, _control) in &window_state.connected_peers {
-                            ui.horizontal(|ui| {
-                                ui.label(format!("{}", their_peer_id));
-
-                                if ui.button("request stream").clicked() {
-                                    tokio::spawn({
-                                        let peer = peer.clone();
-                                        let peer_id = their_peer_id.clone();
-                                        async move {
-                                            peer.request_stream(peer_id, PeerStreamRequest {})
-                                                .await
-                                                .unwrap();
-                                        }
-                                    });
-                                }
-                            });
-
-                            let (rect, _) = ui.allocate_exact_size(
-                                egui::Vec2::splat(300.0),
-                                egui::Sense::focusable_noninteractive(),
-                            );
-
-                            enum TextureResult {
-                                Done,
-                                Empty(Option<ID3D11Texture2D>),
-                                Texture(ID3D11Texture2D),
-                            }
-
-                            if let Some((last_texture, decoder_event)) =
-                                window_state.media_decoder_event.get_mut(their_peer_id)
-                            {
-                                let mut texture = TextureResult::Empty(last_texture.clone());
-
-                                loop {
-                                    match decoder_event.try_recv() {
-                                        Ok(DecoderEvent::Frame(t, _time)) => {
-                                            texture = TextureResult::Texture(t)
-                                        }
-                                        Err(err) => {
-                                            if let mpsc::error::TryRecvError::Disconnected = err {
-                                                texture = TextureResult::Done;
-                                            }
-                                            break;
-                                        }
-                                    }
-                                }
-
-                                match texture {
-                                    TextureResult::Done => {
-                                        window_state
-                                            .media_decoder_event
-                                            .remove(their_peer_id)
-                                            .unwrap();
-                                    }
-                                    TextureResult::Empty(None) => {}
-                                    TextureResult::Empty(Some(texture))
-                                    | TextureResult::Texture(texture) => {
-                                        *last_texture = Some(texture.clone());
-
-                                        let cb = egui::PaintCallback {
-                                            rect: rect,
-                                            callback: std::sync::Arc::new(
-                                                egui_directx11::CallbackFn::new({
-                                                    let texture_renderer = window_state
-                                                        .stream_texture_renderer
-                                                        .clone();
-                                                    move |_info, renderer| {
-                                                        let texture_renderer = texture_renderer
-                                                            .get_or_init(|| {
-                                                                TextureRender::new(
-                                                                    renderer.device(),
-                                                                    1920,
-                                                                    1080,
-                                                                )
-                                                                .unwrap()
-                                                            });
-
-                                                        texture_renderer
-                                                            .render_texture(
-                                                                &texture,
-                                                                renderer.device(),
-                                                            )
-                                                            .unwrap();
-                                                        // texture_renderer.render_texture(texture, device);
-                                                    }
-                                                }),
-                                            ),
-                                        };
-                                        ui.painter().add(cb);
-                                    }
-                                }
-                            }
-                        }
-
-                        ui.heading("Connection Requests");
-
-                        for (c_id, p_id) in &window_state.connection_requests {
-                            ui.horizontal(|ui| {
-                                ui.label(format!("{}", p_id));
-                                ui.label(format!("{}", c_id));
-
-                                if ui.button("accept").clicked() {
-                                    tokio::spawn({
-                                        let peer = peer.clone();
-                                        let p_id = p_id.clone();
-                                        async move {
-                                            peer.accept_connection(&p_id).await.unwrap();
-                                        }
-                                    });
-                                }
-                            });
-                        }
-
-                        ui.heading("Stream Requests");
-
-                        let mut stream_request_clicked = None;
-
-                        for (peer_id, (request, _)) in &window_state.stream_requests {
-                            ui.horizontal(|ui| {
-                                ui.label(format!("{} {:?}", peer_id, request));
-                                if ui.button("accept").clicked() {
-                                    stream_request_clicked = Some((
-                                        peer_id.clone(),
-                                        PeerStreamRequestResponse::Accept(),
-                                    ));
-                                }
-                            });
-                        }
-
-                        if let Some((peer_id, response)) = stream_request_clicked {
-                            let (_request, response_channel) =
-                                window_state.stream_requests.remove(&peer_id).unwrap();
-
-                            response_channel.send(response).unwrap();
-                        }
-                    });
+                        ShouldRemove::No => {}
+                    }
                 }
             }
 

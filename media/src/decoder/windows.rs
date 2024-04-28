@@ -7,11 +7,12 @@ use ::windows::{
 };
 use eyre::Result;
 use tokio::sync::mpsc;
+use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 
 use crate::{VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
 
 use crate::{
-    dx::{copy_texture, MapTextureExt, TextureCPUAccess, TextureUsage},
+    dx::{copy_texture, ID3D11Texture2DExt, TextureCPUAccess, TextureUsage},
     mf::{self, IMFAttributesExt, IMFDXGIBufferExt},
 };
 
@@ -216,52 +217,49 @@ unsafe fn hardware(
         // sample.SetSampleTime(time.hns())?;
         // sample.SetSampleDuration(duration.as_nanos() as i64 / 100)?;
 
-        let process_output = || {
-            let mut output_buffer = MFT_OUTPUT_DATA_BUFFER::default();
-            output_buffer.dwStatus = 0;
-            output_buffer.dwStreamID = 0;
+        let process_output =
+            || -> Result<Option<(ID3D11Texture2D, crate::Timestamp)>, windows::core::Error> {
+                let mut output_buffer = MFT_OUTPUT_DATA_BUFFER::default();
+                output_buffer.dwStatus = 0;
+                output_buffer.dwStreamID = 0;
 
-            let mut output_buffers = [output_buffer];
+                let mut output_buffers = [output_buffer];
 
-            let mut status = 0_u32;
-            match transform.ProcessOutput(0, &mut output_buffers, &mut status) {
-                Ok(ok) => {
-                    let output_texture = crate::dx::TextureBuilder::new(
-                        &device,
-                        width,
-                        height,
-                        crate::dx::TextureFormat::NV12,
-                    )
-                    .keyed_mutex()
-                    .nt_handle()
-                    .build()
-                    .unwrap();
-
-                    let sample = output_buffers[0].pSample.take().unwrap();
-                    let timestamp = unsafe { sample.GetSampleTime()? };
-
-                    let media_buffer = unsafe { sample.GetBufferByIndex(0) }?;
-                    let dxgi_buffer: IMFDXGIBuffer = media_buffer.cast()?;
-
-                    let (texture, subresource_index) = dxgi_buffer.texture()?;
-
-                    copy_texture(&output_texture, &texture, Some(subresource_index))?;
-
-                    event_tx
-                        .blocking_send(DecoderEvent::Frame(
-                            output_texture,
-                            crate::Timestamp::new_hns(timestamp),
-                        ))
+                let mut status = 0_u32;
+                match transform.ProcessOutput(0, &mut output_buffers, &mut status) {
+                    Ok(ok) => {
+                        let output_texture = crate::dx::TextureBuilder::new(
+                            &device,
+                            width,
+                            height,
+                            crate::dx::TextureFormat::NV12,
+                        )
+                        .keyed_mutex()
+                        .nt_handle()
+                        .build()
                         .unwrap();
 
-                    Ok(ok)
+                        let sample = output_buffers[0].pSample.take().unwrap();
+                        let timestamp_hns = unsafe { sample.GetSampleTime()? };
+
+                        let media_buffer = unsafe { sample.GetBufferByIndex(0) }?;
+                        let dxgi_buffer: IMFDXGIBuffer = media_buffer.cast()?;
+
+                        let (texture, subresource_index) = dxgi_buffer.texture()?;
+
+                        copy_texture(&output_texture, &texture, Some(subresource_index))?;
+
+                        Ok(Some((
+                            output_texture,
+                            crate::Timestamp::new_hns(timestamp_hns),
+                        )))
+                    }
+                    Err(err) => {
+                        // tracing::warn!("output flags {}", output_buffers[0].dwStatus);
+                        Err(err)
+                    }
                 }
-                Err(err) => {
-                    // tracing::warn!("output flags {}", output_buffers[0].dwStatus);
-                    Err(err)
-                }
-            }
-        };
+            };
 
         match transform
             .ProcessInput(0, &sample, 0)
@@ -269,12 +267,15 @@ unsafe fn hardware(
         {
             Ok(_) => loop {
                 match process_output().map_err(|err| err.code()) {
-                    Ok(_) => {
-                        // tracing::info!("process output ok");
-                        // break;
+                    Ok(Some((texture, timestamp))) => {
+                        event_tx.blocking_send(DecoderEvent::Frame(texture, timestamp))?;
+                    }
+                    Ok(None) => {
+                        // Continue trying to get more frames
+                        tracing::trace!("trying to get more frames")
                     }
                     Err(MF_E_TRANSFORM_NEED_MORE_INPUT) => {
-                        tracing::debug!("need more input");
+                        tracing::trace!("need more input");
                         break;
                     }
                     Err(MF_E_TRANSFORM_STREAM_CHANGE) => {

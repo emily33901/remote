@@ -11,7 +11,7 @@ use eyre::{eyre, Result};
 use tokio::sync::mpsc;
 use tracing::Instrument;
 
-use crate::{dx::MapTextureExt, ARBITRARY_CHANNEL_LIMIT};
+use crate::{dx::ID3D11Texture2DExt, ARBITRARY_CHANNEL_LIMIT};
 
 use crate::yuv_buffer::YUVBuffer2;
 

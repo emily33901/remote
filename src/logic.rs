@@ -8,32 +8,37 @@ use rtc::{ChannelControl, ChannelEvent, PeerConnection};
 
 use crate::ARBITRARY_CHANNEL_LIMIT;
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub(crate) struct Mode {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) refresh_rate: u32,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct PeerStreamRequest {}
+pub(crate) struct PeerStreamRequest {
+    pub(crate) preferred_mode: Option<Mode>,
+    pub(crate) preferred_bitrate: Option<u32>,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) enum PeerStreamRequestResponse {
-    Accept(),
-    Reject(),
+    Accept { mode: Mode, bitrate: u32 },
+    Negotiate { viable_modes: Vec<Mode> },
+    Reject,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub enum LogicEvent {
+pub enum LogicMessage {
     StreamRequest(PeerStreamRequest),
     StreamRequestResponse(PeerStreamRequestResponse),
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub enum LogicControl {
-    RequestStream(PeerStreamRequest),
-    RequestStreamResponse(PeerStreamRequestResponse),
 }
 
 #[tracing::instrument(skip(peer_connection))]
 pub(crate) async fn logic_channel(
     peer_connection: &dyn PeerConnection,
     controlling: bool,
-) -> Result<(mpsc::Sender<LogicControl>, mpsc::Receiver<LogicEvent>)> {
+) -> Result<(mpsc::Sender<LogicMessage>, mpsc::Receiver<LogicMessage>)> {
     let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
@@ -48,21 +53,10 @@ pub(crate) async fn logic_channel(
                         ChannelEvent::Open => {}
                         ChannelEvent::Close => {}
                         ChannelEvent::Message(data) => {
-                            let control = bincode::deserialize(&data).unwrap();
+                            let message = bincode::deserialize(&data).unwrap();
 
-                            // TODO(emily): Should we even have different control / event here if we are just translating
-                            // from one messsage to an indentical message
-                            let event = match control {
-                                LogicControl::RequestStream(request) => {
-                                    LogicEvent::StreamRequest(request)
-                                }
-                                LogicControl::RequestStreamResponse(response) => {
-                                    LogicEvent::StreamRequestResponse(response)
-                                }
-                            };
-
-                            tracing::debug!(?event);
-                            event_tx.send(event).await?;
+                            tracing::debug!(?message);
+                            event_tx.send(message).await?;
                         }
                     }
                 }

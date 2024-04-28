@@ -1,10 +1,10 @@
+use std::cell::{Cell, RefCell};
 
-
-use eyre::{Result};
+use eyre::Result;
 use tokio::sync::{mpsc, mpsc::error::TryRecvError};
 
 use windows::{
-    core::{s},
+    core::s,
     Win32::{
         Foundation::{HWND, S_OK},
         Graphics::{
@@ -12,9 +12,10 @@ use windows::{
             Direct3D11::*,
             Dxgi::{
                 Common::{
-                    DXGI_FORMAT, DXGI_FORMAT_R32G32_FLOAT,
-                    DXGI_FORMAT_R8G8_UNORM, DXGI_FORMAT_R8_UNORM,
-                }, IDXGISwapChain,
+                    DXGI_FORMAT, DXGI_FORMAT_R32G32_FLOAT, DXGI_FORMAT_R8G8_UNORM,
+                    DXGI_FORMAT_R8_UNORM,
+                },
+                IDXGISwapChain,
             },
         },
         UI::WindowsAndMessaging::{
@@ -25,7 +26,7 @@ use windows::{
 
 use winit::{
     dpi::PhysicalSize,
-    event_loop::{EventLoopBuilder},
+    event_loop::EventLoopBuilder,
     platform::windows::EventLoopBuilderExtWindows,
     raw_window_handle::{HasWindowHandle, RawWindowHandle},
     window::WindowBuilder,
@@ -33,7 +34,9 @@ use winit::{
 
 use crate::ARBITRARY_CHANNEL_LIMIT;
 
-use media::dx::{self, compile_shader, copy_texture, create_device_and_swapchain};
+use media::dx::{
+    self, compile_shader, copy_texture, create_device_and_swapchain, ID3D11Texture2DExt,
+};
 
 fn create_render_target_for_swap_chain(
     device: &ID3D11Device,
@@ -60,14 +63,85 @@ fn resize_swap_chain_and_render_target(
     Ok(())
 }
 
-pub(crate) struct TextureRender {
+struct TextureHolder {
+    width: u32,
+    height: u32,
+    texture: ID3D11Texture2D,
+    texture_chrom_view: ID3D11ShaderResourceView,
+    texture_lum_view: ID3D11ShaderResourceView,
+}
+
+impl TextureHolder {
+    fn new(
+        device: &ID3D11Device,
+        context: &ID3D11DeviceContext,
+        width: u32,
+        height: u32,
+    ) -> Result<Self> {
+        let texture = dx::TextureBuilder::new(&device, width, height, dx::TextureFormat::NV12)
+            .bind_shader_resource()
+            .build()?;
+
+        let mut texture_lum_view: Option<ID3D11ShaderResourceView> = None;
+
+        unsafe {
+            let mut texture_view_desc: D3D11_SHADER_RESOURCE_VIEW_DESC =
+                D3D11_SHADER_RESOURCE_VIEW_DESC {
+                    Format: DXGI_FORMAT_R8_UNORM,
+                    ViewDimension: D3D11_SRV_DIMENSION_TEXTURE2D,
+                    ..Default::default()
+                };
+
+            texture_view_desc.Anonymous.Texture2D = D3D11_TEX2D_SRV {
+                MostDetailedMip: 0,
+                MipLevels: 1,
+            };
+
+            device.CreateShaderResourceView(
+                &texture,
+                Some(&texture_view_desc as *const _),
+                Some(&mut texture_lum_view as *mut _),
+            )
+        }?;
+
+        let mut texture_chrom_view: Option<ID3D11ShaderResourceView> = None;
+
+        unsafe {
+            let mut texture_view_desc: D3D11_SHADER_RESOURCE_VIEW_DESC =
+                D3D11_SHADER_RESOURCE_VIEW_DESC {
+                    Format: DXGI_FORMAT_R8G8_UNORM,
+                    ViewDimension: D3D11_SRV_DIMENSION_TEXTURE2D,
+                    ..Default::default()
+                };
+
+            texture_view_desc.Anonymous.Texture2D = D3D11_TEX2D_SRV {
+                MostDetailedMip: 0,
+                MipLevels: 1,
+            };
+
+            device.CreateShaderResourceView(
+                &texture,
+                Some(&texture_view_desc),
+                Some(&mut texture_chrom_view),
+            )
+        }?;
+
+        Ok(Self {
+            width,
+            height,
+            texture: texture,
+            texture_chrom_view: texture_chrom_view.unwrap(),
+            texture_lum_view: texture_lum_view.unwrap(),
+        })
+    }
+}
+
+pub(crate) struct NV12TextureRender {
     sampler_state: ID3D11SamplerState,
     vertex_shader: ID3D11VertexShader,
     pixel_shader: ID3D11PixelShader,
     vertex_buffer: ID3D11Buffer,
-    texture: ID3D11Texture2D,
-    texture_chrom_view: ID3D11ShaderResourceView,
-    texture_lum_view: ID3D11ShaderResourceView,
+    texture_holder: parking_lot::Mutex<Option<TextureHolder>>,
     input_layout: ID3D11InputLayout,
 }
 
@@ -79,13 +153,9 @@ struct Vertex {
     v: f32,
 }
 
-impl TextureRender {
-    pub fn new(device: &ID3D11Device, width: u32, height: u32) -> Result<Self> {
+impl NV12TextureRender {
+    pub fn new(device: &ID3D11Device) -> Result<Self> {
         let context = unsafe { device.GetImmediateContext()? };
-
-        let texture = dx::TextureBuilder::new(&device, width, height, dx::TextureFormat::NV12)
-            .bind_shader_resource()
-            .build()?;
 
         let sample_desc = D3D11_SAMPLER_DESC {
             Filter: D3D11_FILTER_MIN_MAG_MIP_LINEAR,
@@ -236,59 +306,13 @@ impl TextureRender {
             )
         }?;
 
-        let mut texture_lum_view: Option<ID3D11ShaderResourceView> = None;
-
-        unsafe {
-            let mut texture_view_desc: D3D11_SHADER_RESOURCE_VIEW_DESC =
-                D3D11_SHADER_RESOURCE_VIEW_DESC {
-                    Format: DXGI_FORMAT_R8_UNORM,
-                    ViewDimension: D3D11_SRV_DIMENSION_TEXTURE2D,
-                    ..Default::default()
-                };
-
-            texture_view_desc.Anonymous.Texture2D = D3D11_TEX2D_SRV {
-                MostDetailedMip: 0,
-                MipLevels: 1,
-            };
-
-            device.CreateShaderResourceView(
-                &texture,
-                Some(&texture_view_desc as *const _),
-                Some(&mut texture_lum_view as *mut _),
-            )
-        }?;
-
-        let mut texture_chrom_view: Option<ID3D11ShaderResourceView> = None;
-
-        unsafe {
-            let mut texture_view_desc: D3D11_SHADER_RESOURCE_VIEW_DESC =
-                D3D11_SHADER_RESOURCE_VIEW_DESC {
-                    Format: DXGI_FORMAT_R8G8_UNORM,
-                    ViewDimension: D3D11_SRV_DIMENSION_TEXTURE2D,
-                    ..Default::default()
-                };
-
-            texture_view_desc.Anonymous.Texture2D = D3D11_TEX2D_SRV {
-                MostDetailedMip: 0,
-                MipLevels: 1,
-            };
-
-            device.CreateShaderResourceView(
-                &texture,
-                Some(&texture_view_desc),
-                Some(&mut texture_chrom_view),
-            )
-        }?;
-
         Ok(Self {
             sampler_state: sampler_state.unwrap(),
             vertex_shader,
             pixel_shader,
             vertex_buffer: vertex_buffer.unwrap(),
-            texture: texture,
-            texture_chrom_view: texture_chrom_view.unwrap(),
-            texture_lum_view: texture_lum_view.unwrap(),
             input_layout: input_layout,
+            texture_holder: Default::default(),
         })
     }
 
@@ -297,11 +321,41 @@ impl TextureRender {
         texture: &ID3D11Texture2D,
         device: &ID3D11Device,
     ) -> Result<()> {
-        dx::copy_texture(&self.texture, texture, None)?;
+        let context = unsafe { device.GetImmediateContext()? };
+
+        // NOTE(emily): Always expect to be able to lock here, there should NEVER be any contention over this.
+
+        // NOTE(emily): Unwrap or default because we dont care whether we already have a holder or not
+        // if the sizes DONT match then we make a new holder.
+        let mut texture_holder = self
+            .texture_holder
+            .try_lock()
+            .expect("there should be no contention on the texture_holder");
+        {
+            let (width, height) = texture_holder
+                .as_ref()
+                .map(|h| (h.width, h.height))
+                .unwrap_or_default();
+            let (input_width, input_height) = {
+                let desc = texture.desc();
+                (desc.Width, desc.Height)
+            };
+
+            if width != input_width || height != input_height {
+                *texture_holder = Some(TextureHolder::new(
+                    device,
+                    &context,
+                    input_width,
+                    input_height,
+                )?);
+            }
+        }
+
+        let texture_holder = texture_holder.as_ref().unwrap();
+
+        dx::copy_texture(&texture_holder.texture, texture, None)?;
 
         let topology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
-
-        let context = unsafe { device.GetImmediateContext()? };
 
         unsafe {
             context.IASetInputLayout(&self.input_layout);
@@ -313,8 +367,8 @@ impl TextureRender {
             context.PSSetShaderResources(
                 0,
                 Some(&[
-                    Some(self.texture_lum_view.clone()),
-                    Some(self.texture_chrom_view.clone()),
+                    Some(texture_holder.texture_lum_view.clone()),
+                    Some(texture_holder.texture_chrom_view.clone()),
                 ]),
             );
             context.PSSetSamplers(0, Some(&[Some(self.sampler_state.clone())]));

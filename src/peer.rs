@@ -112,12 +112,12 @@ pub(crate) async fn peer(
                         }
                         PeerControl::RequestStream(request) => {
                             logic_tx
-                                .send(crate::logic::LogicControl::RequestStream(request))
+                                .send(crate::logic::LogicMessage::StreamRequest(request))
                                 .await?;
                         }
                         PeerControl::RequestStreamResponse(response) => {
                             logic_tx
-                                .send(crate::logic::LogicControl::RequestStreamResponse(response))
+                                .send(crate::logic::LogicMessage::StreamRequestResponse(response))
                                 .await?;
                         }
                         PeerControl::Die => {
@@ -177,10 +177,10 @@ pub(crate) async fn peer(
             match async move {
                 while let Some(event) = logic_rx.recv().await {
                     match event {
-                        logic::LogicEvent::StreamRequest(request) => {
+                        logic::LogicMessage::StreamRequest(request) => {
                             event_tx.send(PeerEvent::StreamRequest(request)).await?;
                         }
-                        logic::LogicEvent::StreamRequestResponse(response) => {
+                        logic::LogicMessage::StreamRequestResponse(response) => {
                             event_tx
                                 .send(PeerEvent::RequestStreamResponse(response))
                                 .await?;
