@@ -16,11 +16,11 @@ pub(crate) struct Config {
     pub(crate) signal_server: String,
 }
 
-static config: OnceCell<Config> = OnceCell::new();
+static CONFIG: OnceCell<Config> = OnceCell::new();
 
 impl Config {
     pub(crate) fn load() -> &'static Config {
-        config
+        CONFIG
             .get_or_try_init(|| {
                 dotenv::dotenv()?;
 
