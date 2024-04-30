@@ -1,6 +1,7 @@
 mod audio;
 mod chunk;
 mod config;
+mod ext;
 mod logic;
 mod peer;
 mod player;
@@ -432,7 +433,7 @@ async fn peer(produce: &bool) -> Result<()> {
                     match command {
                         "connect" => {
                             // let peer_id = Uuid::from_str(arg)?;
-                            let peer_id = arg.into();
+                            let peer_id = arg.to_owned().into();
                             tx.blocking_send(signal::SignallingControl::RequestConnection(
                                 peer_id,
                             ))?;

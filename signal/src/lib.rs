@@ -13,7 +13,22 @@ use uuid::Uuid;
 
 use eyre::{eyre, Result};
 
-pub type PeerId = String;
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
+#[repr(transparent)]
+pub struct PeerId(String);
+
+impl std::fmt::Display for PeerId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<String> for PeerId {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
+
 pub type ConnectionId = Uuid;
 
 pub(crate) const ARBITRARY_CHANNEL_LIMIT: usize = 5;
@@ -65,7 +80,7 @@ fn make_id() -> PeerId {
     const CHARSET: &[u8] = b"abcdefghijklmnopqrstuvwxyz23456789";
     let mut rng = rand::thread_rng();
     let one_char = || CHARSET[rng.gen_range(0..CHARSET.len())] as char;
-    iter::repeat_with(one_char).take(LEN).collect()
+    PeerId(iter::repeat_with(one_char).take(LEN).collect())
 }
 
 fn make_connection_id() -> ConnectionId {

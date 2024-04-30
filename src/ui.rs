@@ -8,11 +8,12 @@ use std::sync::{Arc, Weak};
 use derive_more::{Deref, DerefMut};
 
 use media::decoder::DecoderEvent;
+use media::produce::MediaControl;
 use media::VideoBuffer;
 
 use tracing::Instrument;
 
-use crate::peer::PeerControl;
+use crate::peer::{PeerControl, PeerError, PeerEvent};
 
 use eyre::Result;
 use media::dx::create_device_and_swapchain;
@@ -61,6 +62,7 @@ fn resize_swap_chain_and_render_target(
 struct RemotePeer {
     peer_id: PeerId,
     control: mpsc::Sender<PeerControl>,
+    media_control: Arc<Mutex<Option<mpsc::Sender<MediaControl>>>>,
 }
 
 impl std::fmt::Debug for RemotePeer {
@@ -92,111 +94,182 @@ impl RemotePeer {
         )
         .await?;
 
+        let media_control: Arc<Mutex<Option<mpsc::Sender<MediaControl>>>> = Default::default();
+
         tokio::spawn({
             let our_peer_id = our_peer_id.clone();
-            let peer_control = control.downgrade();
             let their_peer_id = their_peer_id.clone();
+            let peer_control = control.downgrade();
+            let media_control = Arc::downgrade(&media_control);
 
-            async move {
-
-                let mut decoder_control: Option<mpsc::Sender<media::decoder::DecoderControl>> =
-                    None;
-
-                while let Some(event) = event.recv().await {
-                    match event {
-                        crate::peer::PeerEvent::StreamRequest(request) => {
-                            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
-
-                            tokio::spawn({
-                                let peer_control = peer_control.clone();
-                                async move {
-                                    if let Ok(response) = response_rx.await {
-                                        if let Some(peer_control) = peer_control.upgrade() {
-
-                                            if let PeerStreamRequestResponse::Accept { mode, bitrate } = &response {
-                                                // TODO(emily): Pass mode and bitrate
-                                                Self::start_streaming(&peer_control.downgrade(), mode, bitrate);
-                                            }
-
-                                            let _ = peer_control
-                                                .send(PeerControl::RequestStreamResponse(response))
-                                                .await;
-                                        }
-                                    }
-
-                                    // Sender was dropped without sending anything
-                                    // TODO(emily): Probably reject stream instead of not doing anything
-                                }.in_current_span()
-                            });
-
-                            app_event_tx
-                                .send(AppEvent::RemotePeerStreamRequest(
-                                    our_peer_id.clone(),
-                                    (their_peer_id.clone(), request, response_tx),
-                                ))
-                                .await?;
-                        }
-
-                        crate::peer::PeerEvent::RequestStreamResponse(response) => match response {
-                            PeerStreamRequestResponse::Accept{ mode, bitrate } => {
-                                tracing::info!(?mode, bitrate, "stream accepted");
-
-                                let (control, event) = config
-                                    .decoder_api
-                                    .run(
-                                        mode.width,
-                                        mode.height,
-                                        mode.refresh_rate,
-                                        bitrate,
-                                    )
-                                    .await?;
-
-                                decoder_control = Some(control);
-
-                                app_event_tx
-                                    .send(AppEvent::DecoderEvent(
-                                        our_peer_id.clone(),
-                                        (their_peer_id.clone(), event),
-                                    ))
-                                    .await?;
-                            }
-                            _ => {
-                                tracing::warn!(
-                                    ?response,
-                                    our_peer_id,
-                                    their_peer_id,
-                                    "ignoring peer stream request response Reject or Negotiate"
-                                );
-                            }
-                        },
-                        crate::peer::PeerEvent::Video(video) => {
-                            if let Some(decoder_control) = &decoder_control {
-                                decoder_control
-                                    .send(media::decoder::DecoderControl::Data(video))
-                                    .await?;
-                            } else {
-                                tracing::warn!("got video when we were not expecting video (we dont have a decoder)");
-                            }
-
-                        }
-                        event => {
-                            tracing::warn!(our_peer_id, ?event, "ignoring peer event");
-                        }
-                    }
-                }
-                eyre::Ok(())
-            }
+            Self::peer_event(
+                event,
+                peer_control,
+                media_control,
+                app_event_tx,
+                our_peer_id,
+                their_peer_id,
+            )
             .in_current_span()
         });
 
         Ok(Self {
             peer_id: their_peer_id.clone(),
+            media_control,
             control,
         })
     }
 
+    #[tracing::instrument(skip(event, peer_control, media_control, app_event_tx))]
+    async fn peer_event(
+        mut event: mpsc::Receiver<PeerEvent>,
+        peer_control: mpsc::WeakSender<PeerControl>,
+        media_control: Weak<Mutex<Option<mpsc::Sender<MediaControl>>>>,
+        app_event_tx: mpsc::Sender<AppEvent>,
+        our_peer_id: PeerId,
+        their_peer_id: PeerId,
+    ) -> Result<()> {
+        let config = Config::load();
+
+        let mut decoder_control: Option<mpsc::Sender<media::decoder::DecoderControl>> = None;
+
+        while let Some(event) = event.recv().await {
+            match event {
+                PeerEvent::StreamRequest(request) => {
+                    // Check that we arent already streaming to this peer
+                    if let Some(media_control) = media_control.upgrade() {
+                        if media_control.lock().await.is_some() {
+                            tracing::warn!(
+                            "ignoring request to stream as we already have media control associated withthis peer"
+                        );
+                            continue;
+                        }
+                    }
+
+                    let response_tx = Self::stream_request(&peer_control, &media_control);
+
+                    app_event_tx
+                        .send(AppEvent::RemotePeerStreamRequest(
+                            our_peer_id.clone(),
+                            (their_peer_id.clone(), request, response_tx),
+                        ))
+                        .await?;
+                }
+
+                PeerEvent::RequestStreamResponse(response) => match response {
+                    PeerStreamRequestResponse::Accept { mode, bitrate } => {
+                        tracing::info!(?mode, bitrate, "stream accepted");
+
+                        let (control, event) = config
+                            .decoder_api
+                            .run(mode.width, mode.height, mode.refresh_rate, bitrate)
+                            .await?;
+
+                        decoder_control = Some(control);
+
+                        app_event_tx
+                            .send(AppEvent::DecoderEvent(
+                                our_peer_id.clone(),
+                                (their_peer_id.clone(), event),
+                            ))
+                            .await?;
+                    }
+                    _ => {
+                        tracing::warn!(
+                            ?response,
+                            %our_peer_id,
+                            %their_peer_id,
+                            "ignoring peer stream request response Reject or Negotiate"
+                        );
+                    }
+                },
+                PeerEvent::Video(video) => {
+                    if let Some(decoder_control) = &decoder_control {
+                        decoder_control
+                            .send(media::decoder::DecoderControl::Data(video))
+                            .await?;
+                    } else {
+                        tracing::warn!(
+                            "got video when we were not expecting video (we dont have a decoder)"
+                        );
+                    }
+                }
+                PeerEvent::Error(PeerError::Closed) => {
+                    tracing::info!("peer is done forever");
+                    app_event_tx
+                        .send(AppEvent::PeerClosed(our_peer_id, their_peer_id))
+                        .await
+                        .unwrap();
+                    break;
+                }
+                event => {
+                    tracing::warn!(%our_peer_id, ?event, "ignoring peer event");
+                }
+            }
+        }
+        eyre::Ok(())
+    }
+
+    #[tracing::instrument(skip(peer_control, media_control))]
+    fn stream_request(
+        peer_control: &mpsc::WeakSender<PeerControl>,
+        media_control: &Weak<Mutex<Option<mpsc::Sender<MediaControl>>>>,
+    ) -> oneshot::Sender<PeerStreamRequestResponse> {
+        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+
+        tokio::spawn({
+            let peer_control = peer_control.clone();
+            let media_control = media_control.clone();
+            async move {
+                let response = response_rx.await;
+                if let Some(peer_control) = peer_control.upgrade() {
+                    match response {
+                        Ok(response) => {
+                            if let PeerStreamRequestResponse::Accept { mode, bitrate } = &response {
+                                // If we accepted then start the stream
+                                let media_sender_rx =
+                                    Self::start_streaming(&peer_control.downgrade(), mode, bitrate);
+
+                                tokio::spawn({
+                                    async move {
+                                        if let Ok(media_sender) = media_sender_rx.await {
+                                            if let Some(media_control) = media_control.upgrade() {
+                                                *media_control.lock().await = Some(media_sender);
+                                            }
+                                        }
+                                    }
+                                    .in_current_span()
+                                });
+                            }
+
+                            let _ = peer_control
+                                .send(PeerControl::RequestStreamResponse(response))
+                                .await;
+                        }
+                        Err(_) => {
+                            // Sender was dropped without sending anything
+                            // Tell other peer that we are not going to be streaming to them
+                            let _ = peer_control
+                                .send(PeerControl::RequestStreamResponse(
+                                    PeerStreamRequestResponse::Reject,
+                                ))
+                                .await;
+                        }
+                    }
+                }
+            }
+            .in_current_span()
+        });
+        response_tx
+    }
+
+    // Start streaming to this remote peer
     #[tracing::instrument]
-    fn start_streaming(peer_control: &mpsc::WeakSender<PeerControl>, mode: &Mode, bitrate: &u32) {
+    fn start_streaming(
+        peer_control: &mpsc::WeakSender<PeerControl>,
+        mode: &Mode,
+        bitrate: &u32,
+    ) -> oneshot::Receiver<mpsc::Sender<MediaControl>> {
         // TODO(emily): Thinking that here we can return 2 channels, one for video_tx and one for audio_tx.
         // these could even come from higher up in peer instead of just sending to peer-control. This would also avoid
         // the 'bottleneck' from sending everything through peer control.
@@ -206,6 +279,8 @@ impl RemotePeer {
 
         // For now this is fine.
 
+        let (sender_tx, sender_rx) = oneshot::channel();
+
         tokio::spawn({
             let weak_control = peer_control.clone();
             let mode = mode.clone();
@@ -213,7 +288,8 @@ impl RemotePeer {
             async move {
                 let config = Config::load();
 
-                let (_tx, mut rx) = if let Some(file) = config.media_filename.as_ref() {
+                // TODO(emily): Race condition here where tx is being kept alive by rx
+                let (tx, mut rx) = if let Some(file) = config.media_filename.as_ref() {
                     media::produce::produce(
                         config.encoder_api,
                         file,
@@ -233,6 +309,10 @@ impl RemotePeer {
                     )
                     .await?
                 };
+
+                // Ignore result here, if RemotePeer doesnt take sender here then we will go down immediately
+                // and thats fine, because the only case that it would not take it is if it has gone already.
+                let _ = sender_tx.send(tx);
 
                 while let Some(event) = rx.recv().await {
                     if let Some(control) = weak_control.upgrade() {
@@ -255,10 +335,13 @@ impl RemotePeer {
             }
             .in_current_span()
         });
+
+        sender_rx
     }
 }
 
 impl Drop for RemotePeer {
+    #[tracing::instrument]
     fn drop(&mut self) {
         tracing::info!("RemotePeer::drop");
         let control = self.control.clone();
@@ -294,7 +377,7 @@ impl std::fmt::Debug for _Peer {
 
 impl Drop for _Peer {
     fn drop(&mut self) {
-        tracing::info!(self.our_peer_id, "_Peer::drop");
+        tracing::info!(%self.our_peer_id, "_Peer::drop");
     }
 }
 
@@ -311,7 +394,7 @@ struct UIPeer(
 impl Drop for UIPeer {
     fn drop(&mut self) {
         tracing::info!(
-            our_peer_id = self.0,
+            our_peer_id = %self.0,
             strong_count = Arc::strong_count(&self.1),
             "UIPeer::drop"
         );
@@ -390,7 +473,7 @@ impl UIPeer {
             let strong_zelf = zelf.upgrade().ok_or(eyre::eyre!("no peer"))?;
             let mut zelf = strong_zelf.lock().await;
 
-            let span = tracing::debug_span!("SignallingEvent", zelf.our_peer_id);
+            let span = tracing::debug_span!("SignallingEvent", %zelf.our_peer_id);
             let _guard = span.enter();
 
             match event {
@@ -398,7 +481,7 @@ impl UIPeer {
                     unreachable!("We should only ever get our peer_id once");
                 }
                 signal::SignallingEvent::ConectionRequest(peer_id, connection_id) => {
-                    tracing::info!(peer_id, ?connection_id, "connection request");
+                    tracing::info!(%peer_id, ?connection_id, "connection request");
                     zelf.last_connection_request = Some(connection_id.to_string());
                     zelf.connection_peer_id
                         .insert(connection_id.clone(), peer_id.clone());
@@ -413,7 +496,7 @@ impl UIPeer {
                         .await;
                 }
                 signal::SignallingEvent::Offer(peer_id, offer) => {
-                    tracing::info!(peer_id, offer, "offer");
+                    tracing::info!(%peer_id, offer, "offer");
 
                     let remote_peers = &mut zelf.remote_peers;
                     if let Some(peer_data) = remote_peers.get(&peer_id) {
@@ -423,11 +506,11 @@ impl UIPeer {
                             .await
                             .unwrap();
                     } else {
-                        tracing::debug!(peer_id, ?remote_peers, "got offer for unknown peer");
+                        tracing::debug!(%peer_id, ?remote_peers, "got offer for unknown peer");
                     }
                 }
                 signal::SignallingEvent::Answer(peer_id, answer) => {
-                    tracing::info!(peer_id, answer, "answer");
+                    tracing::info!(%peer_id, answer, "answer");
 
                     let remote_peers = &mut zelf.remote_peers;
                     if let Some(remote_peer) = remote_peers.get(&peer_id) {
@@ -438,14 +521,14 @@ impl UIPeer {
                             .unwrap();
                     } else {
                         tracing::debug!(
-                            peer_id,
+                            %peer_id,
                             ?remote_peers,
                             "got answer for unknown peer {peer_id}"
                         );
                     }
                 }
                 signal::SignallingEvent::IceCandidate(peer_id, ice_candidate) => {
-                    tracing::info!(peer_id, ?ice_candidate, "ice candidate");
+                    tracing::info!(%peer_id, ?ice_candidate, "ice candidate");
 
                     let remote_peers = &mut zelf.remote_peers;
                     if let Some(remote_peer) = remote_peers.get(&peer_id) {
@@ -456,7 +539,7 @@ impl UIPeer {
                             .unwrap();
                     } else {
                         tracing::debug!(
-                            peer_id,
+                            %peer_id,
                             ?remote_peers,
                             "got ice candidate for unknown peer"
                         );
@@ -467,7 +550,7 @@ impl UIPeer {
                     let our_peer_id = zelf.our_peer_id.clone();
                     assert!(peer_id != our_peer_id);
 
-                    tracing::info!(peer_id, ?connection_id, "connection accepted");
+                    tracing::info!(%peer_id, ?connection_id, "connection accepted");
 
                     zelf.peer_tasks.spawn({
                         let our_peer_id = our_peer_id;
@@ -520,7 +603,7 @@ impl UIPeer {
         Ok(zelf.connection_peer_id.clone())
     }
 
-    async fn connect(&self, peer_id: String) -> Result<()> {
+    async fn connect(&self, peer_id: PeerId) -> Result<()> {
         let zelf = self.inner().await;
 
         Ok(zelf
@@ -575,8 +658,8 @@ impl UIPeer {
                 .await?)
         } else {
             tracing::warn!(
-                zelf.our_peer_id,
-                peer_id,
+                %zelf.our_peer_id,
+                %peer_id,
                 ?zelf.connection_peer_id,
                 "no incoming connection request from peer"
             );
@@ -666,7 +749,7 @@ impl PeerWindowState {
 
         let id = peer.our_id();
         ui.horizontal(|ui| {
-            ui.label(id);
+            ui.label(format!("{}", id));
 
             ui.selectable_value(&mut self.visible, Visible::No, "hide");
             ui.selectable_value(&mut self.visible, Visible::Yes, "show");
@@ -677,46 +760,45 @@ impl PeerWindowState {
         });
 
         egui::Window::new(format!("Peer {id}")).show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.text_edit_singleline(&mut self.connect_peer_id);
-                if ui.button("connect").clicked() {
+            ui.text_edit_singleline(&mut self.connect_peer_id);
+            if ui.button("connect").clicked() {
+                tokio::spawn({
+                    let connect_peer_id: PeerId = self.connect_peer_id.clone().into();
+                    let peer = peer.clone();
+                    async move {
+                        peer.connect(connect_peer_id.clone()).await.unwrap();
+                    }
+                });
+            }
+            ui.end_row();
+
+            ui.heading("Connected Peers");
+            ui.end_row();
+
+            for (their_peer_id, _control) in &self.connected_peers {
+                ui.label(format!("{}", their_peer_id));
+
+                if ui.button("request stream").clicked() {
                     tokio::spawn({
-                        let connect_peer_id = self.connect_peer_id.clone();
                         let peer = peer.clone();
+                        let peer_id = their_peer_id.clone();
                         async move {
-                            peer.connect(connect_peer_id.clone()).await.unwrap();
+                            peer.request_stream(
+                                peer_id,
+                                PeerStreamRequest {
+                                    preferred_mode: None,
+                                    preferred_bitrate: None,
+                                },
+                            )
+                            .await
+                            .unwrap();
                         }
                     });
                 }
-            });
+                ui.end_row();
 
-            ui.heading("Connected Peers");
-
-            for (their_peer_id, _control) in &self.connected_peers {
-                ui.horizontal(|ui| {
-                    ui.label(format!("{}", their_peer_id));
-
-                    if ui.button("request stream").clicked() {
-                        tokio::spawn({
-                            let peer = peer.clone();
-                            let peer_id = their_peer_id.clone();
-                            async move {
-                                peer.request_stream(
-                                    peer_id,
-                                    PeerStreamRequest {
-                                        preferred_mode: None,
-                                        preferred_bitrate: None,
-                                    },
-                                )
-                                .await
-                                .unwrap();
-                            }
-                        });
-                    }
-                });
-
-                let (rect, _) = ui.allocate_exact_size(
-                    egui::Vec2::splat(300.0),
+                let (rect, _) = ui.allocate_at_least(
+                    egui::Vec2::new(480.0, 360.0),
                     egui::Sense::focusable_noninteractive(),
                 );
 
@@ -775,47 +857,59 @@ impl PeerWindowState {
             }
 
             ui.heading("Connection Requests");
+            ui.end_row();
 
             for (c_id, p_id) in &self.connection_requests {
-                ui.horizontal(|ui| {
-                    ui.label(format!("{}", p_id));
-                    ui.label(format!("{}", c_id));
+                ui.label(format!("{}", p_id));
+                ui.label(format!("{}", c_id));
 
-                    if ui.button("accept").clicked() {
-                        tokio::spawn({
-                            let peer = peer.clone();
-                            let p_id = p_id.clone();
-                            async move {
-                                peer.accept_connection(&p_id).await.unwrap();
-                            }
-                        });
-                    }
-                });
+                if ui.button("accept").clicked() {
+                    tokio::spawn({
+                        let peer = peer.clone();
+                        let p_id = p_id.clone();
+                        async move {
+                            peer.accept_connection(&p_id).await.unwrap();
+                        }
+                    });
+                }
+                ui.end_row();
             }
 
             ui.heading("Stream Requests");
+            ui.end_row();
 
             let mut stream_request_clicked = None;
 
             for (peer_id, (request, _)) in &self.stream_requests {
-                ui.horizontal(|ui| {
-                    ui.label(format!("{} {:?}", peer_id, request));
-                    if ui.button("accept").clicked() {
-                        let config = Config::load();
+                ui.label(format!("{} {:?}", peer_id, request));
+                if ui.button("accept").clicked() {
+                    let config = Config::load();
 
-                        stream_request_clicked = Some((
-                            peer_id.clone(),
-                            PeerStreamRequestResponse::Accept {
-                                mode: crate::logic::Mode {
-                                    width: config.width,
-                                    height: config.height,
-                                    refresh_rate: config.framerate,
-                                },
-                                bitrate: config.bitrate,
+                    stream_request_clicked = Some((
+                        peer_id.clone(),
+                        PeerStreamRequestResponse::Accept {
+                            mode: crate::logic::Mode {
+                                width: request
+                                    .preferred_mode
+                                    .as_ref()
+                                    .map(|m| m.width)
+                                    .unwrap_or(config.width),
+                                height: request
+                                    .preferred_mode
+                                    .as_ref()
+                                    .map(|m| m.height)
+                                    .unwrap_or(config.height),
+                                refresh_rate: request
+                                    .preferred_mode
+                                    .as_ref()
+                                    .map(|m| m.refresh_rate)
+                                    .unwrap_or(config.framerate),
                             },
-                        ));
-                    }
-                });
+                            bitrate: request.preferred_bitrate.unwrap_or(config.bitrate),
+                        },
+                    ));
+                }
+                ui.end_row();
             }
 
             if let Some((peer_id, response)) = stream_request_clicked {
@@ -858,6 +952,7 @@ enum AppEvent {
         PeerId,
         (PeerId, mpsc::Receiver<media::decoder::DecoderEvent>),
     ),
+    PeerClosed(PeerId, PeerId),
 }
 
 struct App {
@@ -929,10 +1024,8 @@ impl App {
             if let Ok(event) = self.event_rx.try_recv() {
                 match event {
                     AppEvent::Peer(peer) => {
-                        self.peers.insert(
-                            format!("{}", peer.our_id()),
-                            (PeerWindowState::default(), peer),
-                        );
+                        self.peers
+                            .insert(peer.our_id().clone(), (PeerWindowState::default(), peer));
                     }
                     AppEvent::ConnectionRequest(our_peer_id, (connection_request_id, peer_id)) => {
                         if let Some((peer_window_state, _)) = self.peers.get_mut(&our_peer_id) {
@@ -976,6 +1069,14 @@ impl App {
                             peer_window_state
                                 .media_decoder_event
                                 .insert(their_id, (None, decoder_event));
+                        }
+                    }
+                    AppEvent::PeerClosed(our_id, their_id) => {
+                        if let Some((peer_window_state, _)) = self.peers.get_mut(&our_id) {
+                            peer_window_state
+                                .connected_peers
+                                .remove(&their_id)
+                                .expect("Expect remote PeerControl to exist when it goes away");
                         }
                     }
                 }

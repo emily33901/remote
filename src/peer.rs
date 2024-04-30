@@ -13,6 +13,8 @@ use tracing::Instrument;
 #[derive(Debug)]
 pub(crate) enum PeerError {
     Unknown,
+    /// Peer connection is closed or failed. (can never be restarted)
+    Closed,
 }
 
 #[derive(Debug)]
@@ -67,9 +69,6 @@ pub(crate) async fn peer(
     let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
-    telemetry::client::watch_channel(&control_tx, "peer-control").await;
-    telemetry::client::watch_channel(&event_tx, "peer-event").await;
-
     let (logic_tx, mut logic_rx) = logic_channel(peer_connection.as_ref(), controlling).await?;
     let (audio_tx, mut audio_rx) = audio_channel(peer_connection.as_ref(), controlling).await?;
     let (video_tx, mut video_rx) = video_channel(peer_connection.as_ref(), controlling).await?;
@@ -78,7 +77,6 @@ pub(crate) async fn peer(
         let rtc_control = rtc_control.clone();
         let peer_connection = peer_connection.clone();
         let _our_peer_id = our_peer_id.clone();
-        let span = tracing::span!(tracing::Level::DEBUG, "PeerControl");
         async move {
             match async move {
                 // keep peer connection alive
@@ -138,7 +136,6 @@ pub(crate) async fn peer(
                 }
             }
         }
-        .instrument(span)
         .in_current_span()
     });
 
@@ -235,7 +232,6 @@ pub(crate) async fn peer(
         let their_peer_id = their_peer_id.clone();
         let signalling_control = signalling_control.clone();
         let event_tx = event_tx.downgrade();
-        let span = tracing::span!(tracing::Level::DEBUG, "RtcPeerEvent");
         async move {
             match async move {
                 while let Some(event) = rtc_event.recv().await {
@@ -250,11 +246,11 @@ pub(crate) async fn peer(
                         }
                         rtc::RtcPeerEvent::StateChange(state_change) => {
                             tracing::info!("peer state change: {state_change:?}");
-                            if let rtc::RtcPeerState::Failed = state_change {
+                            if let rtc::RtcPeerState::Failed | rtc::RtcPeerState::Closed = state_change {
                                 if let Some(event_tx) = event_tx.upgrade() {
-                                    event_tx.send(PeerEvent::Error(PeerError::Unknown)).await?;
+                                    event_tx.send(PeerEvent::Error(PeerError::Closed)).await?;
                                 } else {
-                                    tracing::warn!(our_peer_id, "state change failed but no event_tx to tell peer that it failed?");
+                                    tracing::warn!(%our_peer_id, "state change failed but no event_tx to tell peer that it failed?");
                                 }
                                 break;
                             }
@@ -282,7 +278,6 @@ pub(crate) async fn peer(
                 }
             }
         }
-        .instrument(span)
         .in_current_span()
     });
 
