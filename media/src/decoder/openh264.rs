@@ -69,13 +69,7 @@ pub async fn h264_decoder(
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
     let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
 
-    telemetry::client::watch_channel(&control_tx, "h264-decoder-control").await;
-    telemetry::client::watch_channel(&event_tx, "h264-decoder-event").await;
-
     tokio::spawn(async move {
-        let fps_counter = telemetry::client::Counter::default();
-        telemetry::client::watch_counter(&fps_counter, telemetry::Unit::Fps, "decoder fps").await;
-
         match tokio::task::spawn_blocking(move || {
             let (device, context) = crate::dx::create_device()?;
 
@@ -136,8 +130,6 @@ pub async fn h264_decoder(
                                 frame,
                                 crate::Timestamp::new_millis(output.timestamp().as_millis()),
                             ))?;
-
-                            fps_counter.update(1);
 
                             Ok(())
                         })?;

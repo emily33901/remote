@@ -69,9 +69,6 @@ pub async fn h264_encoder(
     let (control_tx, mut control_rx) =
         mpsc::channel::<EncoderControl>(ARBITRARY_MEDIA_CHANNEL_LIMIT);
 
-    let fps_counter = telemetry::client::Counter::default();
-    telemetry::client::watch_counter(&fps_counter, telemetry::Unit::Fps, "encoder fps").await;
-
     tokio::task::spawn_blocking(move || {
         let (device, context) = crate::dx::create_device()?;
 
@@ -136,17 +133,13 @@ pub async fn h264_encoder(
                     openh264::Timestamp::from_millis(time.duration().as_millis() as u64),
                 )?;
 
-                fps_counter.update(1);
-
-                event_tx
-                    .blocking_send(EncoderEvent::Data(crate::VideoBuffer {
-                        data: bitstream.to_vec(),
-                        sequence_header: None,
-                        time: time,
-                        duration: std::time::Duration::from_secs_f32(1.0 / target_framerate as f32),
-                        key_frame: super::FrameIsKeyframe::No,
-                    }))
-                    .unwrap();
+                event_tx.blocking_send(EncoderEvent::Data(crate::VideoBuffer {
+                    data: bitstream.to_vec(),
+                    sequence_header: None,
+                    time: time,
+                    duration: std::time::Duration::from_secs_f32(1.0 / target_framerate as f32),
+                    key_frame: super::FrameIsKeyframe::No,
+                }))?;
             }
         }
 
