@@ -32,6 +32,8 @@ pub(crate) enum PeerStreamRequestResponse {
 pub enum LogicMessage {
     StreamRequest(PeerStreamRequest),
     StreamRequestResponse(PeerStreamRequestResponse),
+    Ping,
+    Pong,
 }
 
 #[tracing::instrument(skip(peer_connection))]
@@ -45,59 +47,63 @@ pub(crate) async fn logic_channel(
     let (tx, mut rx) = peer_connection.channel("logic", controlling, None).await?;
 
     tokio::spawn({
-        let span = tracing::span!(tracing::Level::DEBUG, "ChannelEvent");
+        let weak_control_tx = control_tx.downgrade();
         async move {
-            match async move {
-                while let Some(event) = rx.recv().await {
-                    match event {
-                        ChannelEvent::Open => {}
-                        ChannelEvent::Close => {}
-                        ChannelEvent::Message(data) => {
-                            let message = bincode::deserialize(&data).unwrap();
+            while let Some(event) = rx.recv().await {
+                match event {
+                    ChannelEvent::Open => {}
+                    ChannelEvent::Close => {}
+                    ChannelEvent::Message(data) => {
+                        let message = bincode::deserialize(&data).unwrap();
 
-                            tracing::debug!(?message);
-                            event_tx.send(message).await?;
+                        tracing::debug!(?message);
+
+                        match message {
+                            LogicMessage::Ping => {
+                                if let Some(tx) = weak_control_tx.upgrade() {
+                                    let _ = tx.send(LogicMessage::Pong).await;
+                                }
+                            }
+                            LogicMessage::Pong => {}
+
+                            message => {
+                                event_tx.send(message).await?;
+                            }
                         }
                     }
                 }
+            }
 
-                eyre::Ok(())
-            }
-            .await
-            {
-                Ok(_) => {}
-                Err(err) => {
-                    tracing::error!("logic channel event error {err}");
-                }
-            }
+            eyre::Ok(())
         }
-        .instrument(span)
         .in_current_span()
     });
 
     tokio::spawn({
         let tx = tx.clone();
-        let span = tracing::span!(tracing::Level::DEBUG, "ChannelControl");
         async move {
-            match async move {
-                while let Some(control) = control_rx.recv().await {
-                    tracing::debug!(?control);
-                    let encoded = bincode::serialize(&control).unwrap();
-                    tx.send(ChannelControl::Send(encoded)).await?;
-                }
-
-                eyre::Ok(())
+            while let Some(control) = control_rx.recv().await {
+                tracing::debug!(?control);
+                let encoded = bincode::serialize(&control).unwrap();
+                tx.send(ChannelControl::Send(encoded)).await?;
             }
-            .await
-            {
-                Ok(_) => {}
-                Err(err) => {
-                    tracing::error!("logic channel control error {err}");
+
+            eyre::Ok(())
+        }
+        .in_current_span()
+    });
+
+    tokio::spawn({
+        let weak_control_tx = control_tx.downgrade();
+        async move {
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(10));
+            loop {
+                ticker.tick().await;
+                if let Some(tx) = weak_control_tx.upgrade() {
+                    let _ = tx.send(LogicMessage::Ping).await;
                 }
             }
         }
-        .instrument(span)
-        .in_current_span()
     });
 
     Ok((control_tx, event_rx))

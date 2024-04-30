@@ -182,6 +182,9 @@ pub(crate) async fn peer(
                                 .send(PeerEvent::RequestStreamResponse(response))
                                 .await?;
                         }
+                        logic::LogicMessage::Ping | logic::LogicMessage::Pong => {
+                            unreachable!()
+                        }
                     }
                 }
 
