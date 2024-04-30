@@ -1,7 +1,7 @@
 use std::time::UNIX_EPOCH;
 
 use eyre::{eyre, Result};
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::{self, error::TryRecvError};
 use windows::{
     core::Interface,
     Win32::{
@@ -157,11 +157,15 @@ pub(crate) async fn converter(
                     let ConvertControl::Frame(frame, time) = {
                         let mut control = None;
 
-                        // TODO(emily): Properly handle TryRecvErr::Disconnected.
-                        // Right now we will never exit when we see that, I think that is probably
-                        // wrong.
-                        while let Ok(new_control) = control_rx.try_recv() {
-                            control = Some(new_control);
+                        loop {
+                            match control_rx.try_recv() {
+                                Ok(convert_control) => control = Some(convert_control),
+                                Err(TryRecvError::Disconnected) => {
+                                    tracing::debug!("control is gone");
+                                    return Ok(());
+                                }
+                                Err(TryRecvError::Empty) => break,
+                            }
                         }
 
                         // If we didn't get a frame then wait for one now
@@ -175,8 +179,6 @@ pub(crate) async fn converter(
 
                         control.unwrap()
                     };
-
-                    // NOTE(emily): cc requires that the input texture be bind_render_target and bind_shader_resource
 
                     let sample = {
                         let (width, height) = {
@@ -208,6 +210,7 @@ pub(crate) async fn converter(
                             (last_input_width, last_input_height) = (width, height);
                         }
 
+                        // NOTE(emily): cc requires that the input texture be bind_render_target and bind_shader_resource
                         let texture = super::dx::TextureBuilder::new(
                             &device,
                             width,
@@ -229,7 +232,7 @@ pub(crate) async fn converter(
                         .ProcessInput(0, &sample, 0)
                         .map_err(|err| err.code());
 
-                    tracing::trace!("cc process input {result:?}");
+                    tracing::trace!("process input {result:?}");
 
                     match result {
                         Ok(_) | Err(MF_E_NOTACCEPTING) => {
@@ -242,24 +245,19 @@ pub(crate) async fn converter(
                             )
                             .map_err(|err| err.code());
 
-                            tracing::trace!("cc process output {output_result:?}");
+                            tracing::trace!("process output {output_result:?}");
 
                             match output_result {
                                 Ok(Some((output_texture, timestamp))) => {
-                                    match event_tx.try_send(ConvertEvent::Frame(
+                                    match event_tx.blocking_send(ConvertEvent::Frame(
                                         output_texture.clone(),
                                         timestamp,
                                     )) {
-                                        Ok(_) => {}
-                                        Err(err) => match err {
-                                            mpsc::error::TrySendError::Full(_) => {
-                                                tracing::info!("backpressured")
-                                            }
-                                            mpsc::error::TrySendError::Closed(_) => {
-                                                tracing::info!("event closed");
-                                                return Err(eyre!("event closed"));
-                                            }
-                                        },
+                                        Err(err) => {
+                                            tracing::debug!("Failed to send convert event, done");
+                                            break;
+                                        }
+                                        Ok(()) => {}
                                     }
                                 }
                                 Ok(None) => {
