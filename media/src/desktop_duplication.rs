@@ -1,5 +1,5 @@
 use eyre::Result;
-use tokio::sync::mpsc;
+use tokio::sync::mpsc::{self, error::TryRecvError};
 use tracing::Instrument;
 use windows::{
     core::Interface,
@@ -36,9 +36,9 @@ pub(crate) enum DDEvent {
     Frame(ID3D11Texture2D, crate::Timestamp),
 }
 
-#[tracing::instrument]
+// #[tracing::instrument]
 pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Receiver<DDEvent>)> {
-    let (control_tx, _control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
+    let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
     let span = tracing::Span::current();
@@ -129,7 +129,12 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
             unsafe { QueryPerformanceCounter(&mut start) }?;
             let start_time = std::time::SystemTime::now();
 
-            loop {
+            let mut control_rx_open = || match control_rx.try_recv() {
+                Ok(_) | Err(TryRecvError::Empty) => true,
+                Err(TryRecvError::Disconnected) => false,
+            };
+
+            while control_rx_open() {
                 let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
                 let mut frame_resource: Option<IDXGIResource> = None;
 
@@ -248,7 +253,7 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
         .await
         .unwrap()
         {
-            Ok(_) => tracing::info!("media::desktop_duplication::desktop_duplication exit Ok"),
+            Ok(_) => tracing::info!("exit Ok"),
             Err(err) => tracing::error!(
                 "media::desktop_duplication::desktop_duplication exit err {err} {err:?}"
             ),
@@ -279,9 +284,17 @@ pub async fn duplicate_desktop(
     )
     .await?;
 
-    let (_dd_control, mut dd_event) = desktop_duplication()?;
+    let (dd_control, mut dd_event) = desktop_duplication()?;
 
-    tokio::spawn(async move { while let Some(_control) = control_rx.recv().await {} });
+    tokio::spawn(async move {
+        // Our control keeps the inner dd control
+        // This also indirectly keeps the cc control alive by keeping dd event alive
+        let _dd_control = dd_control;
+
+        while let Some(_control) = control_rx.recv().await {}
+
+        tracing::debug!("media control gone");
+    });
 
     tokio::spawn(async move {
         match async move {
