@@ -81,7 +81,18 @@ pub async fn h264_decoder(
 
                     for unit in nal_units(&buffer.data) {
                         if let Ok(Some(output)) = decoder.decode(unit) {
-                            tracing::debug!("decoder timestamp was {:?}", output.timestamp());
+                            // WebRTC uses the timestamp of the packet rather than the decoded buffer
+                            let timestamp = buffer.time.clone();
+
+                            let frame = crate::dx::TextureBuilder::new(
+                                &device,
+                                width,
+                                height,
+                                crate::dx::TextureFormat::NV12,
+                            )
+                            .keyed_mutex()
+                            .nt_handle()
+                            .build()?;
 
                             staging_texture.map_mut(&context, |data, dest_stride| {
                                 let (y_stride, u_stride, v_stride) = output.strides();
@@ -100,25 +111,12 @@ pub async fn h264_decoder(
                                     data,
                                 );
 
-                                let frame = crate::dx::TextureBuilder::new(
-                                    &device,
-                                    width,
-                                    height,
-                                    crate::dx::TextureFormat::NV12,
-                                )
-                                .keyed_mutex()
-                                .nt_handle()
-                                .build()?;
-
                                 crate::dx::copy_texture(&frame, &staging_texture, None)?;
-
-                                event_tx.blocking_send(DecoderEvent::Frame(
-                                    frame,
-                                    crate::Timestamp::new_millis(output.timestamp().as_millis()),
-                                ))?;
 
                                 Ok(())
                             })?;
+
+                            event_tx.blocking_send(DecoderEvent::Frame(frame, timestamp))?;
                         }
                     }
                 }

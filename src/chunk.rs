@@ -63,7 +63,6 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
     tokio::spawn({
         let event_tx = event_tx.clone();
         async move {
-            match async move {
                 type ChunkArragement = HashMap<u32, HashSet<Chunk>>;
                 let mut chunk_arrangement: ChunkArragement = HashMap::new();
                 let mut ticker = tokio::time::interval(std::time::Duration::from_secs(1));
@@ -167,14 +166,6 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
                     }
                 }
                 eyre::Ok(())
-            }
-            .await
-            {
-                Ok(_r) => {}
-                Err(err) => {
-                    tracing::error!("assembly control error {err}");
-                }
-            }
         }.in_current_span()
     });
 
@@ -231,18 +222,6 @@ pub(crate) async fn chunk<T: Serialize + for<'de> Deserialize<'de> + Send + 'sta
                                 };
 
                                 event_tx.send(ChunkEvent::Chunk(chunk)).await?;
-
-                                // match event_tx.try_send(ChunkEvent::Chunk(chunk)) {
-                                //     Ok(_) => {}
-                                //     Err(mpsc::error::TrySendError::Full(_)) => {
-                                //         tracing::warn!("chunk control backpressured");
-                                //         break;
-                                //     }
-                                //     Err(err) => {
-                                //         tracing::warn!("chunk control closed");
-                                //         return Err(eyre!("chunk control closed"));
-                                //     }
-                                // }
                             }
                         }
                     }

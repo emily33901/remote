@@ -1,15 +1,18 @@
+mod color;
+
 use crate::config::{self, Config};
 use crate::logic::{Mode, PeerStreamRequest, PeerStreamRequestResponse};
 use crate::player::video::NV12TextureRender;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
+use std::time::{Instant, SystemTime};
 
 use derive_more::{Deref, DerefMut};
 
 use media::decoder::DecoderEvent;
 use media::produce::MediaControl;
-use media::VideoBuffer;
+use media::{Timestamp, VideoBuffer};
 
 use tracing::Instrument;
 
@@ -687,6 +690,13 @@ enum Visible {
     Yes,
 }
 
+#[derive(Clone)]
+struct PeerMediaState {
+    start_time: Instant,
+    time: Timestamp,
+    texture: ID3D11Texture2D,
+}
+
 #[derive(Default)]
 struct PeerWindowState {
     visible: Visible,
@@ -702,10 +712,10 @@ struct PeerWindowState {
     >,
 
     stream_texture_renderer: Arc<std::sync::OnceLock<NV12TextureRender>>,
-    media_decoder_event: HashMap<
+    connected_peer_media: HashMap<
         PeerId,
         (
-            Option<ID3D11Texture2D>,
+            Option<PeerMediaState>,
             mpsc::Receiver<media::decoder::DecoderEvent>,
         ),
     >,
@@ -770,30 +780,32 @@ impl PeerWindowState {
                 }
                 ui.end_row();
 
-                let (rect, _) = ui.allocate_at_least(
-                    egui::Vec2::new(480.0, 360.0),
-                    egui::Sense::focusable_noninteractive(),
-                );
-
-                enum TextureResult {
+                enum MediaResult {
                     Done,
-                    Empty(Option<ID3D11Texture2D>),
-                    Texture(ID3D11Texture2D),
+                    Empty(Option<PeerMediaState>),
+                    Texture(PeerMediaState),
                 }
 
-                if let Some((last_texture, decoder_event)) =
-                    self.media_decoder_event.get_mut(their_peer_id)
+                if let Some((last_media, decoder_event)) =
+                    self.connected_peer_media.get_mut(their_peer_id)
                 {
-                    let mut texture = TextureResult::Empty(last_texture.clone());
+                    let mut texture = MediaResult::Empty(last_media.clone());
 
                     loop {
                         match decoder_event.try_recv() {
-                            Ok(DecoderEvent::Frame(t, _time)) => {
-                                texture = TextureResult::Texture(t)
+                            Ok(DecoderEvent::Frame(t, time)) => {
+                                texture = MediaResult::Texture(PeerMediaState {
+                                    start_time: last_media
+                                        .as_ref()
+                                        .map(|m| m.start_time)
+                                        .unwrap_or(Instant::now()),
+                                    time: time,
+                                    texture: t,
+                                })
                             }
                             Err(err) => {
                                 if let mpsc::error::TryRecvError::Disconnected = err {
-                                    texture = TextureResult::Done;
+                                    texture = MediaResult::Done;
                                 }
                                 break;
                             }
@@ -801,12 +813,41 @@ impl PeerWindowState {
                     }
 
                     match texture {
-                        TextureResult::Done => {
-                            self.media_decoder_event.remove(their_peer_id).unwrap();
+                        MediaResult::Done => {
+                            self.connected_peer_media.remove(their_peer_id).unwrap();
                         }
-                        TextureResult::Empty(None) => {}
-                        TextureResult::Empty(Some(texture)) | TextureResult::Texture(texture) => {
-                            *last_texture = Some(texture.clone());
+                        MediaResult::Empty(None) => {}
+                        MediaResult::Empty(Some(media)) | MediaResult::Texture(media) => {
+                            *last_media = Some(media.clone());
+
+                            {
+                                let time_diff =
+                                    if media.start_time.elapsed() > media.time.duration() {
+                                        media.start_time.elapsed() - media.time.duration()
+                                    } else {
+                                        media.time.duration() - media.start_time.elapsed()
+                                    };
+                                ui.horizontal(|ui| {
+                                    ui.colored_label(
+                                        color::interpolate_color(
+                                            egui::Color32::GREEN,
+                                            egui::Color32::RED,
+                                            ((time_diff.as_secs_f32() * 1000.0) / 50.0)
+                                                .clamp(0.0, 1.0),
+                                        ),
+                                        format!(
+                                            "{:8}ms ({:8}ms)",
+                                            media.time.duration().as_millis(),
+                                            time_diff.as_millis()
+                                        ),
+                                    );
+                                });
+                            }
+
+                            let (rect, _) = ui.allocate_at_least(
+                                egui::Vec2::new(720.0, 480.0),
+                                egui::Sense::focusable_noninteractive(),
+                            );
 
                             let cb = egui::PaintCallback {
                                 rect: rect,
@@ -818,7 +859,7 @@ impl PeerWindowState {
                                         });
 
                                         texture_renderer
-                                            .render_texture(&texture, renderer.device())
+                                            .render_texture(&media.texture, renderer.device())
                                             .unwrap();
                                     }
                                 })),
@@ -1040,7 +1081,7 @@ impl App {
                     AppEvent::DecoderEvent(our_id, (their_id, decoder_event)) => {
                         if let Some((peer_window_state, _)) = self.peers.get_mut(&our_id) {
                             peer_window_state
-                                .media_decoder_event
+                                .connected_peer_media
                                 .insert(their_id, (None, decoder_event));
                         }
                     }

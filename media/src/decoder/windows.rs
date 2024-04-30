@@ -214,8 +214,8 @@ unsafe fn hardware(
         let sample = MFCreateSample()?;
         sample.AddBuffer(&media_buffer)?;
 
-        // sample.SetSampleTime(time.hns())?;
-        // sample.SetSampleDuration(duration.as_nanos() as i64 / 100)?;
+        sample.SetSampleTime(time.hns())?;
+        sample.SetSampleDuration(duration.as_nanos() as i64 / 100)?;
 
         let process_output =
             || -> Result<Option<(ID3D11Texture2D, crate::Timestamp)>, windows::core::Error> {
