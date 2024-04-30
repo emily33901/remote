@@ -167,17 +167,18 @@ async fn on_datachannel(
         .await;
 
         Box::new(move |msg: DataChannelMessage| {
-            tracing::trace!("channel {our_label} message");
             let event_tx = event_tx.clone();
             let our_label = our_label.clone();
 
             recv_counter.update(msg.data.len());
 
             Box::pin(async move {
-                event_tx
+                if let Err(_) = event_tx
                     .send(ChannelEvent::Message(msg.data.to_vec()))
                     .await
-                    .unwrap();
+                {
+                    tracing::warn!("failed to pass message to peer")
+                }
             })
         })
     });
@@ -208,9 +209,6 @@ pub(crate) async fn channel(
     let our_label = our_label.to_owned();
     let (control_tx, control_rx) = mpsc::channel(ARBITRARY_RTC_CHANNEL_LIMIT);
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_RTC_CHANNEL_LIMIT);
-
-    telemetry::client::watch_channel(&control_tx, &format!("channel-{our_label}-control")).await;
-    telemetry::client::watch_channel(&event_tx, &format!("channel-{our_label}-event")).await;
 
     let control_rx = Arc::new(Mutex::new(Some(control_rx)));
 
