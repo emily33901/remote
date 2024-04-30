@@ -314,82 +314,77 @@ pub async fn server(address: &str) -> Result<()> {
         let peers = peers.clone();
         let connection_requests = connection_requests.clone();
         tokio::spawn(async move {
-            match async move {
-                println!("i {}", addr);
+            println!("i {}", addr);
 
-                let ws_stream = tokio_tungstenite::accept_async(conn).await?;
+            let ws_stream = tokio_tungstenite::accept_async(conn).await?;
 
-                let peer_id = make_id();
+            let peer_id = make_id();
 
-                println!("{} {}", peer_id, addr);
+            println!("{} {}", peer_id, addr);
 
-                let (mut outgoing, mut incoming) = ws_stream.split();
-                let (tx, mut rx) = mpsc::channel(ARBITRARY_SIGNALLING_CHANNEL_LIMIT);
+            let (mut outgoing, mut incoming) = ws_stream.split();
+            let (tx, mut rx) = mpsc::channel(ARBITRARY_SIGNALLING_CHANNEL_LIMIT);
 
-                peers.lock().await.insert(peer_id.clone(), tx.clone());
+            peers.lock().await.insert(peer_id.clone(), tx.clone());
 
-                tx.send(ServerToPeerMessage {
-                    job_id: 0,
-                    inner: ServerToPeer::Id(peer_id.clone()),
-                })
-                .await
-                .unwrap();
+            tx.send(ServerToPeerMessage {
+                job_id: 0,
+                inner: ServerToPeer::Id(peer_id.clone()),
+            })
+            .await
+            .unwrap();
 
-                let mut ticker = tokio::time::interval(std::time::Duration::from_secs(30));
+            let mut ticker = tokio::time::interval(std::time::Duration::from_secs(30));
 
-                loop {
-                    let peers = peers.clone();
-                    let connection_requests = connection_requests.clone();
-                    futures::select! {
-                        msg = incoming.next().fuse() => {
-                            match msg {
-                                Some(Ok(msg)) => {
-                                    match handle_incoming_message(peer_id.clone(), &mut outgoing, connection_requests, peers, msg).await {
-                                        Err(Some(response)) => {
-                                            tx.send(response).await?
-                                        }
-                                        Err(None) => {
-                                            println!("{} d err None", peer_id);
-                                            break;
-                                        }
-                                        _ => {}
+            loop {
+                let peers = peers.clone();
+                let connection_requests = connection_requests.clone();
+                futures::select! {
+                    msg = incoming.next().fuse() => {
+                        match msg {
+                            Some(Ok(msg)) => {
+                                match handle_incoming_message(peer_id.clone(), &mut outgoing, connection_requests, peers, msg).await {
+                                    Err(Some(response)) => {
+                                        tx.send(response).await?
                                     }
+                                    Err(None) => {
+                                        println!("{} d err None", peer_id);
+                                        break;
+                                    }
+                                    _ => {}
                                 }
-                                None => {
-                                    println!("{} d None", peer_id);
-                                    break;
-                                }
-                                Some(Err(err)) => {
-                                    println!("{} d err {err}", peer_id);
-                                    break;
-                                },
                             }
-                        },
-                        msg = rx.recv().fuse() => {
-                            match msg {
-                                Some(msg) => {
-                                    handle_outgoing(&mut outgoing, msg).await?
-                                }
-                                None => {
-                                    println!("{} d outgoing None", peer_id);
-                                    break;
-                                },
+                            None => {
+                                println!("{} d None", peer_id);
+                                break;
                             }
+                            Some(Err(err)) => {
+                                println!("{} d err {err}", peer_id);
+                                break;
+                            },
                         }
-                        _ = ticker.tick().fuse() => {
-                            outgoing.send(Ping(Vec::from(b"ping"))).await.unwrap();
+                    },
+                    msg = rx.recv().fuse() => {
+                        match msg {
+                            Some(msg) => {
+                                handle_outgoing(&mut outgoing, msg).await?
+                            }
+                            None => {
+                                println!("{} d outgoing None", peer_id);
+                                break;
+                            },
                         }
                     }
+                    _ = ticker.tick().fuse() => {
+                        outgoing.send(Ping(Vec::from(b"ping"))).await.unwrap();
+                    }
                 }
-
-                println!("{} {} disconnected", peer_id, &addr);
-                peers.lock().await.remove(&peer_id);
-
-                eyre::Ok(())
-            }.await {
-                Ok(_) => {}
-                Err(err) => {}
             }
+
+            println!("{} {} disconnected", peer_id, &addr);
+            peers.lock().await.remove(&peer_id);
+
+            eyre::Ok(())
         });
     }
 

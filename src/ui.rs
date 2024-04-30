@@ -140,7 +140,7 @@ impl RemotePeer {
                     if let Some(media_control) = media_control.upgrade() {
                         if media_control.lock().await.is_some() {
                             tracing::warn!(
-                            "ignoring request to stream as we already have media control associated withthis peer"
+                            "ignoring request to stream as we already have media control associated with this peer"
                         );
                             continue;
                         }
@@ -340,17 +340,6 @@ impl RemotePeer {
     }
 }
 
-impl Drop for RemotePeer {
-    #[tracing::instrument]
-    fn drop(&mut self) {
-        tracing::info!("RemotePeer::drop");
-        let control = self.control.clone();
-        tokio::spawn(async move {
-            control.send(PeerControl::Die).await.unwrap();
-        });
-    }
-}
-
 struct _Peer {
     our_peer_id: PeerId,
     last_connection_request: Option<String>,
@@ -375,12 +364,6 @@ impl std::fmt::Debug for _Peer {
     }
 }
 
-impl Drop for _Peer {
-    fn drop(&mut self) {
-        tracing::info!(%self.our_peer_id, "_Peer::drop");
-    }
-}
-
 impl _Peer {}
 
 #[derive(Clone, Deref, DerefMut, Debug)]
@@ -390,16 +373,6 @@ struct UIPeer(
     #[deref_mut]
     Arc<Mutex<_Peer>>,
 );
-
-impl Drop for UIPeer {
-    fn drop(&mut self) {
-        tracing::info!(
-            our_peer_id = %self.0,
-            strong_count = Arc::strong_count(&self.1),
-            "UIPeer::drop"
-        );
-    }
-}
 
 impl UIPeer {
     fn our_id(&self) -> &PeerId {

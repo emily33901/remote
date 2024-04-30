@@ -22,6 +22,8 @@ use signal::{ConnectionId, PeerId};
 
 use tokio::sync::{mpsc, Mutex};
 use tracing::level_filters::LevelFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 use uuid::Uuid;
 
 const ARBITRARY_CHANNEL_LIMIT: usize = 5;
@@ -88,14 +90,16 @@ async fn main() -> Result<()> {
     let filter = tracing_subscriber::EnvFilter::builder()
         .with_default_directive(LevelFilter::DEBUG.into())
         .from_env()?
+        // .add_directive("tokio=trace".parse()?)
+        // .add_directive("runtime=trace".parse()?)
         .add_directive("webrtc_sctp::association=info".parse()?)
         .add_directive("webrtc_sctp::association::association_internal=info".parse()?)
         .add_directive("webrtc_sctp::stream=info".parse()?);
 
-    tracing_subscriber::fmt::fmt()
-        .with_env_filter(filter)
-        // .with_max_level(LevelFilter::DEBUG)
-        .pretty()
+    tracing_subscriber::registry()
+        // .with(console_subscriber::spawn())
+        .with(filter)
+        .with(tracing_subscriber::fmt::layer().compact())
         .init();
 
     tracing::info!(args.command, config.signal_server, "remote");
