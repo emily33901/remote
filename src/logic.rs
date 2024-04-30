@@ -56,8 +56,6 @@ pub(crate) async fn logic_channel(
                     ChannelEvent::Message(data) => {
                         let message = bincode::deserialize(&data).unwrap();
 
-                        tracing::debug!(?message);
-
                         match message {
                             LogicMessage::Ping => {
                                 if let Some(tx) = weak_control_tx.upgrade() {
@@ -83,7 +81,6 @@ pub(crate) async fn logic_channel(
         let tx = tx.clone();
         async move {
             while let Some(control) = control_rx.recv().await {
-                tracing::debug!(?control);
                 let encoded = bincode::serialize(&control).unwrap();
                 tx.send(ChannelControl::Send(encoded)).await?;
             }

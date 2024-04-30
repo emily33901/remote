@@ -89,80 +89,65 @@ async fn on_datachannel(
                     let control_rx_holder = control_rx.clone();
                     let channel = channel.clone();
                     async move {
-                        match tokio::spawn(async move {
-                            let mut control_rx = control_rx_holder
-                                .lock()
-                                .await
-                                .take()
-                                .expect("expected channel control");
-                            tracing::debug!("took channel {our_label} control");
+                        let mut control_rx = control_rx_holder
+                            .lock()
+                            .await
+                            .take()
+                            .expect("expected channel control");
+                        tracing::debug!("took channel {our_label} control");
 
-                            let sent_counter = telemetry::client::Counter::default();
-                            telemetry::client::watch_counter(
-                                &sent_counter,
-                                telemetry::Unit::Bytes,
-                                &format!("channel-{our_label}-sent"),
-                            )
-                            .await;
+                        let sent_counter = telemetry::client::Counter::default();
+                        telemetry::client::watch_counter(
+                            &sent_counter,
+                            telemetry::Unit::Bytes,
+                            &format!("channel-{our_label}-sent"),
+                        )
+                        .await;
 
-                            while let Some(control) = control_rx.recv().await {
-                                if let Some(channel) = channel.upgrade() {
-                                    match control {
-                                        ChannelControl::SendText(text) => {
-                                            channel.send_text(text).await?;
-                                        }
-                                        ChannelControl::Send(data) => {
-                                            let len = data.len();
+                        while let Some(control) = control_rx.recv().await {
+                            if let Some(channel) = channel.upgrade() {
+                                match control {
+                                    ChannelControl::SendText(text) => {
+                                        channel.send_text(text).await?;
+                                    }
+                                    ChannelControl::Send(data) => {
+                                        let len = data.len();
 
-                                            match channel.send(&bytes::Bytes::from(data)).await {
-                                                Ok(_) => {
-                                                    sent_counter.update(len);
-                                                }
-                                                Err(err) => {
-                                                    tracing::warn!(
-                                                        "channel {our_label} unable to send {err}"
-                                                    );
-                                                }
+                                        match channel.send(&bytes::Bytes::from(data)).await {
+                                            Ok(_) => {
+                                                sent_counter.update(len);
                                             }
-
-                                            let buffered_total =
-                                                len + channel.buffered_amount().await;
-
-                                            tracing::trace!("buffered_total is {buffered_total}");
-
-                                            if buffered_total > MAX_BUFFERED_AMOUNT {
-                                                // Wait for the signal that more can be sent
+                                            Err(err) => {
                                                 tracing::warn!(
+                                                    "channel {our_label} unable to send {err}"
+                                                );
+                                            }
+                                        }
+
+                                        let buffered_total = len + channel.buffered_amount().await;
+
+                                        tracing::trace!("buffered_total is {buffered_total}");
+
+                                        if buffered_total > MAX_BUFFERED_AMOUNT {
+                                            // Wait for the signal that more can be sent
+                                            tracing::warn!(
                                                 "!! buffered_total too large, waiting for low mark"
                                             );
-                                                let _ = maybe_more_can_be_sent.recv().await;
-                                            }
-                                        }
-                                        ChannelControl::Close => {
-                                            channel.close().await.unwrap();
-                                            *control_rx_holder.lock().await = Some(control_rx);
-                                            break;
+                                            let _ = maybe_more_can_be_sent.recv().await;
                                         }
                                     }
-                                } else {
-                                    break;
+                                    ChannelControl::Close => {
+                                        channel.close().await.unwrap();
+                                        *control_rx_holder.lock().await = Some(control_rx);
+                                        break;
+                                    }
                                 }
-                            }
-
-                            eyre::Ok(())
-                        })
-                        .await
-                        {
-                            Ok(r) => match r {
-                                Ok(_) => {}
-                                Err(err) => {
-                                    tracing::error!("video channel chunk event error {err}");
-                                }
-                            },
-                            Err(err) => {
-                                tracing::error!("video channel chunk event join error {err}");
+                            } else {
+                                break;
                             }
                         }
+
+                        eyre::Ok(())
                     }
                 });
             })

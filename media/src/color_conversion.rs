@@ -2,6 +2,7 @@ use std::time::UNIX_EPOCH;
 
 use eyre::{eyre, Result};
 use tokio::sync::mpsc::{self, error::TryRecvError};
+use tracing::Instrument;
 use windows::{
     core::Interface,
     Win32::{
@@ -10,7 +11,11 @@ use windows::{
     },
 };
 
-use crate::{dx::ID3D11Texture2DExt, ARBITRARY_MEDIA_CHANNEL_LIMIT};
+use crate::{
+    dx::ID3D11Texture2DExt,
+    texture_pool::{Texture, TexturePool},
+    ARBITRARY_MEDIA_CHANNEL_LIMIT,
+};
 
 use super::{
     dx::copy_texture,
@@ -18,10 +23,10 @@ use super::{
 };
 
 pub(crate) enum ConvertControl {
-    Frame(ID3D11Texture2D, crate::Timestamp),
+    Frame(Texture, crate::Timestamp),
 }
 pub(crate) enum ConvertEvent {
-    Frame(ID3D11Texture2D, crate::Timestamp),
+    Frame(Texture, crate::Timestamp),
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -64,231 +69,267 @@ pub(crate) async fn converter(
 
     let span = tracing::Span::current();
 
-    tokio::spawn({
-        async move {
-            match tokio::task::spawn_blocking(move || unsafe {
-                let _guard = span.enter();
+    tokio::task::spawn_blocking(move || {
+        unsafe {
+            let span_guard = span.enter();
 
-                tracing::debug!("starting");
+            tracing::debug!("starting");
 
-                mf::init()?;
+            mf::init()?;
 
-                let (device, _context) = super::dx::create_device()?;
+            let (device, _context) = super::dx::create_device()?;
 
-                let device_manager = super::mf::create_dxgi_manager(&device)?;
+            let device_manager = super::mf::create_dxgi_manager(&device)?;
 
-                let mut count = 0_u32;
-                let mut activates: *mut Option<IMFActivate> = std::ptr::null_mut();
+            let mut count = 0_u32;
+            let mut activates: *mut Option<IMFActivate> = std::ptr::null_mut();
 
-                // TODO(emily): Add software support
+            // TODO(emily): Add software support
 
-                MFTEnumEx(
-                    MFT_CATEGORY_VIDEO_PROCESSOR,
-                    MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SORTANDFILTER,
-                    Some(&MFT_REGISTER_TYPE_INFO {
-                        guidMajorType: MFMediaType_Video,
-                        guidSubtype: input_format.into(),
-                    }),
-                    Some(&MFT_REGISTER_TYPE_INFO {
-                        guidMajorType: MFMediaType_Video,
-                        guidSubtype: output_format.into(),
-                    }),
-                    &mut activates,
-                    &mut count,
-                )?;
+            MFTEnumEx(
+                MFT_CATEGORY_VIDEO_PROCESSOR,
+                MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SORTANDFILTER,
+                Some(&MFT_REGISTER_TYPE_INFO {
+                    guidMajorType: MFMediaType_Video,
+                    guidSubtype: input_format.into(),
+                }),
+                Some(&MFT_REGISTER_TYPE_INFO {
+                    guidMajorType: MFMediaType_Video,
+                    guidSubtype: output_format.into(),
+                }),
+                &mut activates,
+                &mut count,
+            )?;
 
-                // TODO(emily): CoTaskMemFree activates
+            // TODO(emily): CoTaskMemFree activates
 
-                let activates = std::slice::from_raw_parts_mut(activates, count as usize)
-                    .iter()
-                    .filter_map(|x| x.as_ref())
-                    .collect::<Vec<_>>();
+            let activates = std::slice::from_raw_parts_mut(activates, count as usize)
+                .iter()
+                .filter_map(|x| x.as_ref())
+                .collect::<Vec<_>>();
 
-                let activate = activates.first().unwrap();
-                let transform: IMFTransform = activate.ActivateObject()?;
+            let activate = activates.first().unwrap();
+            let transform: IMFTransform = activate.ActivateObject()?;
 
-                let attributes = transform.GetAttributes()?;
+            let attributes = transform.GetAttributes()?;
 
-                if attributes.get_u32(&MF_SA_D3D11_AWARE)? != 1 {
-                    panic!("Not D3D11 aware");
+            if attributes.get_u32(&MF_SA_D3D11_AWARE)? != 1 {
+                panic!("Not D3D11 aware");
+            }
+
+            transform.ProcessMessage(
+                MFT_MESSAGE_SET_D3D_MANAGER,
+                std::mem::transmute(device_manager),
+            )?;
+
+            attributes.set_u32(&MF_LOW_LATENCY, 1)?;
+
+            // TODO(emily): We make the texture pool here twice on startup
+            let mut input_texture_pool = TexturePool::new(
+                || {
+                    super::dx::TextureBuilder::new(
+                        &device,
+                        output_width,
+                        output_height,
+                        input_format.into(),
+                    )
+                    .bind_render_target()
+                    .bind_shader_resource()
+                    .build()
+                    .unwrap()
+                },
+                10,
+            );
+
+            let output_texture_pool = TexturePool::new(
+                || {
+                    super::dx::TextureBuilder::new(
+                        &device,
+                        output_width,
+                        output_height,
+                        output_format.into(),
+                    )
+                    .keyed_mutex()
+                    .nt_handle()
+                    .build()
+                    .unwrap()
+                },
+                10,
+            );
+
+            let mut set_format_types = |input_width, input_height| -> Result<()> {
+                {
+                    let input_type = MFCreateMediaType()?;
+
+                    input_type.set_guid(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+                    input_type.set_guid(&MF_MT_SUBTYPE, &input_format.into())?;
+
+                    input_type.set_fraction(&MF_MT_FRAME_SIZE, input_width, input_height)?;
+                    input_type.set_u32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
+
+                    transform.SetInputType(0, &input_type, 0)?;
                 }
 
-                transform.ProcessMessage(
-                    MFT_MESSAGE_SET_D3D_MANAGER,
-                    std::mem::transmute(device_manager),
-                )?;
+                for i in 0.. {
+                    let output_type = transform.GetOutputAvailableType(0, i)?;
 
-                attributes.set_u32(&MF_LOW_LATENCY, 1)?;
+                    let format = output_type.get_guid(&MF_MT_SUBTYPE)?;
 
-                let set_format_types = |input_width, input_height| -> Result<()> {
-                    {
-                        let input_type = MFCreateMediaType()?;
+                    output_type.set_fraction(&MF_MT_FRAME_SIZE, output_width, output_height)?;
 
-                        input_type.set_guid(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-                        input_type.set_guid(&MF_MT_SUBTYPE, &input_format.into())?;
-
-                        input_type.set_fraction(&MF_MT_FRAME_SIZE, input_width, input_height)?;
-                        input_type.set_u32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
-
-                        transform.SetInputType(0, &input_type, 0)?;
+                    if format == output_format.into() {
+                        transform.SetOutputType(0, &output_type, 0)?;
+                        break;
                     }
+                }
 
-                    for i in 0.. {
-                        let output_type = transform.GetOutputAvailableType(0, i)?;
-
-                        let format = output_type.get_guid(&MF_MT_SUBTYPE)?;
-
-                        output_type.set_fraction(&MF_MT_FRAME_SIZE, output_width, output_height)?;
-
-                        if format == output_format.into() {
-                            transform.SetOutputType(0, &output_type, 0)?;
-                            break;
-                        }
-                    }
-
-                    Ok(())
-                };
-
-                set_format_types(output_width, output_height)?;
-
-                let (mut last_input_width, mut last_input_height) = (output_width, output_height);
-
-                loop {
-                    let ConvertControl::Frame(frame, time) = {
-                        let mut control = None;
-
-                        loop {
-                            match control_rx.try_recv() {
-                                Ok(convert_control) => control = Some(convert_control),
-                                Err(TryRecvError::Disconnected) => {
-                                    tracing::debug!("control is gone");
-                                    return Ok(());
-                                }
-                                Err(TryRecvError::Empty) => break,
-                            }
-                        }
-
-                        // If we didn't get a frame then wait for one now
-                        if control.is_none() {
-                            control = Some(
-                                control_rx
-                                    .blocking_recv()
-                                    .ok_or(eyre!("ConvertControl channel closed"))?,
-                            );
-                        };
-
-                        control.unwrap()
-                    };
-
-                    let sample = {
-                        let (width, height) = {
-                            let desc = frame.desc();
-                            (desc.Width, desc.Height)
-                        };
-
-                        if width != last_input_width || height != last_input_height {
-                            tracing::debug!(
-                                width,
-                                height,
-                                last_input_width,
-                                last_input_height,
-                                "input changed"
-                            );
-                            // Change input type according to
-                            // https://learn.microsoft.com/en-us/windows/win32/medfound/handling-stream-changes
-                            // drain mft
-                            transform.ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0)?;
-                            let mut status = 0;
-                            while let Err(MF_E_TRANSFORM_NEED_MORE_INPUT) = transform
-                                .ProcessOutput(0, &mut [], &mut status)
-                                .map_err(|e| e.code())
-                            {}
-
-                            // Set the input type
-                            set_format_types(width, height)?;
-                            // Update our last types
-                            (last_input_width, last_input_height) = (width, height);
-                        }
-
-                        // NOTE(emily): cc requires that the input texture be bind_render_target and bind_shader_resource
-                        let texture = super::dx::TextureBuilder::new(
+                input_texture_pool = TexturePool::new(
+                    || {
+                        super::dx::TextureBuilder::new(
                             &device,
-                            width,
-                            height,
+                            output_width,
+                            output_height,
                             input_format.into(),
                         )
                         .bind_render_target()
                         .bind_shader_resource()
-                        .build()?;
+                        .build()
+                        .unwrap()
+                    },
+                    10,
+                );
 
-                        super::dx::copy_texture(&texture, &frame, None)?;
-                        make_dxgi_sample(&texture, None)?
+                Ok(())
+            };
+
+            set_format_types(output_width, output_height)?;
+
+            let (mut last_input_width, mut last_input_height) = (output_width, output_height);
+
+            loop {
+                let ConvertControl::Frame(frame, time) = {
+                    let mut control = None;
+
+                    loop {
+                        match control_rx.try_recv() {
+                            Ok(convert_control) => control = Some(convert_control),
+                            Err(TryRecvError::Disconnected) => {
+                                tracing::debug!("control is gone");
+                                return Ok(());
+                            }
+                            Err(TryRecvError::Empty) => break,
+                        }
+                    }
+
+                    // If we didn't get a frame then wait for one now
+                    if control.is_none() {
+                        control = Some(
+                            control_rx
+                                .blocking_recv()
+                                .ok_or(eyre!("ConvertControl channel closed"))?,
+                        );
                     };
 
-                    sample.SetSampleTime(time.hns())?;
-                    sample.SetSampleDuration(10_000_000 / target_framerate as i64)?;
+                    control.unwrap()
+                };
 
-                    let result = transform
-                        .ProcessInput(0, &sample, 0)
+                let sample = {
+                    let (width, height) = {
+                        let desc = frame.desc();
+                        (desc.Width, desc.Height)
+                    };
+
+                    if width != last_input_width || height != last_input_height {
+                        tracing::debug!(
+                            width,
+                            height,
+                            last_input_width,
+                            last_input_height,
+                            "input changed"
+                        );
+                        // Change input type according to
+                        // https://learn.microsoft.com/en-us/windows/win32/medfound/handling-stream-changes
+                        // drain mft
+                        transform.ProcessMessage(MFT_MESSAGE_COMMAND_DRAIN, 0)?;
+                        let mut status = 0;
+                        while let Err(MF_E_TRANSFORM_NEED_MORE_INPUT) = transform
+                            .ProcessOutput(0, &mut [], &mut status)
+                            .map_err(|e| e.code())
+                        {}
+
+                        // Set the input type
+                        set_format_types(width, height)?;
+                        // Update our last types
+                        (last_input_width, last_input_height) = (width, height);
+                    }
+
+                    // NOTE(emily): cc requires that the input texture be bind_render_target and bind_shader_resource
+                    let texture =
+                        super::dx::TextureBuilder::new(&device, width, height, input_format.into())
+                            .bind_render_target()
+                            .bind_shader_resource()
+                            .build()?;
+
+                    super::dx::copy_texture(&texture, &frame, None)?;
+                    make_dxgi_sample(&texture, None)?
+                };
+
+                sample.SetSampleTime(time.hns())?;
+                sample.SetSampleDuration(10_000_000 / target_framerate as i64)?;
+
+                let result = transform
+                    .ProcessInput(0, &sample, 0)
+                    .map_err(|err| err.code());
+
+                tracing::trace!("process input {result:?}");
+
+                match result {
+                    Ok(_) | Err(MF_E_NOTACCEPTING) => {
+                        let output_result = process_output(
+                            &transform,
+                            &device,
+                            &output_texture_pool,
+                            output_format,
+                        )
                         .map_err(|err| err.code());
 
-                    tracing::trace!("process input {result:?}");
+                        tracing::trace!("process output {output_result:?}");
 
-                    match result {
-                        Ok(_) | Err(MF_E_NOTACCEPTING) => {
-                            let output_result = process_output(
-                                &transform,
-                                &device,
-                                output_width,
-                                output_height,
-                                output_format,
-                            )
-                            .map_err(|err| err.code());
-
-                            tracing::trace!("process output {output_result:?}");
-
-                            match output_result {
-                                Ok(Some((output_texture, timestamp))) => {
-                                    match event_tx.blocking_send(ConvertEvent::Frame(
-                                        output_texture.clone(),
-                                        timestamp,
-                                    )) {
-                                        Err(err) => {
-                                            tracing::debug!("Failed to send convert event, done");
-                                            break;
-                                        }
-                                        Ok(()) => {}
+                        match output_result {
+                            Ok(Some((output_texture, timestamp))) => {
+                                match event_tx.blocking_send(ConvertEvent::Frame(
+                                    output_texture.clone(),
+                                    timestamp,
+                                )) {
+                                    Err(err) => {
+                                        tracing::debug!("Failed to send convert event, done");
+                                        break;
                                     }
+                                    Ok(()) => {}
                                 }
-                                Ok(None) => {
-                                    // Continue trying to get more frames
-                                    tracing::trace!("trying to get more frames")
-                                }
-                                Err(MF_E_TRANSFORM_NEED_MORE_INPUT) => {
-                                    tracing::trace!("needs more input");
-                                }
-                                Err(MF_E_TRANSFORM_STREAM_CHANGE) => {
-                                    unreachable!("Not expecting a stream format change");
-                                }
-                                Err(err) => {
-                                    // tracing::error!("No idea what to do with {err}");
-                                    // break;
-                                    todo!("No idea what to do with {err}")
-                                }
-                            };
-                        }
-                        Err(err) => todo!("No idea what to do with {err}"),
+                            }
+                            Ok(None) => {
+                                // Continue trying to get more frames
+                                tracing::trace!("trying to get more frames")
+                            }
+                            Err(MF_E_TRANSFORM_NEED_MORE_INPUT) => {
+                                tracing::trace!("needs more input");
+                            }
+                            Err(MF_E_TRANSFORM_STREAM_CHANGE) => {
+                                unreachable!("Not expecting a stream format change");
+                            }
+                            Err(err) => {
+                                // tracing::error!("No idea what to do with {err}");
+                                // break;
+                                todo!("No idea what to do with {err}")
+                            }
+                        };
                     }
+                    Err(err) => todo!("No idea what to do with {err}"),
                 }
-
-                eyre::Ok(())
-            })
-            .await
-            .unwrap()
-            {
-                Ok(_) => tracing::info!("exit Ok"),
-                Err(err) => tracing::error!("exit err {err} {err:?}"),
             }
+
+            eyre::Ok(())
         }
     });
 
@@ -298,10 +339,9 @@ pub(crate) async fn converter(
 fn process_output(
     transform: &IMFTransform,
     device: &ID3D11Device,
-    output_width: u32,
-    output_height: u32,
+    texture_pool: &TexturePool,
     output_format: Format,
-) -> Result<Option<(ID3D11Texture2D, crate::Timestamp)>, windows::core::Error> {
+) -> Result<Option<(Texture, crate::Timestamp)>, windows::core::Error> {
     unsafe {
         let mut output_buffer = MFT_OUTPUT_DATA_BUFFER::default();
         output_buffer.dwStatus = 0;
@@ -321,16 +361,7 @@ fn process_output(
 
                 let (texture, subresource_index) = dxgi_buffer.texture()?;
 
-                let output_texture = super::dx::TextureBuilder::new(
-                    &device,
-                    output_width,
-                    output_height,
-                    output_format.into(),
-                )
-                .keyed_mutex()
-                .nt_handle()
-                .build()
-                .unwrap();
+                let output_texture = texture_pool.get();
 
                 copy_texture(&output_texture, &texture, Some(subresource_index))?;
 

@@ -14,6 +14,7 @@ use windows::{
 use crate::{
     dx,
     encoder::{self, Encoder},
+    texture_pool::TexturePool,
     VideoBuffer, ARBITRARY_MEDIA_CHANNEL_LIMIT,
 };
 
@@ -388,107 +389,88 @@ pub async fn produce(
         .run(width, height, target_framerate, bitrate)
         .await?;
 
-    tokio::spawn({
+    tokio::task::spawn_blocking({
         let event_tx = event_tx.clone();
         let path = path.to_owned();
-        async move {
-            match tokio::task::spawn_blocking({
-                move || {
-                    crate::mf::init()?;
 
-                    let (device, _context) = dx::create_device()?;
+        move || {
+            crate::mf::init()?;
 
-                    let texture =
-                        dx::TextureBuilder::new(&device, width, height, dx::TextureFormat::NV12)
-                            .keyed_mutex()
-                            .nt_handle()
-                            .build()?;
+            let (device, _context) = dx::create_device()?;
 
-                    let path = path.to_owned();
-                    let mut media = Media::new(&device, &path, width, height)?;
+            let texture = dx::TextureBuilder::new(&device, width, height, dx::TextureFormat::NV12)
+                .keyed_mutex()
+                .nt_handle()
+                .build()?;
 
-                    media.debug_media_format()?;
+            let path = path.to_owned();
+            let mut media = Media::new(&device, &path, width, height)?;
 
-                    let mut deadline: Option<std::time::SystemTime> = None;
-                    let mut prev = std::time::Instant::now();
-                    let start = std::time::SystemTime::now();
+            media.debug_media_format()?;
 
-                    let mut audio_buffer: Vec<u8> = vec![];
+            let mut deadline: Option<std::time::SystemTime> = None;
+            let mut prev = std::time::Instant::now();
+            let start = std::time::SystemTime::now();
 
-                    loop {
-                        if let Some(deadline) = deadline {
-                            if let Ok(duration) =
-                                deadline.duration_since(std::time::SystemTime::now())
-                            {
-                                std::thread::sleep(duration);
-                            }
-                        }
-                        let now = std::time::Instant::now();
-                        let elapsed = now - prev;
-                        prev = now;
+            let mut audio_buffer: Vec<u8> = vec![];
 
-                        audio_buffer.resize(0, 0);
+            let output_texture_pool = TexturePool::new(
+                || {
+                    dx::TextureBuilder::new(&device, width, height, dx::TextureFormat::NV12)
+                        .nt_handle()
+                        .keyed_mutex()
+                        .build()
+                        .unwrap()
+                },
+                10,
+            );
 
-                        let (produced_video, next_deadline) =
-                            media.frame(start, elapsed, &mut audio_buffer, texture.clone())?;
-
-                        if produced_video {
-                            // Try and put a frame but if we are being back pressured then dump and run
-                            let new_texture = dx::TextureBuilder::new(
-                                &device,
-                                width,
-                                height,
-                                dx::TextureFormat::NV12,
-                            )
-                            .nt_handle()
-                            .keyed_mutex()
-                            .build()?;
-
-                            dx::copy_texture(&new_texture, &texture, None)?;
-
-                            match h264_control.try_send(encoder::EncoderControl::Frame(
-                                new_texture,
-                                crate::Timestamp::new_hns(media.video_timestamp),
-                            )) {
-                                Ok(_) => {}
-                                Err(mpsc::error::TrySendError::Full(_)) => {
-                                    tracing::debug!("video backpressured")
-                                }
-                                Err(mpsc::error::TrySendError::Closed(_)) => {
-                                    tracing::error!("produce channel closed, going down");
-                                    break;
-                                }
-                            }
-                        }
-
-                        if audio_buffer.len() > 0 {
-                            tracing::trace!("produced audio");
-
-                            // Try and put a frame but if we are being back pressured then dump and run
-                            match event_tx.try_send(MediaEvent::Audio(audio_buffer.clone())) {
-                                Ok(_) => {}
-                                Err(mpsc::error::TrySendError::Full(_)) => {
-                                    tracing::debug!("audio backpressured")
-                                }
-                                Err(mpsc::error::TrySendError::Closed(_)) => {
-                                    tracing::error!("produce channel closed, going down");
-                                    break;
-                                }
-                            }
-                        }
-
-                        deadline = next_deadline;
+            loop {
+                if let Some(deadline) = deadline {
+                    if let Ok(duration) = deadline.duration_since(std::time::SystemTime::now()) {
+                        std::thread::sleep(duration);
                     }
-
-                    eyre::Ok(())
                 }
-            })
-            .await
-            .unwrap()
-            {
-                Ok(_) => tracing::warn!("media::produce exit Ok"),
-                Err(err) => tracing::error!("media::produce exit err {err:?}"),
+                let now = std::time::Instant::now();
+                let elapsed = now - prev;
+                prev = now;
+
+                audio_buffer.resize(0, 0);
+
+                let (produced_video, next_deadline) =
+                    media.frame(start, elapsed, &mut audio_buffer, texture.clone())?;
+
+                if produced_video {
+                    // Try and put a frame but if we are being back pressured then dump and run
+                    let output_texture = output_texture_pool.get();
+                    dx::copy_texture(&output_texture, &texture, None)?;
+
+                    h264_control.blocking_send(encoder::EncoderControl::Frame(
+                        output_texture,
+                        crate::Timestamp::new_hns(media.video_timestamp),
+                    ))?
+                }
+
+                if audio_buffer.len() > 0 {
+                    tracing::trace!("produced audio");
+
+                    // Try and put a frame but if we are being back pressured then dump and run
+                    match event_tx.try_send(MediaEvent::Audio(audio_buffer.clone())) {
+                        Ok(_) => {}
+                        Err(mpsc::error::TrySendError::Full(_)) => {
+                            tracing::debug!("audio backpressured")
+                        }
+                        Err(mpsc::error::TrySendError::Closed(_)) => {
+                            tracing::error!("produce channel closed, going down");
+                            break;
+                        }
+                    }
+                }
+
+                deadline = next_deadline;
             }
+
+            eyre::Ok(())
         }
     });
 

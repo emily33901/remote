@@ -14,6 +14,7 @@ mod color_conversion;
 pub mod desktop_duplication;
 pub mod file_sink;
 mod mf;
+mod texture_pool;
 mod yuv_buffer;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

@@ -2606,6 +2606,7 @@ dependencies = [
  "derive_more",
  "eyre",
  "openh264",
+ "parking_lot",
  "scopeguard",
  "serde",
  "telemetry",

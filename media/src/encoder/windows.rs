@@ -128,7 +128,7 @@ pub async fn h264_encoder(
                     // output_type.set_u32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
 
                     output_type
-                        .set_u32(&MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_High.0 as u32)?;
+                        .set_u32(&MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Base.0 as u32)?;
 
                     debug_video_format(&output_type)?;
 
@@ -244,8 +244,7 @@ unsafe fn hardware(
                 last_control = Some(EncoderControl::Frame(
                     frame.clone(),
                     crate::Timestamp::new(
-                        time.duration()
-                            + std::time::Duration::from_secs_f32(1.0 / target_framerate as f32),
+                        time.duration(), // + std::time::Duration::from_secs_f32(1.0 / target_framerate as f32),
                     ),
                 ));
 

@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 
 use eyre::Result;
 
+use crate::texture_pool::Texture;
 use crate::VideoBuffer;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -21,7 +22,7 @@ pub enum FrameIsKeyframe {
 
 #[derive(Clone)]
 pub enum EncoderControl {
-    Frame(ID3D11Texture2D, crate::Timestamp),
+    Frame(Texture, crate::Timestamp),
 }
 
 pub enum EncoderEvent {

@@ -24,6 +24,7 @@ use crate::{
     color_conversion,
     encoder::{self, Encoder},
     produce::{MediaControl, MediaEvent},
+    texture_pool::{Texture, TexturePool},
     ARBITRARY_MEDIA_CHANNEL_LIMIT,
 };
 
@@ -33,7 +34,7 @@ pub(crate) enum DDControl {}
 
 pub(crate) enum DDEvent {
     Size(u32, u32),
-    Frame(ID3D11Texture2D, crate::Timestamp),
+    Frame(Texture, crate::Timestamp),
 }
 
 // #[tracing::instrument]
@@ -43,221 +44,214 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
 
     let span = tracing::Span::current();
 
-    tokio::spawn(async move {
-        match tokio::task::spawn_blocking(move || {
-            let _span_guard = span.enter();
+    tokio::task::spawn_blocking(move || {
+        let _span_guard = span.enter();
 
-            let (device, _context) = dx::create_device()?;
-            let (_device2, _context2) = dx::create_device()?;
+        let (device, _context) = dx::create_device()?;
+        let (_device2, _context2) = dx::create_device()?;
 
-            let dxgi_device: IDXGIDevice2 = device.cast()?;
+        let dxgi_device: IDXGIDevice2 = device.cast()?;
 
-            let parent: IDXGIAdapter = unsafe { dxgi_device.GetParent() }?;
+        let parent: IDXGIAdapter = unsafe { dxgi_device.GetParent() }?;
 
-            let primary = unsafe { parent.EnumOutputs(0) }?;
-            let primary: IDXGIOutput1 = primary.cast()?;
+        let primary = unsafe { parent.EnumOutputs(0) }?;
+        let primary: IDXGIOutput1 = primary.cast()?;
 
-            let mut best_mode = None;
-            {
-                let primary = primary.clone();
-                let display = primary;
-                let _desc = DXGI_OUTPUT_DESC::default();
+        let mut best_mode = None;
+        {
+            let primary = primary.clone();
+            let display = primary;
+            let _desc = DXGI_OUTPUT_DESC::default();
 
-                let modes = {
-                    let mut num_modes = unsafe {
-                        let mut num_modes = 0;
-                        display.GetDisplayModeList(
-                            DXGI_FORMAT_B8G8R8A8_UNORM,
-                            DXGI_ENUM_MODES_DISABLED_STEREO,
-                            &mut num_modes,
-                            None,
-                        )?;
+            let modes = {
+                let mut num_modes = unsafe {
+                    let mut num_modes = 0;
+                    display.GetDisplayModeList(
+                        DXGI_FORMAT_B8G8R8A8_UNORM,
+                        DXGI_ENUM_MODES_DISABLED_STEREO,
+                        &mut num_modes,
+                        None,
+                    )?;
 
-                        num_modes
-                    };
-
-                    let mut modes: Vec<DXGI_MODE_DESC> =
-                        vec![DXGI_MODE_DESC::default(); num_modes as usize];
-
-                    unsafe {
-                        display.GetDisplayModeList(
-                            DXGI_FORMAT_B8G8R8A8_UNORM,
-                            DXGI_ENUM_MODES_DISABLED_STEREO,
-                            &mut num_modes,
-                            Some(modes.as_mut_ptr()),
-                        )?;
-                    }
-                    modes
+                    num_modes
                 };
 
-                for mode in modes {
-                    // tracing::info!("mode {mode:?}");
-                    if best_mode.is_none() {
-                        best_mode = Some(mode);
-                        continue;
-                    }
-
-                    let best_mode_desc = best_mode.as_ref().unwrap();
-                    if mode.Width > best_mode_desc.Width
-                        || mode.Height > best_mode_desc.Height
-                        || (mode.Width >= best_mode_desc.Width
-                            && mode.Height >= best_mode_desc.Height
-                            && (mode.RefreshRate.Numerator as f32
-                                / mode.RefreshRate.Denominator as f32)
-                                > (best_mode_desc.RefreshRate.Numerator as f32
-                                    / best_mode_desc.RefreshRate.Denominator as f32))
-                    {
-                        best_mode = Some(mode);
-                    }
-                }
-            }
-
-            tracing::info!(?best_mode);
-
-            let duplicated = unsafe { primary.DuplicateOutput(&device) }?;
-
-            let mut desc = DXGI_OUTDUPL_DESC::default();
-            unsafe { duplicated.GetDesc(&mut desc) };
-
-            tracing::info!(?desc);
-
-            let (device_width, device_height) = (desc.ModeDesc.Width, desc.ModeDesc.Height);
-
-            event_tx.blocking_send(DDEvent::Size(desc.ModeDesc.Height, desc.ModeDesc.Height))?;
-
-            let mut start = 0;
-            unsafe { QueryPerformanceCounter(&mut start) }?;
-            let start_time = std::time::SystemTime::now();
-
-            let mut control_rx_open = || match control_rx.try_recv() {
-                Ok(_) | Err(TryRecvError::Empty) => true,
-                Err(TryRecvError::Disconnected) => false,
-            };
-
-            while control_rx_open() {
-                let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
-                let mut frame_resource: Option<IDXGIResource> = None;
+                let mut modes: Vec<DXGI_MODE_DESC> =
+                    vec![DXGI_MODE_DESC::default(); num_modes as usize];
 
                 unsafe {
-                    let _ = duplicated.ReleaseFrame();
+                    display.GetDisplayModeList(
+                        DXGI_FORMAT_B8G8R8A8_UNORM,
+                        DXGI_ENUM_MODES_DISABLED_STEREO,
+                        &mut num_modes,
+                        Some(modes.as_mut_ptr()),
+                    )?;
+                }
+                modes
+            };
+
+            for mode in modes {
+                // tracing::info!("mode {mode:?}");
+                if best_mode.is_none() {
+                    best_mode = Some(mode);
+                    continue;
                 }
 
-                match unsafe {
-                    duplicated.AcquireNextFrame(1000, &mut frame_info, &mut frame_resource)
-                } {
-                    Ok(_) => {
-                        if frame_info.AccumulatedFrames == 0 || frame_info.LastPresentTime == 0 {
-                            // Only mouse moved
-                        } else {
-                            let frame_resource = frame_resource.unwrap();
-                            let duplication_texture: ID3D11Texture2D = frame_resource.cast()?;
-
-                            let out_texture = dx::TextureBuilder::new(
-                                &device,
-                                device_width,
-                                device_height,
-                                dx::TextureFormat::BGRA,
-                            )
-                            .nt_handle()
-                            .keyed_mutex()
-                            .build()?;
-
-                            // NOTE(emily): Cannot use dx::copy_texture here because whilst the input might appear
-                            // to be keyed mutex, it is impossible to actually acquire that.
-
-                            {
-                                let mut in_desc = D3D11_TEXTURE2D_DESC::default();
-                                let mut out_desc = D3D11_TEXTURE2D_DESC::default();
-                                unsafe {
-                                    duplication_texture.GetDesc(&mut in_desc as *mut _);
-                                    out_texture.GetDesc(&mut out_desc as *mut _);
-                                }
-
-                                let keyed_out =
-                                    if D3D11_RESOURCE_MISC_FLAG(out_desc.MiscFlags as i32)
-                                        .contains(D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX)
-                                    {
-                                        let keyed: IDXGIKeyedMutex = out_texture.cast()?;
-                                        unsafe {
-                                            keyed.AcquireSync(0, u32::MAX)?;
-                                        }
-                                        Some(keyed)
-                                    } else {
-                                        None
-                                    };
-
-                                scopeguard::defer! {
-                                    if let Some(keyed) = keyed_out {
-                                        unsafe {
-                                            let _ = keyed.ReleaseSync(0);
-                                        }
-                                    }
-                                }
-
-                                let device = unsafe { duplication_texture.GetDevice() }?;
-                                let context = unsafe { device.GetImmediateContext() }?;
-
-                                let region = D3D11_BOX {
-                                    left: 0,
-                                    top: 0,
-                                    front: 0,
-                                    right: out_desc.Width,
-                                    bottom: out_desc.Height,
-                                    back: 1,
-                                };
-
-                                let subresource_index = 0;
-
-                                unsafe {
-                                    context.CopySubresourceRegion(
-                                        &out_texture,
-                                        0,
-                                        0,
-                                        0,
-                                        0,
-                                        &duplication_texture,
-                                        subresource_index,
-                                        Some(&region),
-                                    )
-                                };
-                            }
-
-                            match event_tx.try_send(DDEvent::Frame(
-                                out_texture,
-                                crate::Timestamp::new_diff(
-                                    start_time,
-                                    std::time::SystemTime::now(),
-                                )?,
-                            )) {
-                                Ok(_) => {}
-                                Err(mpsc::error::TrySendError::Closed(_)) => break,
-                                Err(mpsc::error::TrySendError::Full(_)) => {}
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        match err.code() {
-                            DXGI_ERROR_WAIT_TIMEOUT => {
-                                continue;
-                            }
-                            _ => {}
-                        }
-                        tracing::error!("desktop duplication error: {err} {err:?}");
-                        break;
-                    }
+                let best_mode_desc = best_mode.as_ref().unwrap();
+                if mode.Width > best_mode_desc.Width
+                    || mode.Height > best_mode_desc.Height
+                    || (mode.Width >= best_mode_desc.Width
+                        && mode.Height >= best_mode_desc.Height
+                        && (mode.RefreshRate.Numerator as f32
+                            / mode.RefreshRate.Denominator as f32)
+                            > (best_mode_desc.RefreshRate.Numerator as f32
+                                / best_mode_desc.RefreshRate.Denominator as f32))
+                {
+                    best_mode = Some(mode);
                 }
             }
-
-            eyre::Ok(())
-        })
-        .await
-        .unwrap()
-        {
-            Ok(_) => tracing::info!("exit Ok"),
-            Err(err) => tracing::error!(
-                "media::desktop_duplication::desktop_duplication exit err {err} {err:?}"
-            ),
         }
+
+        tracing::info!(?best_mode);
+
+        let duplicated = unsafe { primary.DuplicateOutput(&device) }?;
+
+        let mut desc = DXGI_OUTDUPL_DESC::default();
+        unsafe { duplicated.GetDesc(&mut desc) };
+
+        tracing::info!(?desc);
+
+        let (device_width, device_height) = (desc.ModeDesc.Width, desc.ModeDesc.Height);
+
+        event_tx.blocking_send(DDEvent::Size(desc.ModeDesc.Height, desc.ModeDesc.Height))?;
+
+        let mut start = 0;
+        unsafe { QueryPerformanceCounter(&mut start) }?;
+        let start_time = std::time::SystemTime::now();
+
+        let mut control_rx_open = || match control_rx.try_recv() {
+            Ok(_) | Err(TryRecvError::Empty) => true,
+            Err(TryRecvError::Disconnected) => false,
+        };
+
+        let texture_pool = TexturePool::new(
+            || {
+                dx::TextureBuilder::new(
+                    &device,
+                    device_width,
+                    device_height,
+                    dx::TextureFormat::BGRA,
+                )
+                .nt_handle()
+                .keyed_mutex()
+                .build()
+                .unwrap()
+            },
+            10,
+        );
+
+        while control_rx_open() {
+            let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
+            let mut frame_resource: Option<IDXGIResource> = None;
+
+            unsafe {
+                let _ = duplicated.ReleaseFrame();
+            }
+
+            match unsafe { duplicated.AcquireNextFrame(1000, &mut frame_info, &mut frame_resource) }
+            {
+                Ok(_) => {
+                    if frame_info.AccumulatedFrames == 0 || frame_info.LastPresentTime == 0 {
+                        // Only mouse moved
+                    } else {
+                        let frame_resource = frame_resource.unwrap();
+                        let duplication_texture: ID3D11Texture2D = frame_resource.cast()?;
+
+                        let out_texture = texture_pool.get();
+
+                        // NOTE(emily): Cannot use dx::copy_texture here because whilst the input might appear
+                        // to be keyed mutex, it is impossible to actually acquire that.
+
+                        {
+                            let mut in_desc = D3D11_TEXTURE2D_DESC::default();
+                            let mut out_desc = D3D11_TEXTURE2D_DESC::default();
+                            unsafe {
+                                duplication_texture.GetDesc(&mut in_desc as *mut _);
+                                out_texture.GetDesc(&mut out_desc as *mut _);
+                            }
+
+                            let keyed_out = if D3D11_RESOURCE_MISC_FLAG(out_desc.MiscFlags as i32)
+                                .contains(D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX)
+                            {
+                                let keyed: IDXGIKeyedMutex = out_texture.cast()?;
+                                unsafe {
+                                    keyed.AcquireSync(0, u32::MAX)?;
+                                }
+                                Some(keyed)
+                            } else {
+                                None
+                            };
+
+                            scopeguard::defer! {
+                                if let Some(keyed) = keyed_out {
+                                    unsafe {
+                                        let _ = keyed.ReleaseSync(0);
+                                    }
+                                }
+                            }
+
+                            let device = unsafe { duplication_texture.GetDevice() }?;
+                            let context = unsafe { device.GetImmediateContext() }?;
+
+                            let region = D3D11_BOX {
+                                left: 0,
+                                top: 0,
+                                front: 0,
+                                right: out_desc.Width,
+                                bottom: out_desc.Height,
+                                back: 1,
+                            };
+
+                            let subresource_index = 0;
+
+                            unsafe {
+                                context.CopySubresourceRegion(
+                                    out_texture.texture(),
+                                    0,
+                                    0,
+                                    0,
+                                    0,
+                                    &duplication_texture,
+                                    subresource_index,
+                                    Some(&region),
+                                )
+                            };
+                        }
+
+                        match event_tx.try_send(DDEvent::Frame(
+                            out_texture,
+                            crate::Timestamp::new_diff(start_time, std::time::SystemTime::now())?,
+                        )) {
+                            Ok(_) => {}
+                            Err(mpsc::error::TrySendError::Closed(_)) => break,
+                            Err(mpsc::error::TrySendError::Full(_)) => {}
+                        }
+                    }
+                }
+                Err(err) => {
+                    match err.code() {
+                        DXGI_ERROR_WAIT_TIMEOUT => {
+                            continue;
+                        }
+                        _ => {}
+                    }
+                    tracing::error!("desktop duplication error: {err} {err:?}");
+                    break;
+                }
+            }
+        }
+
+        eyre::Ok(())
     });
 
     Ok((control_tx, event_rx))
