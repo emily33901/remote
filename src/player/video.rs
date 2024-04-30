@@ -1,4 +1,4 @@
-use std::cell::{Cell, RefCell};
+
 
 use eyre::Result;
 use tokio::sync::{mpsc, mpsc::error::TryRecvError};
@@ -74,7 +74,7 @@ struct TextureHolder {
 impl TextureHolder {
     fn new(
         device: &ID3D11Device,
-        context: &ID3D11DeviceContext,
+        _context: &ID3D11DeviceContext,
         width: u32,
         height: u32,
     ) -> Result<Self> {

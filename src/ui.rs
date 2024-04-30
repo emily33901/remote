@@ -6,7 +6,7 @@ use crate::player::video::NV12TextureRender;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
-use std::time::{Instant, SystemTime};
+use std::time::{Instant};
 
 use derive_more::{Deref, DerefMut};
 
@@ -88,7 +88,7 @@ impl RemotePeer {
     ) -> Result<Self> {
         let config = config::Config::load();
 
-        let (control, mut event) = crate::peer::peer(
+        let (control, event) = crate::peer::peer(
             config.webrtc_api,
             our_peer_id.clone(),
             their_peer_id.clone(),
