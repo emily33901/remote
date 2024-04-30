@@ -29,154 +29,162 @@ pub async fn h264_encoder(
 ) -> Result<(mpsc::Sender<EncoderControl>, mpsc::Receiver<EncoderEvent>)> {
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
     let (control_tx, control_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
+    tokio::task::spawn_blocking(move || unsafe {
+        mf::init()?;
 
-    tokio::spawn({
-        async move {
-            match tokio::task::spawn_blocking(move || unsafe {
-                mf::init()?;
+        let (device, context) = dx::create_device()?;
 
-                let (device, context) = dx::create_device()?;
+        let device_manager = crate::mf::create_dxgi_manager(&device)?;
 
-                let device_manager = crate::mf::create_dxgi_manager(&device)?;
+        let find_encoder = |hardware| {
+            let mut count = 0_u32;
+            let mut activates: *mut Option<IMFActivate> = std::ptr::null_mut();
 
-                let find_encoder = |hardware| {
-                    let mut count = 0_u32;
-                    let mut activates: *mut Option<IMFActivate> = std::ptr::null_mut();
-
-                    MFTEnumEx(
-                        MFT_CATEGORY_VIDEO_ENCODER,
-                        if hardware {
-                            MFT_ENUM_FLAG_HARDWARE
-                        } else {
-                            MFT_ENUM_FLAG(0)
-                        } | MFT_ENUM_FLAG_SORTANDFILTER,
-                        Some(&MFT_REGISTER_TYPE_INFO {
-                            guidMajorType: MFMediaType_Video,
-                            guidSubtype: MFVideoFormat_NV12,
-                        } as *const _),
-                        Some(&MFT_REGISTER_TYPE_INFO {
-                            guidMajorType: MFMediaType_Video,
-                            guidSubtype: MFVideoFormat_H264,
-                        } as *const _),
-                        &mut activates,
-                        &mut count,
-                    )?;
-
-                    // TODO(emily): CoTaskMemFree activates
-
-                    let activates = std::slice::from_raw_parts_mut(activates, count as usize);
-                    let activate = activates.first().ok_or_else(|| eyre::eyre!("No encoders"))?;
-
-                    // NOTE(emily): If there is an activate then it should be real
-                    let activate = activate.as_ref().unwrap();
-
-
-                    let transform: IMFTransform = activate.ActivateObject()?;
-
-                    let attributes: IMFAttributes = activate.cast().unwrap();
-                    if let Ok(s) = attributes.get_string(&MFT_FRIENDLY_NAME_Attribute) {
-                        tracing::info!("chose encoder {s}");
-                    }
-
-                    eyre::Ok(transform)
-                };
-
-                let transform = match find_encoder(true) {
-                    Ok(encoder) => encoder,
-                    Err(err) => {
-                        tracing::warn!("unable to find a hardware h264 encoder {err}, falling back to a software encoder");
-                        find_encoder(false)?
-                    }
-                };
-
-                let attributes = transform.GetAttributes()?;
-
-                attributes.set_u32(&MF_TRANSFORM_ASYNC_UNLOCK, 1)?;
-
-                let mut input_stream_ids = [0];
-                let mut output_stream_ids = [0];
-
-                // NOTE(emily): If this fails then stream ids are 0, 0 anyway
-                let _ = transform.GetStreamIDs(&mut input_stream_ids, &mut output_stream_ids);
-
-                // NOTE(emily): If this fails then this is a sofware encoder
-                let _is_hardware_transform = transform.ProcessMessage(
-                    MFT_MESSAGE_SET_D3D_MANAGER,
-                    std::mem::transmute(device_manager),
-                ).map(|_| true).unwrap_or_default();
-
-                attributes.set_u32(&MF_LOW_LATENCY, 1)?;
-
-                {
-                    let output_type = MFCreateMediaType()?;
-                    output_type.set_guid(
-                        &MF_MT_MAJOR_TYPE,
-                        &MFMediaType_Video,
-                    )?;
-                    output_type
-                        .set_guid(&MF_MT_SUBTYPE, &MFVideoFormat_H264)?;
-
-                    output_type.set_u32(&MF_MT_AVG_BITRATE, target_bitrate)?;
-
-                    output_type.set_fraction(&MF_MT_FRAME_SIZE, width, height)?;
-                    output_type.set_fraction(&MF_MT_FRAME_RATE, target_framerate, 1)?;
-                    // output_type.set_fraction(&MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
-
-                    output_type
-                        .set_u32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
-                    // output_type.SetUINT32(&MF_MT_MAX_KEYFRAME_SPACING, 100)?;
-                    // output_type.set_u32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
-
-                    output_type
-                        .set_u32(&MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Base.0 as u32)?;
-
-                    debug_video_format(&output_type)?;
-
-                    transform.SetOutputType(output_stream_ids[0], &output_type, 0)?;
-                }
-
-                {
-                    let input_type = MFCreateMediaType()?;
-                    // let input_type = transform.GetInputAvailableType(input_stream_ids[0], 0)?;
-
-                    input_type.set_guid(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-                    input_type.set_guid(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
-
-                    input_type.set_fraction(&MF_MT_FRAME_SIZE, width, height)?;
-                    input_type.set_fraction(&MF_MT_FRAME_RATE, target_framerate, 1)?;
-
-                    debug_video_format(&input_type)?;
-
-                    transform.SetInputType(input_stream_ids[0], &input_type, 0)?;
-                }
-
-                // let output_sample = unsafe { MFCreateSample() }?;
-
-                // let output_media_buffer = unsafe { MFCreateMemoryBuffer(width * height * 4) }?;
-                // unsafe { output_sample.AddBuffer(&output_media_buffer.clone()) }?;
-
-                let _status = 0;
-
-                let input_stream_id = input_stream_ids[0];
-                let output_stream_id = output_stream_ids[0];
-
-                if let Ok(event_gen) = transform.cast::<IMFMediaEventGenerator>() {
-                    tracing::debug!("starting hardware encoder");
-                    hardware(&device, event_gen, transform, control_rx, event_tx, target_framerate, output_stream_id, input_stream_id, width, height)?;
+            MFTEnumEx(
+                MFT_CATEGORY_VIDEO_ENCODER,
+                if hardware {
+                    MFT_ENUM_FLAG_HARDWARE
                 } else {
-                    software(&device, &context, transform, control_rx, event_tx, target_framerate, output_stream_id, input_stream_id, width, height)?;
-                }
+                    MFT_ENUM_FLAG(0)
+                } | MFT_ENUM_FLAG_SORTANDFILTER,
+                Some(&MFT_REGISTER_TYPE_INFO {
+                    guidMajorType: MFMediaType_Video,
+                    guidSubtype: MFVideoFormat_NV12,
+                } as *const _),
+                Some(&MFT_REGISTER_TYPE_INFO {
+                    guidMajorType: MFMediaType_Video,
+                    guidSubtype: MFVideoFormat_H264,
+                } as *const _),
+                &mut activates,
+                &mut count,
+            )?;
 
+            // TODO(emily): CoTaskMemFree activates
 
-                eyre::Ok(())
-            })
-            .await
-            .unwrap()
-            {
-                Ok(_) => tracing::warn!("h264::encoder exit Ok"),
-                Err(err) => tracing::error!("h264::encoder exit err {err} {err:?}"),
+            let activates = std::slice::from_raw_parts_mut(activates, count as usize);
+            let activate = activates
+                .first()
+                .ok_or_else(|| eyre::eyre!("No encoders"))?;
+
+            // NOTE(emily): If there is an activate then it should be real
+            let activate = activate.as_ref().unwrap();
+
+            let transform: IMFTransform = activate.ActivateObject()?;
+
+            let attributes: IMFAttributes = activate.cast().unwrap();
+            if let Ok(s) = attributes.get_string(&MFT_FRIENDLY_NAME_Attribute) {
+                tracing::info!("chose encoder {s}");
             }
+
+            eyre::Ok(transform)
+        };
+
+        let transform = match find_encoder(true) {
+            Ok(encoder) => encoder,
+            Err(err) => {
+                tracing::warn!("unable to find a hardware h264 encoder {err}, falling back to a software encoder");
+                find_encoder(false)?
+            }
+        };
+
+        let attributes = transform.GetAttributes()?;
+
+        attributes.set_u32(&MF_TRANSFORM_ASYNC_UNLOCK, 1)?;
+
+        let mut input_stream_ids = [0];
+        let mut output_stream_ids = [0];
+
+        // NOTE(emily): If this fails then stream ids are 0, 0 anyway
+        let _ = transform.GetStreamIDs(&mut input_stream_ids, &mut output_stream_ids);
+
+        // NOTE(emily): If this fails then this is a sofware encoder
+        let _is_hardware_transform = transform
+            .ProcessMessage(
+                MFT_MESSAGE_SET_D3D_MANAGER,
+                std::mem::transmute(device_manager),
+            )
+            .map(|_| true)
+            .unwrap_or_default();
+
+        attributes.set_u32(&MF_LOW_LATENCY, 1)?;
+
+        {
+            let output_type = MFCreateMediaType()?;
+            output_type.set_guid(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+            output_type.set_guid(&MF_MT_SUBTYPE, &MFVideoFormat_H264)?;
+
+            output_type.set_u32(&MF_MT_AVG_BITRATE, target_bitrate)?;
+
+            output_type.set_fraction(&MF_MT_FRAME_SIZE, width, height)?;
+            output_type.set_fraction(&MF_MT_FRAME_RATE, target_framerate, 1)?;
+            // output_type.set_fraction(&MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
+
+            output_type.set_u32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
+            // output_type.SetUINT32(&MF_MT_MAX_KEYFRAME_SPACING, 100)?;
+            // output_type.set_u32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
+
+            output_type.set_u32(&MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Base.0 as u32)?;
+
+            debug_video_format(&output_type)?;
+
+            transform.SetOutputType(output_stream_ids[0], &output_type, 0)?;
         }
+
+        {
+            let input_type = MFCreateMediaType()?;
+            // let input_type = transform.GetInputAvailableType(input_stream_ids[0], 0)?;
+
+            input_type.set_guid(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+            input_type.set_guid(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
+
+            input_type.set_fraction(&MF_MT_FRAME_SIZE, width, height)?;
+            input_type.set_fraction(&MF_MT_FRAME_RATE, target_framerate, 1)?;
+
+            debug_video_format(&input_type)?;
+
+            transform.SetInputType(input_stream_ids[0], &input_type, 0)?;
+        }
+
+        // let output_sample = unsafe { MFCreateSample() }?;
+
+        // let output_media_buffer = unsafe { MFCreateMemoryBuffer(width * height * 4) }?;
+        // unsafe { output_sample.AddBuffer(&output_media_buffer.clone()) }?;
+
+        let _status = 0;
+
+        let input_stream_id = input_stream_ids[0];
+        let output_stream_id = output_stream_ids[0];
+
+        if let Ok(event_gen) = transform.cast::<IMFMediaEventGenerator>() {
+            tracing::debug!("starting hardware encoder");
+            hardware(
+                &device,
+                event_gen,
+                transform,
+                control_rx,
+                event_tx,
+                target_framerate,
+                output_stream_id,
+                input_stream_id,
+                width,
+                height,
+            )?;
+        } else {
+            software(
+                &device,
+                &context,
+                transform,
+                control_rx,
+                event_tx,
+                target_framerate,
+                output_stream_id,
+                input_stream_id,
+                width,
+                height,
+            )?;
+        }
+
+        eyre::Ok(())
     });
 
     Ok((control_tx, event_rx))

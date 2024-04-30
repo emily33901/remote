@@ -7,7 +7,7 @@ use ::windows::{
 };
 use eyre::Result;
 use tokio::sync::mpsc;
-use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
+use windows::{core::VARIANT, Win32::Graphics::Direct3D11::ID3D11Texture2D};
 
 use crate::{VideoBuffer, ARBITRARY_MEDIA_CHANNEL_LIMIT};
 
@@ -80,12 +80,17 @@ pub async fn h264_decoder(
                     }
                 };
 
-                let attributes = transform.GetAttributes()?;
+                let codec_api = transform.cast::<ICodecAPI>()?;
+                codec_api.SetValue(&CODECAPI_AVLowLatencyMode, &1_u32.into())?;
+                codec_api.SetValue(&CODECAPI_AVDecNumWorkerThreads, &8_i32.into())?;
+                codec_api.SetValue(&CODECAPI_AVDecVideoAcceleration_H264, &1_u32.into())?;
+                // codec_api.SetValue(&CODECAPI_AVDecVideoThumbnailGenerationMode, &FALSE.into())?;
 
-                attributes.set_u32(&CODECAPI_AVLowLatencyMode, 1)?;
-                attributes.set_u32(&CODECAPI_AVDecNumWorkerThreads, 8)?;
-                attributes.set_u32(&CODECAPI_AVDecVideoAcceleration_H264, 1)?;
-                attributes.set_u32(&CODECAPI_AVDecVideoThumbnailGenerationMode, 0)?;
+                let attributes = transform.GetAttributes()?;
+                // attributes.set_u32(&CODECAPI_AVLowLatencyMode, 1)?;
+                // attributes.set_u32(&CODECAPI_AVDecNumWorkerThreads, 8)?;
+                // attributes.set_u32(&CODECAPI_AVDecVideoAcceleration_H264, 1)?;
+                // attributes.set_u32(&CODECAPI_AVDecVideoThumbnailGenerationMode, 0)?;
 
                 // TODO(emily): NOTE from MSDN:
                 // This attribute applies only to video MFTs. To query this attribute, call IMFTransform::GetAttributes 
@@ -114,7 +119,7 @@ pub async fn h264_decoder(
                     std::mem::transmute(device_manager),
                 ).map(|_| true).unwrap_or_default();
 
-                attributes.set_u32(&MF_LOW_LATENCY, 1)?;
+                // attributes.set_u32(&MF_LOW_LATENCY, 1)?;
 
                 {
                     let input_type = transform.GetInputAvailableType(0, 0)?;

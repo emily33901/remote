@@ -264,6 +264,9 @@ pub(crate) async fn converter(
                     }
 
                     // NOTE(emily): cc requires that the input texture be bind_render_target and bind_shader_resource
+                    // TODO(emily): In order to use a texture pool here we need some way of disconnecting the pool
+                    // and the texture and then finding the pool from the texture
+                    // or atleast in this case need to be able to return this texture to its pool.
                     let texture =
                         super::dx::TextureBuilder::new(&device, width, height, input_format.into())
                             .bind_render_target()
