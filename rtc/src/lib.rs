@@ -9,7 +9,7 @@ use tokio::sync::{mpsc, Mutex};
 
 use eyre::Result;
 
-const ARBITRARY_CHANNEL_LIMIT: usize = 10;
+const ARBITRARY_RTC_CHANNEL_LIMIT: usize = 10;
 
 #[derive(Debug)]
 pub enum RtcPeerState {

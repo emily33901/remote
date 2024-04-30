@@ -69,4 +69,4 @@ impl std::fmt::Debug for VideoBuffer {
     }
 }
 
-const ARBITRARY_CHANNEL_LIMIT: usize = 10;
+const ARBITRARY_MEDIA_CHANNEL_LIMIT: usize = 1;

@@ -4,7 +4,7 @@ use eyre::Result;
 use tokio::sync::mpsc;
 use windows::{core::HSTRING, Win32::Media::MediaFoundation::*};
 
-use crate::{VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
+use crate::{VideoBuffer, ARBITRARY_MEDIA_CHANNEL_LIMIT};
 
 use super::mf;
 
@@ -20,7 +20,7 @@ pub fn file_sink(
     target_framerate: u32,
     target_bitrate: u32,
 ) -> Result<mpsc::Sender<FileSinkControl>> {
-    let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
+    let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
 
     let path = path.to_owned();
 

@@ -15,7 +15,7 @@ use webrtc::{
 use eyre::Result;
 
 use crate::{
-    ARBITRARY_CHANNEL_LIMIT, {ChannelControl, ChannelEvent},
+    ARBITRARY_RTC_CHANNEL_LIMIT, {ChannelControl, ChannelEvent},
 };
 
 const BUFFERED_AMOUNT_LOW_THRESHOLD: usize = 500_000;
@@ -221,8 +221,8 @@ pub(crate) async fn channel(
     channel_options: Option<RTCDataChannelInit>,
 ) -> Result<(mpsc::Sender<ChannelControl>, mpsc::Receiver<ChannelEvent>)> {
     let our_label = our_label.to_owned();
-    let (control_tx, control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
-    let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
+    let (control_tx, control_rx) = mpsc::channel(ARBITRARY_RTC_CHANNEL_LIMIT);
+    let (event_tx, event_rx) = mpsc::channel(ARBITRARY_RTC_CHANNEL_LIMIT);
 
     telemetry::client::watch_channel(&control_tx, &format!("channel-{our_label}-control")).await;
     telemetry::client::watch_channel(&event_tx, &format!("channel-{our_label}-event")).await;

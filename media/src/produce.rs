@@ -14,7 +14,7 @@ use windows::{
 use crate::{
     dx,
     encoder::{self, Encoder},
-    VideoBuffer, ARBITRARY_CHANNEL_LIMIT,
+    VideoBuffer, ARBITRARY_MEDIA_CHANNEL_LIMIT,
 };
 
 use super::mf::{debug_video_format, IMFAttributesExt, IMFDXGIBufferExt};
@@ -375,8 +375,8 @@ pub async fn produce(
     target_framerate: u32,
     bitrate: u32,
 ) -> Result<(mpsc::Sender<MediaControl>, mpsc::Receiver<MediaEvent>)> {
-    let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
-    let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
+    let (event_tx, event_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
+    let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
 
     tokio::spawn(async move {
         while let Some(control) = control_rx.recv().await {

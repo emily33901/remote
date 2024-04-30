@@ -5,7 +5,7 @@ use openh264::{
 };
 use tokio::sync::mpsc;
 
-use crate::{dx::ID3D11Texture2DExt, ARBITRARY_CHANNEL_LIMIT};
+use crate::{dx::ID3D11Texture2DExt, ARBITRARY_MEDIA_CHANNEL_LIMIT};
 
 use super::{DecoderControl, DecoderEvent};
 
@@ -66,8 +66,8 @@ pub async fn h264_decoder(
     _target_framerate: u32,
     _target_bitrate: u32,
 ) -> Result<(mpsc::Sender<DecoderControl>, mpsc::Receiver<DecoderEvent>)> {
-    let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
-    let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
+    let (event_tx, event_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
+    let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
 
     telemetry::client::watch_channel(&control_tx, "h264-decoder-control").await;
     telemetry::client::watch_channel(&event_tx, "h264-decoder-event").await;

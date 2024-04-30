@@ -10,7 +10,7 @@ use windows::{
     },
 };
 
-use crate::{dx::ID3D11Texture2DExt, ARBITRARY_CHANNEL_LIMIT};
+use crate::{dx::ID3D11Texture2DExt, ARBITRARY_MEDIA_CHANNEL_LIMIT};
 
 use super::{
     dx::copy_texture,
@@ -56,8 +56,8 @@ pub(crate) async fn converter(
     input_format: Format,
     output_format: Format,
 ) -> Result<(mpsc::Sender<ConvertControl>, mpsc::Receiver<ConvertEvent>)> {
-    let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
-    let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
+    let (event_tx, event_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
+    let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
 
     telemetry::client::watch_channel(&control_tx, "color-converter-control").await;
     telemetry::client::watch_channel(&event_tx, "color-converter-event").await;

@@ -31,7 +31,7 @@ impl From<String> for PeerId {
 
 pub type ConnectionId = Uuid;
 
-pub(crate) const ARBITRARY_CHANNEL_LIMIT: usize = 5;
+pub(crate) const ARBITRARY_SIGNALLING_CHANNEL_LIMIT: usize = 5;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum SignallingError {
@@ -324,7 +324,7 @@ pub async fn server(address: &str) -> Result<()> {
                 println!("{} {}", peer_id, addr);
 
                 let (mut outgoing, mut incoming) = ws_stream.split();
-                let (tx, mut rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
+                let (tx, mut rx) = mpsc::channel(ARBITRARY_SIGNALLING_CHANNEL_LIMIT);
 
                 peers.lock().await.insert(peer_id.clone(), tx.clone());
 
@@ -515,8 +515,9 @@ pub async fn client(
 
     let (mut write, mut read) = ws_stream.split();
 
-    let (control_tx, mut control_rx) = mpsc::channel::<SignallingControl>(ARBITRARY_CHANNEL_LIMIT);
-    let (event_tx, event_rx) = mpsc::channel::<SignallingEvent>(ARBITRARY_CHANNEL_LIMIT);
+    let (control_tx, mut control_rx) =
+        mpsc::channel::<SignallingControl>(ARBITRARY_SIGNALLING_CHANNEL_LIMIT);
+    let (event_tx, event_rx) = mpsc::channel::<SignallingEvent>(ARBITRARY_SIGNALLING_CHANNEL_LIMIT);
 
     tracing::info!("client signal connected");
 

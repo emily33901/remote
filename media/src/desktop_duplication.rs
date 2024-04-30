@@ -24,7 +24,7 @@ use crate::{
     color_conversion,
     encoder::{self, Encoder},
     produce::{MediaControl, MediaEvent},
-    ARBITRARY_CHANNEL_LIMIT,
+    ARBITRARY_MEDIA_CHANNEL_LIMIT,
 };
 
 use super::dx;
@@ -38,8 +38,8 @@ pub(crate) enum DDEvent {
 
 // #[tracing::instrument]
 pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Receiver<DDEvent>)> {
-    let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
-    let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
+    let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
+    let (event_tx, event_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
 
     let span = tracing::Span::current();
 
@@ -270,8 +270,8 @@ pub async fn duplicate_desktop(
     framerate: u32,
     bitrate: u32,
 ) -> Result<(mpsc::Sender<MediaControl>, mpsc::Receiver<MediaEvent>)> {
-    let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
-    let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
+    let (event_tx, event_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
+    let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
 
     let (h264_control, mut h264_event) = encoder_api.run(width, height, framerate, bitrate).await?;
 

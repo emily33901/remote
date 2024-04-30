@@ -17,7 +17,7 @@ use webrtc::{
 };
 
 use crate::{
-    ARBITRARY_CHANNEL_LIMIT, {RtcPeerControl, RtcPeerEvent, RtcPeerState},
+    ARBITRARY_RTC_CHANNEL_LIMIT, {RtcPeerControl, RtcPeerEvent, RtcPeerState},
 };
 
 use super::{channel::ChannelStorage, WebrtcRsPeerConnection};
@@ -29,8 +29,8 @@ pub(crate) async fn rtc_peer(
     mpsc::Sender<RtcPeerControl>,
     mpsc::Receiver<RtcPeerEvent>,
 )> {
-    let (control_tx, mut control_rx) = mpsc::channel::<RtcPeerControl>(ARBITRARY_CHANNEL_LIMIT);
-    let (event_tx, event_rx) = mpsc::channel::<RtcPeerEvent>(ARBITRARY_CHANNEL_LIMIT);
+    let (control_tx, mut control_rx) = mpsc::channel::<RtcPeerControl>(ARBITRARY_RTC_CHANNEL_LIMIT);
+    let (event_tx, event_rx) = mpsc::channel::<RtcPeerEvent>(ARBITRARY_RTC_CHANNEL_LIMIT);
 
     telemetry::client::watch_channel(&control_tx, "webrtc-rs-peer-control").await;
     telemetry::client::watch_channel(&event_tx, "webrtc-rs-peer-event").await;
@@ -153,7 +153,7 @@ pub(crate) async fn rtc_peer(
         let event_tx = event_tx.clone();
         async move {
             let (pending_candidates_tx, mut pending_candidates_rx) =
-                mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
+                mpsc::channel(ARBITRARY_RTC_CHANNEL_LIMIT);
 
             while let Some(control) = control_rx.recv().await {
                 match control {

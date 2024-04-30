@@ -11,7 +11,7 @@ use eyre::{eyre, Result};
 use tokio::sync::mpsc;
 use tracing::Instrument;
 
-use crate::{dx::ID3D11Texture2DExt, ARBITRARY_CHANNEL_LIMIT};
+use crate::{dx::ID3D11Texture2DExt, ARBITRARY_MEDIA_CHANNEL_LIMIT};
 
 use crate::yuv_buffer::YUVBuffer2;
 
@@ -65,8 +65,9 @@ pub async fn h264_encoder(
     target_framerate: u32,
     target_bitrate: u32,
 ) -> Result<(mpsc::Sender<EncoderControl>, mpsc::Receiver<EncoderEvent>)> {
-    let (event_tx, event_rx) = mpsc::channel::<EncoderEvent>(ARBITRARY_CHANNEL_LIMIT);
-    let (control_tx, mut control_rx) = mpsc::channel::<EncoderControl>(ARBITRARY_CHANNEL_LIMIT);
+    let (event_tx, event_rx) = mpsc::channel::<EncoderEvent>(ARBITRARY_MEDIA_CHANNEL_LIMIT);
+    let (control_tx, mut control_rx) =
+        mpsc::channel::<EncoderControl>(ARBITRARY_MEDIA_CHANNEL_LIMIT);
 
     let fps_counter = telemetry::client::Counter::default();
     telemetry::client::watch_counter(&fps_counter, telemetry::Unit::Fps, "encoder fps").await;

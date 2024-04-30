@@ -9,7 +9,7 @@ use eyre::Result;
 use tokio::sync::mpsc;
 use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 
-use crate::{VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
+use crate::{VideoBuffer, ARBITRARY_MEDIA_CHANNEL_LIMIT};
 
 use crate::{
     dx::{copy_texture, ID3D11Texture2DExt, TextureCPUAccess, TextureUsage},
@@ -24,8 +24,8 @@ pub async fn h264_decoder(
     target_framerate: u32,
     target_bitrate: u32,
 ) -> Result<(mpsc::Sender<DecoderControl>, mpsc::Receiver<DecoderEvent>)> {
-    let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
-    let (control_tx, control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
+    let (event_tx, event_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
+    let (control_tx, control_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
 
     telemetry::client::watch_channel(&control_tx, "h264-decoder-control").await;
     telemetry::client::watch_channel(&event_tx, "h264-decoder-event").await;

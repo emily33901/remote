@@ -10,7 +10,7 @@ use crate::{
     mf::make_dxgi_sample,
 };
 
-use crate::{mf::debug_video_format, VideoBuffer, ARBITRARY_CHANNEL_LIMIT};
+use crate::{mf::debug_video_format, VideoBuffer, ARBITRARY_MEDIA_CHANNEL_LIMIT};
 
 use crate::{
     dx::ID3D11Texture2DExt,
@@ -27,8 +27,8 @@ pub async fn h264_encoder(
     target_framerate: u32,
     target_bitrate: u32,
 ) -> Result<(mpsc::Sender<EncoderControl>, mpsc::Receiver<EncoderEvent>)> {
-    let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
-    let (control_tx, control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
+    let (event_tx, event_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
+    let (control_tx, control_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
 
     tokio::spawn({
         async move {
