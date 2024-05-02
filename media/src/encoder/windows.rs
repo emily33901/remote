@@ -3,7 +3,7 @@ use std::time::UNIX_EPOCH;
 use ::windows::{core::Interface, Win32::Media::MediaFoundation::*};
 use eyre::{eyre, Result};
 
-use tokio::sync::mpsc::{self};
+use tokio::sync::mpsc::{self, error::TryRecvError};
 
 use crate::{
     dx::{self, TextureCPUAccess, TextureUsage},
@@ -107,6 +107,9 @@ pub async fn h264_encoder(
             .unwrap_or_default();
 
         attributes.set_u32(&MF_LOW_LATENCY, 1)?;
+
+        let codec_api = transform.cast::<ICodecAPI>()?;
+        codec_api.SetValue(&CODECAPI_AVLowLatencyMode, &true.into())?;
 
         {
             let output_type = MFCreateMediaType()?;
@@ -217,23 +220,32 @@ unsafe fn hardware(
     // whenever it asks for one. So keep the last control around so that we can use it again if needed.
     let mut last_control = None;
 
-    loop {
+    'main: loop {
         let event = event_gen.GetEvent(MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS(0))?;
         let event_type = event.GetType()?;
 
         // tracing::info!("encoder event {event_type}");
 
         match event_type {
+            // METransformNeedInput
             601 => {
                 let EncoderControl::Frame(frame, time) = {
                     let mut control = None;
 
-                    while let Ok(new_control) = control_rx.try_recv() {
-                        control = Some(new_control);
+                    loop {
+                        match control_rx.try_recv() {
+                            Ok(new_control) => control = Some(new_control),
+                            Err(TryRecvError::Disconnected) => {
+                                tracing::debug!("EncoderControl disconnected, going down");
+                                break 'main;
+                            }
+                            Err(TryRecvError::Empty) => break,
+                        }
                     }
 
-                    // If we didn't get a frame then wait for one now
+                    // If we didn't get a frame, and we don't have one from previously then wait for one now
                     if control.is_none() && last_control.is_none() {
+                        tracing::warn!("encoder starved and no last_control");
                         control = Some(
                             control_rx
                                 .blocking_recv()
@@ -251,9 +263,7 @@ unsafe fn hardware(
                 // more thought.
                 last_control = Some(EncoderControl::Frame(
                     frame.clone(),
-                    crate::Timestamp::new(
-                        time.duration(), // + std::time::Duration::from_secs_f32(1.0 / target_framerate as f32),
-                    ),
+                    crate::Timestamp::new(time.duration()), // + std::time::Duration::from_millis(10)),
                 ));
 
                 let texture = crate::dx::TextureBuilder::new(
@@ -343,7 +353,7 @@ unsafe fn hardware(
                                 Err(_err) => {
                                     // No sample time, but thats fine! we can just throw this sample
                                     tracing::info!("throwing encoder output sample with no sample time attached");
-                                    return Ok(());
+                                    continue;
                                 }
                             };
 
@@ -352,6 +362,7 @@ unsafe fn hardware(
                             );
                         };
 
+                        // TODO(emily): Given what was said above we really shouldn't be blocking here
                         event_tx.blocking_send(EncoderEvent::Data(VideoBuffer {
                             data: output,
                             sequence_header: sequence_header,
@@ -372,6 +383,8 @@ unsafe fn hardware(
             }
         }
     }
+
+    Ok(())
 }
 
 unsafe fn software(
