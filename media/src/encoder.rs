@@ -20,7 +20,7 @@ pub enum FrameIsKeyframe {
     Perhaps,
 }
 
-#[derive(Clone)]
+// #[derive(Clone)]
 pub enum EncoderControl {
     Frame(Texture, crate::Timestamp),
 }

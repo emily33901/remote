@@ -23,9 +23,6 @@ pub(crate) async fn audio_channel(
 
     let (tx, mut rx) = peer_connection.channel("audio", controlling, None).await?;
 
-    telemetry::client::watch_channel(&control_tx, "audio-control").await;
-    telemetry::client::watch_channel(&event_tx, "audio-event").await;
-
     tokio::spawn({
         let _tx = tx.clone();
         let event_tx = event_tx.clone();

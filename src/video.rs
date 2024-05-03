@@ -28,9 +28,6 @@ pub(crate) async fn video_channel(
     let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
-    telemetry::client::watch_channel(&control_tx, "video-control").await;
-    telemetry::client::watch_channel(&event_tx, "video-event").await;
-
     let (tx, mut rx) = peer_connection
         .channel(
             "video",
@@ -82,35 +79,26 @@ pub(crate) async fn video_channel(
         let chunk_tx = chunk_tx.clone();
         let span = tracing::debug_span!("VideoControl");
         async move {
-            match async move {
-                while let Some(control) = control_rx.recv().await {
-                    match control {
-                        VideoControl::Video(video) => {
-                            // TODO(emily): Don't hardcode this deadline
-                            let deadline = std::time::SystemTime::now()
-                                + std::time::Duration::from_millis(100);
-                            if let Ok(t) = deadline.elapsed() {
-                                tracing::warn!(
-                                    "throwing expired frame {}ms in the past",
-                                    t.as_millis()
-                                );
-                            } else {
-                                chunk_tx
-                                    .send(crate::chunk::ChunkControl::Whole(video, deadline))
-                                    .await?;
-                            }
+            while let Some(control) = control_rx.recv().await {
+                match control {
+                    VideoControl::Video(video) => {
+                        // TODO(emily): Don't hardcode this deadline
+                        let deadline =
+                            std::time::SystemTime::now() + std::time::Duration::from_millis(100);
+                        if let Ok(t) = deadline.elapsed() {
+                            tracing::warn!(
+                                "throwing expired frame {}ms in the past",
+                                t.as_millis()
+                            );
+                        } else {
+                            chunk_tx
+                                .send(crate::chunk::ChunkControl::Whole(video, deadline))
+                                .await?;
                         }
                     }
                 }
-                eyre::Ok(())
             }
-            .await
-            {
-                Ok(_) => {}
-                Err(err) => {
-                    tracing::error!("video channel control error {err}");
-                }
-            }
+            eyre::Ok(())
         }
         .instrument(span)
         .in_current_span()

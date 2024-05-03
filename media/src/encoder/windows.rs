@@ -7,7 +7,9 @@ use tokio::sync::mpsc::{self, error::TryRecvError};
 
 use crate::{
     dx::{self, TextureCPUAccess, TextureUsage},
+    media_queue::MediaQueue,
     mf::make_dxgi_sample,
+    texture_pool::TexturePool,
 };
 
 use crate::{mf::debug_video_format, VideoBuffer, ARBITRARY_MEDIA_CHANNEL_LIMIT};
@@ -213,12 +215,25 @@ unsafe fn hardware(
         tracing::debug!("h264 encoder going down");
     };
 
+    let texture_pool = TexturePool::new(
+        || {
+            crate::dx::TextureBuilder::new(device, width, height, crate::dx::TextureFormat::NV12)
+                .nt_handle()
+                .keyed_mutex()
+                .build()
+                .unwrap()
+        },
+        10,
+    );
+
+    let mut media_queue = MediaQueue::new();
+
     // TODO(emily): Consider
     // https://stackoverflow.com/questions/59051443/gop-setting-is-not-honored-by-intel-h264-hardware-mft
 
     // NOTE(emily): In order to appease the encoder, we need to provide it with a constant stream of tetxures
     // whenever it asks for one. So keep the last control around so that we can use it again if needed.
-    let mut last_control = None;
+    let mut last_control: Option<EncoderControl> = None;
 
     'main: loop {
         let event = event_gen.GetEvent(MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS(0))?;
@@ -229,6 +244,9 @@ unsafe fn hardware(
         match event_type {
             // METransformNeedInput
             601 => {
+                // TODO(emily): I really don't know whether there is any reason here to even to this.
+                // We take the most recent texture here and throw anything that is behind that. I don't know whether
+                // that is the correct thing to do though. Maybe we should only do that if we are behind?
                 let EncoderControl::Frame(frame, time) = {
                     let mut control = None;
 
@@ -252,7 +270,7 @@ unsafe fn hardware(
                                 .ok_or(eyre!("encoder control closed"))?,
                         );
                     } else if control.is_none() {
-                        control = Some(last_control.clone().unwrap());
+                        // control = Some(last_control.clone().unwrap());
                     };
 
                     control.unwrap()
@@ -261,28 +279,22 @@ unsafe fn hardware(
                 // TODO(emily): I don't necessarily know that this is correct here. This time could be ahead of the
                 // next frame that we get from color conversion and we have no way of knowing. This requires slightly
                 // more thought.
-                last_control = Some(EncoderControl::Frame(
-                    frame.clone(),
-                    crate::Timestamp::new(time.duration()), // + std::time::Duration::from_millis(10)),
-                ));
+                // TODO(emily): pooled Texture is not clonable because the ownership of the Texture is whether it is
+                // pooled or released. Therefore this cannot be done right now.
+                // last_control = Some(EncoderControl::Frame(
+                //     frame.clone(),
+                //     crate::Timestamp::new(time.duration()), // + std::time::Duration::from_millis(10)),
+                // ));
 
-                let texture = crate::dx::TextureBuilder::new(
-                    device,
-                    width,
-                    height,
-                    crate::dx::TextureFormat::NV12,
-                )
-                .nt_handle()
-                .keyed_mutex()
-                .build()
-                .unwrap();
+                let texture = texture_pool.acquire();
 
                 crate::dx::copy_texture(&texture, &frame, None)?;
-
                 let sample = make_dxgi_sample(&texture, None)?;
 
                 sample.SetSampleTime(time.hns())?;
                 sample.SetSampleDuration(10_000_000 / target_framerate as i64)?;
+
+                media_queue.push_back(texture.clone());
 
                 // tracing::info!("made sample");
 
@@ -325,7 +337,6 @@ unsafe fn hardware(
                         };
 
                         let sequence_header = if let crate::FrameIsKeyframe::Yes = is_keyframe {
-                            // tracing::info!("keyframe!");
                             let output_type = transform.GetOutputCurrentType(output_stream_id)?;
                             let extra_data_size =
                                 output_type.GetBlobSize(&MF_MT_MPEG_SEQUENCE_HEADER)? as usize;
@@ -362,7 +373,9 @@ unsafe fn hardware(
                             );
                         };
 
-                        // TODO(emily): Given what was said above we really shouldn't be blocking here
+                        media_queue.pop_front();
+
+                        // TODO(emily): Given what was said above we really shouldn't be blocking here.
                         event_tx.blocking_send(EncoderEvent::Data(VideoBuffer {
                             data: output,
                             sequence_header: sequence_header,

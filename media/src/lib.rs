@@ -13,9 +13,12 @@ pub mod encoder;
 mod color_conversion;
 pub mod desktop_duplication;
 pub mod file_sink;
+mod media_queue;
 mod mf;
 mod texture_pool;
 mod yuv_buffer;
+
+pub type Texture = texture_pool::Texture;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Timestamp(std::time::Duration);

@@ -9,7 +9,10 @@ use eyre::Result;
 use tokio::sync::mpsc;
 use windows::{core::VARIANT, Win32::Graphics::Direct3D11::ID3D11Texture2D};
 
-use crate::{VideoBuffer, ARBITRARY_MEDIA_CHANNEL_LIMIT};
+use crate::{
+    texture_pool::{Texture, TexturePool},
+    VideoBuffer, ARBITRARY_MEDIA_CHANNEL_LIMIT,
+};
 
 use crate::{
     dx::{copy_texture, ID3D11Texture2DExt, TextureCPUAccess, TextureUsage},
@@ -30,149 +33,140 @@ pub async fn h264_decoder(
     telemetry::client::watch_channel(&control_tx, "h264-decoder-control").await;
     telemetry::client::watch_channel(&event_tx, "h264-decoder-event").await;
 
-    tokio::spawn({
-        async move {
-            match tokio::task::spawn_blocking(move || unsafe {
-                mf::init()?;
+    tokio::task::spawn_blocking(move || unsafe {
+        mf::init()?;
 
-                let (device, context) = crate::dx::create_device()?;
+        let (device, context) = crate::dx::create_device()?;
 
-                let device_manager = crate::mf::create_dxgi_manager(&device)?;
+        let device_manager = crate::mf::create_dxgi_manager(&device)?;
 
-                let find_decoder = |hardware| {
-                    let mut count = 0_u32;
-                    let mut activates: *mut Option<IMFActivate> = std::ptr::null_mut();
+        let find_decoder = |hardware| {
+            let mut count = 0_u32;
+            let mut activates: *mut Option<IMFActivate> = std::ptr::null_mut();
 
-                    MFTEnumEx(
-                        MFT_CATEGORY_VIDEO_DECODER,
-                        if hardware {
-                            MFT_ENUM_FLAG_SYNCMFT
-                        } else {
-                            MFT_ENUM_FLAG(0)
-                        } | MFT_ENUM_FLAG_SORTANDFILTER,
-                        Some(&MFT_REGISTER_TYPE_INFO {
-                            guidMajorType: MFMediaType_Video,
-                            guidSubtype: MFVideoFormat_H264_ES,
-                        }),
-                        None,
-                        &mut activates,
-                        &mut count,
-                    )?;
-
-                    // TODO(emily): CoTaskMemFree activates
-
-                    let activates = std::slice::from_raw_parts_mut(activates, count as usize);
-                    let activate = activates.first().ok_or_else(|| eyre::eyre!("No decoders"))?;
-
-                    // NOTE(emily): If there is an activate then it should be real
-                    let activate = activate.as_ref().unwrap();
-
-                    let transform: IMFTransform = activate.ActivateObject()?;
-
-                    eyre::Ok(transform)
-                };
-
-                let transform = match find_decoder(true) {
-                    Ok(decoder) => decoder,
-                    Err(err) => {
-                        tracing::warn!("unable to find a hardware h264 decoder {err}, falling back to a software encoder");
-                        find_decoder(false)?
-                    }
-                };
-
-                let codec_api = transform.cast::<ICodecAPI>()?;
-                codec_api.SetValue(&CODECAPI_AVLowLatencyMode, &1_u32.into())?;
-                codec_api.SetValue(&CODECAPI_AVDecNumWorkerThreads, &8_i32.into())?;
-                codec_api.SetValue(&CODECAPI_AVDecVideoAcceleration_H264, &1_u32.into())?;
-                // codec_api.SetValue(&CODECAPI_AVDecVideoThumbnailGenerationMode, &FALSE.into())?;
-
-                let attributes = transform.GetAttributes()?;
-                // attributes.set_u32(&CODECAPI_AVLowLatencyMode, 1)?;
-                // attributes.set_u32(&CODECAPI_AVDecNumWorkerThreads, 8)?;
-                // attributes.set_u32(&CODECAPI_AVDecVideoAcceleration_H264, 1)?;
-                // attributes.set_u32(&CODECAPI_AVDecVideoThumbnailGenerationMode, 0)?;
-
-                // TODO(emily): NOTE from MSDN:
-                // This attribute applies only to video MFTs. To query this attribute, call IMFTransform::GetAttributes 
-                // to get the MFT attribute store. If GetAttributes succeeds, call IMFAttributes::GetUINT32.
-
-                // * If the attribute is nonzero, the client can give the MFT a pointer to the IMFDXGIDeviceManager 
-                //   interface before streaming starts. To do so, the client sends the MFT_MESSAGE_SET_D3D_MANAGER 
-                //   message to the MFT. The client is not required to send this message.
-                // * If this attribute is zero (FALSE), the MFT does not support Direct3D 11, and the client should not 
-                //   send the MFT_MESSAGE_SET_D3D_MANAGER message to the MFT.
-
-                // The default value of this attribute is FALSE. Treat this attribute as read-only. 
-                // Do not change the value; the MFT will ignore any changes to the value.
-
-                // NOTE(emily): What I don't understand here is that even in VM on apple M1, we pass the D3D11 aware
-                // check but we cannot set a d3d manager. This is in complete contrast to what the MSDN article above
-                // suggests.
-
-                if attributes.get_u32(&MF_SA_D3D11_AWARE)? != 1 {
-                    panic!("Not D3D11 aware");
-                }
-
-                // NOTE(emily): If this fails then this is a sofware encoder
-                let is_hardware_transform = transform.ProcessMessage(
-                    MFT_MESSAGE_SET_D3D_MANAGER,
-                    std::mem::transmute(device_manager),
-                ).map(|_| true).unwrap_or_default();
-
-                // attributes.set_u32(&MF_LOW_LATENCY, 1)?;
-
-                {
-                    let input_type = transform.GetInputAvailableType(0, 0)?;
-
-                    input_type.set_guid(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-                    input_type.set_guid(&MF_MT_SUBTYPE, &MFVideoFormat_H264_ES)?;
-
-                    input_type.set_fraction(&MF_MT_FRAME_SIZE, width, height)?;
-                    input_type.set_fraction(&MF_MT_FRAME_RATE, target_framerate, 1)?;
-                    input_type.set_fraction(&MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
-
-                    input_type.set_u32(&MF_MT_AVG_BITRATE, target_bitrate)?;
-
-                    input_type
-                        .set_u32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
-
-                    transform.SetInputType(0, &input_type, 0)?;
-                }
-
-                {
-                    let output_type = transform.GetOutputAvailableType(0, 0)?;
-                    output_type.set_guid(
-                        &MF_MT_MAJOR_TYPE,
-                        &MFMediaType_Video,
-                    )?;
-                    output_type
-                        .set_guid(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
-
-                    output_type.set_u32(&MF_MT_AVG_BITRATE, target_bitrate)?;
-
-                    output_type.set_fraction(&MF_MT_FRAME_SIZE, width, height)?;
-                    output_type.set_fraction(&MF_MT_FRAME_RATE, target_framerate, 1)?;
-                    output_type.set_fraction(&MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
-
-                    transform.SetOutputType(0, &output_type, 0)?;
-                }
-
-
-                if is_hardware_transform {
-                    hardware(control_rx, transform, device, width, height, event_tx)?
+            MFTEnumEx(
+                MFT_CATEGORY_VIDEO_DECODER,
+                if hardware {
+                    MFT_ENUM_FLAG_SYNCMFT
                 } else {
-                    software(&device, &context, control_rx, transform, width, height, event_tx)?;
-                }
+                    MFT_ENUM_FLAG(0)
+                } | MFT_ENUM_FLAG_SORTANDFILTER,
+                Some(&MFT_REGISTER_TYPE_INFO {
+                    guidMajorType: MFMediaType_Video,
+                    guidSubtype: MFVideoFormat_H264_ES,
+                }),
+                None,
+                &mut activates,
+                &mut count,
+            )?;
 
-                eyre::Ok(())
-            })
-            .await
-            .unwrap()
-            {
-                Ok(_) => tracing::warn!("h264::decoder exit Ok"),
-                Err(err) => tracing::error!("h264::decoder exit err {err} {err:?}"),
+            // TODO(emily): CoTaskMemFree activates
+
+            let activates = std::slice::from_raw_parts_mut(activates, count as usize);
+            let activate = activates
+                .first()
+                .ok_or_else(|| eyre::eyre!("No decoders"))?;
+
+            // NOTE(emily): If there is an activate then it should be real
+            let activate = activate.as_ref().unwrap();
+
+            let transform: IMFTransform = activate.ActivateObject()?;
+
+            eyre::Ok(transform)
+        };
+
+        let transform = match find_decoder(true) {
+            Ok(decoder) => decoder,
+            Err(err) => {
+                tracing::warn!("unable to find a hardware h264 decoder {err}, falling back to a software encoder");
+                find_decoder(false)?
             }
+        };
+
+        let codec_api = transform.cast::<ICodecAPI>()?;
+        codec_api.SetValue(&CODECAPI_AVLowLatencyMode, &1_u32.into())?;
+        codec_api.SetValue(&CODECAPI_AVDecNumWorkerThreads, &8_i32.into())?;
+        codec_api.SetValue(&CODECAPI_AVDecVideoAcceleration_H264, &1_u32.into())?;
+        // codec_api.SetValue(&CODECAPI_AVDecVideoThumbnailGenerationMode, &FALSE.into())?;
+
+        let attributes = transform.GetAttributes()?;
+        // attributes.set_u32(&CODECAPI_AVLowLatencyMode, 1)?;
+        // attributes.set_u32(&CODECAPI_AVDecNumWorkerThreads, 8)?;
+        // attributes.set_u32(&CODECAPI_AVDecVideoAcceleration_H264, 1)?;
+        // attributes.set_u32(&CODECAPI_AVDecVideoThumbnailGenerationMode, 0)?;
+
+        // TODO(emily): NOTE from MSDN:
+        // This attribute applies only to video MFTs. To query this attribute, call IMFTransform::GetAttributes
+        // to get the MFT attribute store. If GetAttributes succeeds, call IMFAttributes::GetUINT32.
+
+        // * If the attribute is nonzero, the client can give the MFT a pointer to the IMFDXGIDeviceManager
+        //   interface before streaming starts. To do so, the client sends the MFT_MESSAGE_SET_D3D_MANAGER
+        //   message to the MFT. The client is not required to send this message.
+        // * If this attribute is zero (FALSE), the MFT does not support Direct3D 11, and the client should not
+        //   send the MFT_MESSAGE_SET_D3D_MANAGER message to the MFT.
+
+        // The default value of this attribute is FALSE. Treat this attribute as read-only.
+        // Do not change the value; the MFT will ignore any changes to the value.
+
+        // NOTE(emily): What I don't understand here is that even in VM on apple M1, we pass the D3D11 aware
+        // check but we cannot set a d3d manager. This is in complete contrast to what the MSDN article above
+        // suggests.
+
+        if attributes.get_u32(&MF_SA_D3D11_AWARE)? != 1 {
+            panic!("Not D3D11 aware");
         }
+
+        // NOTE(emily): If this fails then this is a sofware encoder
+        let is_hardware_transform = transform
+            .ProcessMessage(
+                MFT_MESSAGE_SET_D3D_MANAGER,
+                std::mem::transmute(device_manager),
+            )
+            .map(|_| true)
+            .unwrap_or_default();
+
+        // attributes.set_u32(&MF_LOW_LATENCY, 1)?;
+
+        {
+            let input_type = transform.GetInputAvailableType(0, 0)?;
+
+            input_type.set_guid(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+            input_type.set_guid(&MF_MT_SUBTYPE, &MFVideoFormat_H264_ES)?;
+
+            input_type.set_fraction(&MF_MT_FRAME_SIZE, width, height)?;
+            input_type.set_fraction(&MF_MT_FRAME_RATE, target_framerate, 1)?;
+            input_type.set_fraction(&MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
+
+            input_type.set_u32(&MF_MT_AVG_BITRATE, target_bitrate)?;
+
+            input_type.set_u32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
+
+            transform.SetInputType(0, &input_type, 0)?;
+        }
+
+        {
+            let output_type = transform.GetOutputAvailableType(0, 0)?;
+            output_type.set_guid(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
+            output_type.set_guid(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
+
+            output_type.set_u32(&MF_MT_AVG_BITRATE, target_bitrate)?;
+
+            output_type.set_fraction(&MF_MT_FRAME_SIZE, width, height)?;
+            output_type.set_fraction(&MF_MT_FRAME_RATE, target_framerate, 1)?;
+            output_type.set_fraction(&MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
+
+            transform.SetOutputType(0, &output_type, 0)?;
+        }
+
+        if is_hardware_transform {
+            hardware(control_rx, transform, device, width, height, event_tx)?
+        } else {
+            software(
+                &device, &context, control_rx, transform, width, height, event_tx,
+            )?;
+        }
+
+        eyre::Ok(())
     });
 
     Ok((control_tx, event_rx))
@@ -189,6 +183,17 @@ unsafe fn hardware(
     transform.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
     transform.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
     transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
+
+    let texture_pool = TexturePool::new(
+        || {
+            crate::dx::TextureBuilder::new(&device, width, height, crate::dx::TextureFormat::NV12)
+                .keyed_mutex()
+                .nt_handle()
+                .build()
+                .unwrap()
+        },
+        10,
+    );
 
     loop {
         let DecoderControl::Data(VideoBuffer {
@@ -223,7 +228,7 @@ unsafe fn hardware(
         sample.SetSampleDuration(duration.as_nanos() as i64 / 100)?;
 
         let process_output =
-            || -> Result<Option<(ID3D11Texture2D, crate::Timestamp)>, windows::core::Error> {
+            || -> Result<Option<(Texture, crate::Timestamp)>, windows::core::Error> {
                 let mut output_buffer = MFT_OUTPUT_DATA_BUFFER::default();
                 output_buffer.dwStatus = 0;
                 output_buffer.dwStreamID = 0;
@@ -233,16 +238,7 @@ unsafe fn hardware(
                 let mut status = 0_u32;
                 match transform.ProcessOutput(0, &mut output_buffers, &mut status) {
                     Ok(ok) => {
-                        let output_texture = crate::dx::TextureBuilder::new(
-                            &device,
-                            width,
-                            height,
-                            crate::dx::TextureFormat::NV12,
-                        )
-                        .keyed_mutex()
-                        .nt_handle()
-                        .build()
-                        .unwrap();
+                        let output_texture = texture_pool.acquire();
 
                         let sample = output_buffers[0].pSample.take().unwrap();
                         let timestamp_hns = unsafe { sample.GetSampleTime()? };
@@ -414,7 +410,7 @@ unsafe fn software(
 
                     event_tx
                         .blocking_send(DecoderEvent::Frame(
-                            output_texture,
+                            Texture::unpooled(output_texture),
                             crate::Timestamp::new_hns(timestamp),
                         ))
                         .unwrap();

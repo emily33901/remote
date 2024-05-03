@@ -1,3 +1,5 @@
+use std::ops::Deref;
+
 use eyre::Result;
 use tokio::sync::mpsc::{self, error::TryRecvError};
 use tracing::Instrument;
@@ -119,7 +121,7 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
         let mut desc = DXGI_OUTDUPL_DESC::default();
         unsafe { duplicated.GetDesc(&mut desc) };
 
-        tracing::info!(?desc);
+        tracing::debug!(?desc);
 
         let (device_width, device_height) = (desc.ModeDesc.Width, desc.ModeDesc.Height);
 
@@ -150,6 +152,12 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
             10,
         );
 
+        tracing::debug!("starting");
+
+        scopeguard::defer! {
+            tracing::debug!("stopping");
+        }
+
         while control_rx_open() {
             let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
             let mut frame_resource: Option<IDXGIResource> = None;
@@ -167,10 +175,9 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
                         let frame_resource = frame_resource.unwrap();
                         let duplication_texture: ID3D11Texture2D = frame_resource.cast()?;
 
-                        let out_texture = texture_pool.get();
+                        let out_texture = texture_pool.acquire();
 
-                        // NOTE(emily): Cannot use dx::copy_texture here because whilst the input might appear
-                        // to be keyed mutex, it is impossible to actually acquire that.
+                        // NOTE(emily): Cannot use dx::copy_texture here, input is already acquired.
 
                         {
                             let mut in_desc = D3D11_TEXTURE2D_DESC::default();
@@ -216,7 +223,7 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
 
                             unsafe {
                                 context.CopySubresourceRegion(
-                                    out_texture.texture(),
+                                    out_texture.deref(),
                                     0,
                                     0,
                                     0,
@@ -228,6 +235,7 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
                             };
                         }
 
+                        // TODO(emily): We should probably allow ourselves to be backpressured here
                         match event_tx.try_send(DDEvent::Frame(
                             out_texture,
                             crate::Timestamp::new_diff(start_time, std::time::SystemTime::now())?,

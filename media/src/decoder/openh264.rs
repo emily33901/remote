@@ -6,7 +6,7 @@ use openh264::{
 use tokio::sync::mpsc;
 use tracing::Instrument;
 
-use crate::{dx::ID3D11Texture2DExt, ARBITRARY_MEDIA_CHANNEL_LIMIT};
+use crate::{dx::ID3D11Texture2DExt, texture_pool::TexturePool, ARBITRARY_MEDIA_CHANNEL_LIMIT};
 
 use super::{DecoderControl, DecoderEvent};
 
@@ -74,6 +74,22 @@ pub async fn h264_decoder(
                 .usage(crate::dx::TextureUsage::Staging)
                 .build()?;
 
+                let texture_pool = TexturePool::new(
+                    || {
+                        crate::dx::TextureBuilder::new(
+                            &device,
+                            width,
+                            height,
+                            crate::dx::TextureFormat::NV12,
+                        )
+                        .keyed_mutex()
+                        .nt_handle()
+                        .build()
+                        .unwrap()
+                    },
+                    10,
+                );
+
                 loop {
                     let DecoderControl::Data(buffer) = control_rx
                         .blocking_recv()
@@ -84,15 +100,7 @@ pub async fn h264_decoder(
                             // WebRTC uses the timestamp of the packet rather than the decoded buffer
                             let timestamp = buffer.time.clone();
 
-                            let frame = crate::dx::TextureBuilder::new(
-                                &device,
-                                width,
-                                height,
-                                crate::dx::TextureFormat::NV12,
-                            )
-                            .keyed_mutex()
-                            .nt_handle()
-                            .build()?;
+                            let frame = texture_pool.acquire();
 
                             staging_texture.map_mut(&context, |data, dest_stride| {
                                 let (y_stride, u_stride, v_stride) = output.strides();

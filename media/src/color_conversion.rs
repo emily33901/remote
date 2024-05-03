@@ -13,6 +13,7 @@ use windows::{
 
 use crate::{
     dx::ID3D11Texture2DExt,
+    media_queue::MediaQueue,
     texture_pool::{Texture, TexturePool},
     ARBITRARY_MEDIA_CHANNEL_LIMIT,
 };
@@ -53,7 +54,7 @@ impl From<Format> for super::dx::TextureFormat {
     }
 }
 
-// #[tracing::instrument]
+#[tracing::instrument]
 pub(crate) async fn converter(
     output_width: u32,
     output_height: u32,
@@ -74,6 +75,10 @@ pub(crate) async fn converter(
             let span_guard = span.enter();
 
             tracing::debug!("starting");
+
+            scopeguard::defer! {
+                tracing::debug!("stopping");
+            }
 
             mf::init()?;
 
@@ -125,7 +130,8 @@ pub(crate) async fn converter(
             attributes.set_u32(&MF_LOW_LATENCY, 1)?;
 
             // TODO(emily): We make the texture pool here twice on startup
-            let mut input_texture_pool = TexturePool::new(
+            // NOTE(emily): cc requires that the input texture be bind_render_target and bind_shader_resource
+            let input_texture_pool = TexturePool::new(
                 || {
                     super::dx::TextureBuilder::new(
                         &device,
@@ -157,7 +163,9 @@ pub(crate) async fn converter(
                 10,
             );
 
-            let mut set_format_types = |input_width, input_height| -> Result<()> {
+            let mut media_queue = MediaQueue::new();
+
+            let set_format_types = |input_width, input_height| -> Result<()> {
                 {
                     let input_type = MFCreateMediaType()?;
 
@@ -183,7 +191,7 @@ pub(crate) async fn converter(
                     }
                 }
 
-                input_texture_pool = TexturePool::new(
+                input_texture_pool.update_texture_format(
                     || {
                         super::dx::TextureBuilder::new(
                             &device,
@@ -257,23 +265,20 @@ pub(crate) async fn converter(
                             .map_err(|e| e.code())
                         {}
 
+                        media_queue.drain();
+
                         // Set the input type
                         set_format_types(width, height)?;
                         // Update our last types
                         (last_input_width, last_input_height) = (width, height);
                     }
 
-                    // NOTE(emily): cc requires that the input texture be bind_render_target and bind_shader_resource
-                    // TODO(emily): In order to use a texture pool here we need some way of disconnecting the pool
-                    // and the texture and then finding the pool from the texture
-                    // or atleast in this case need to be able to return this texture to its pool.
-                    let texture =
-                        super::dx::TextureBuilder::new(&device, width, height, input_format.into())
-                            .bind_render_target()
-                            .bind_shader_resource()
-                            .build()?;
+                    let texture = input_texture_pool.acquire();
 
                     super::dx::copy_texture(&texture, &frame, None)?;
+
+                    media_queue.push_back(texture.clone());
+
                     make_dxgi_sample(&texture, None)?
                 };
 
@@ -288,32 +293,22 @@ pub(crate) async fn converter(
 
                 match result {
                     Ok(_) | Err(MF_E_NOTACCEPTING) => {
-                        let output_result = process_output(
-                            &transform,
-                            &device,
-                            &output_texture_pool,
-                            output_format,
-                        )
-                        .map_err(|err| err.code());
-
-                        tracing::trace!("process output {output_result:?}");
+                        let output_result = process_output(&transform, &output_texture_pool)
+                            .map_err(|err| err.code());
 
                         match output_result {
-                            Ok(Some((output_texture, timestamp))) => {
-                                match event_tx.blocking_send(ConvertEvent::Frame(
-                                    output_texture.clone(),
-                                    timestamp,
-                                )) {
+                            Ok((output_texture, timestamp)) => {
+                                media_queue.pop_front();
+
+                                match event_tx
+                                    .blocking_send(ConvertEvent::Frame(output_texture, timestamp))
+                                {
                                     Err(err) => {
                                         tracing::debug!("Failed to send convert event, done");
                                         break;
                                     }
                                     Ok(()) => {}
                                 }
-                            }
-                            Ok(None) => {
-                                // Continue trying to get more frames
-                                tracing::trace!("trying to get more frames")
                             }
                             Err(MF_E_TRANSFORM_NEED_MORE_INPUT) => {
                                 tracing::trace!("needs more input");
@@ -341,10 +336,8 @@ pub(crate) async fn converter(
 
 fn process_output(
     transform: &IMFTransform,
-    device: &ID3D11Device,
     texture_pool: &TexturePool,
-    output_format: Format,
-) -> Result<Option<(Texture, crate::Timestamp)>, windows::core::Error> {
+) -> Result<(Texture, crate::Timestamp), windows::core::Error> {
     unsafe {
         let mut output_buffer = MFT_OUTPUT_DATA_BUFFER::default();
         output_buffer.dwStatus = 0;
@@ -364,14 +357,11 @@ fn process_output(
 
                 let (texture, subresource_index) = dxgi_buffer.texture()?;
 
-                let output_texture = texture_pool.get();
+                let output_texture = texture_pool.acquire();
 
                 copy_texture(&output_texture, &texture, Some(subresource_index))?;
 
-                Ok(Some((
-                    output_texture,
-                    crate::Timestamp::new_hns(timestamp_hns),
-                )))
+                Ok((output_texture, crate::Timestamp::new_hns(timestamp_hns)))
             }
             Err(err) => Err(err),
         }

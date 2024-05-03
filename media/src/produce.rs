@@ -442,7 +442,7 @@ pub async fn produce(
 
                 if produced_video {
                     // Try and put a frame but if we are being back pressured then dump and run
-                    let output_texture = output_texture_pool.get();
+                    let output_texture = output_texture_pool.acquire();
                     dx::copy_texture(&output_texture, &texture, None)?;
 
                     h264_control.blocking_send(encoder::EncoderControl::Frame(

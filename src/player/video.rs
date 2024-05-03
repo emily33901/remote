@@ -1,5 +1,3 @@
-
-
 use eyre::Result;
 use tokio::sync::{mpsc, mpsc::error::TryRecvError};
 
@@ -436,9 +434,8 @@ pub(crate) fn sink(
     width: u32,
     height: u32,
     name: &str,
-) -> Result<mpsc::Sender<(ID3D11Texture2D, media::Timestamp)>> {
-    let (tx, mut rx) =
-        mpsc::channel::<(ID3D11Texture2D, media::Timestamp)>(ARBITRARY_CHANNEL_LIMIT);
+) -> Result<mpsc::Sender<(media::Texture, media::Timestamp)>> {
+    let (tx, mut rx) = mpsc::channel::<(media::Texture, media::Timestamp)>(ARBITRARY_CHANNEL_LIMIT);
 
     tokio::spawn({
         let tx = tx.clone();

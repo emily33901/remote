@@ -98,6 +98,7 @@ async fn main() -> Result<()> {
 
     tracing_subscriber::registry()
         // .with(console_subscriber::spawn())
+        // .with(tracing_tracy::TracyLayer::default())
         .with(filter)
         .with(tracing_subscriber::fmt::layer().compact())
         .init();

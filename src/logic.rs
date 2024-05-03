@@ -32,6 +32,7 @@ pub(crate) enum PeerStreamRequestResponse {
 pub enum LogicMessage {
     StreamRequest(PeerStreamRequest),
     StreamRequestResponse(PeerStreamRequestResponse),
+    StreamKeyframeRequest,
     Ping,
     Pong,
 }

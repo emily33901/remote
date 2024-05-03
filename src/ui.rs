@@ -6,13 +6,13 @@ use crate::player::video::NV12TextureRender;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
-use std::time::{Instant};
+use std::time::Instant;
 
 use derive_more::{Deref, DerefMut};
 
 use media::decoder::DecoderEvent;
 use media::produce::MediaControl;
-use media::{Timestamp, VideoBuffer};
+use media::{Texture, Timestamp, VideoBuffer};
 
 use tracing::Instrument;
 
@@ -694,7 +694,7 @@ enum Visible {
 struct PeerMediaState {
     start_time: Instant,
     time: Timestamp,
-    texture: ID3D11Texture2D,
+    texture: Arc<Texture>,
 }
 
 #[derive(Default)]
@@ -793,14 +793,14 @@ impl PeerWindowState {
 
                     loop {
                         match decoder_event.try_recv() {
-                            Ok(DecoderEvent::Frame(t, time)) => {
+                            Ok(DecoderEvent::Frame(new_texture, time)) => {
                                 texture = MediaResult::Texture(PeerMediaState {
                                     start_time: last_media
                                         .as_ref()
                                         .map(|m| m.start_time)
                                         .unwrap_or(Instant::now()),
                                     time: time,
-                                    texture: t,
+                                    texture: Arc::new(new_texture),
                                 })
                             }
                             Err(err) => {
@@ -844,10 +844,10 @@ impl PeerWindowState {
                                 });
                             }
 
-                            let (rect, _) = ui.allocate_at_least(
-                                egui::Vec2::new(720.0, 480.0),
-                                egui::Sense::focusable_noninteractive(),
-                            );
+                            const ASPECT: f32 = 9.0 / 16.0;
+
+                            let desired_size = ui.available_width() * egui::vec2(1.0, ASPECT);
+                            let (_id, rect) = ui.allocate_space(desired_size);
 
                             let cb = egui::PaintCallback {
                                 rect: rect,

@@ -3,17 +3,16 @@ mod windows;
 
 use std::str::FromStr;
 
-use ::windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 use eyre::Result;
 use tokio::sync::mpsc;
 
-use crate::VideoBuffer;
+use crate::{texture_pool::Texture, VideoBuffer};
 
 pub enum DecoderControl {
     Data(VideoBuffer),
 }
 pub enum DecoderEvent {
-    Frame(ID3D11Texture2D, crate::Timestamp),
+    Frame(Texture, crate::Timestamp),
 }
 
 #[derive(Debug)]
