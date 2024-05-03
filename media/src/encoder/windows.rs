@@ -1,4 +1,4 @@
-use std::time::UNIX_EPOCH;
+use std::{sync::Arc, time::UNIX_EPOCH};
 
 use ::windows::{core::Interface, Win32::Media::MediaFoundation::*};
 use eyre::{eyre, Result};
@@ -270,21 +270,11 @@ unsafe fn hardware(
                                 .ok_or(eyre!("encoder control closed"))?,
                         );
                     } else if control.is_none() {
-                        // control = Some(last_control.clone().unwrap());
+                        control = Some(last_control.take().unwrap());
                     };
 
                     control.unwrap()
                 };
-
-                // TODO(emily): I don't necessarily know that this is correct here. This time could be ahead of the
-                // next frame that we get from color conversion and we have no way of knowing. This requires slightly
-                // more thought.
-                // TODO(emily): pooled Texture is not clonable because the ownership of the Texture is whether it is
-                // pooled or released. Therefore this cannot be done right now.
-                // last_control = Some(EncoderControl::Frame(
-                //     frame.clone(),
-                //     crate::Timestamp::new(time.duration()), // + std::time::Duration::from_millis(10)),
-                // ));
 
                 let texture = texture_pool.acquire();
 
@@ -296,11 +286,17 @@ unsafe fn hardware(
 
                 media_queue.push_back(texture.clone());
 
-                // tracing::info!("made sample");
-
                 transform.ProcessInput(input_stream_id, &sample, 0)?;
 
-                // tracing::info!("process input");
+                // NOTE(emily): Retain last frame so that we can re-use if encoder is starved.
+                // TODO(emily): I don't necessarily know that the timestamp on this is correct here.
+                // This time could be ahead of the
+                // next frame that we get from color conversion and we have no way of knowing. This requires slightly
+                // more thought.
+                // last_control = Some(EncoderControl::Frame(
+                //     frame,
+                //     crate::Timestamp::new(time.duration() + std::time::Duration::from_millis(10)),
+                // ));
             }
 
             // METransformHaveOutput

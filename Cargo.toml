@@ -5,6 +5,7 @@ workspace = { members = [
     "telemetry/dash",
     "rtc",
     "media",
+    "input",
 ] }
 
 [package]
@@ -58,38 +59,32 @@ egui_demo_lib = "0.27.2"
 [dependencies.windows]
 version = "0.56"
 features = [
-    "implement",
-    "Foundation",
-    "Win32_Foundation",
-    "Win32_System_Com",
-    "Win32_System_Ole",
-    "Win32_System_Memory",
-    "Win32_Graphics_Gdi",
-    "Win32_System_Com_StructuredStorage",
-    "Win32_System_SystemServices",
-    "Win32_UI_Shell_Common",
-    "Win32_UI_Shell",
+    # "implement",
+    # "Foundation",
+    # "Win32_Foundation",
+    # "Win32_System_Com",
+    # "Win32_System_Ole",
+    # "Win32_System_Memory",
+    # # "Win32_Graphics_Gdi",
+    # "Win32_System_Com_StructuredStorage",
+    # "Win32_System_SystemServices",
+    # "Win32_UI_Shell_Common",
+    # "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
-    "Win32_System_LibraryLoader",
-    "Win32_UI_Input_KeyboardAndMouse",
-    "Win32_Graphics_Direct3D_Fxc",
-    "Win32_Graphics_Direct3D12",
-    "Win32_Graphics_Direct3D11",
-    "Win32_Graphics_Dxgi_Common",
-    "Win32_Security",
-    "Win32_System_LibraryLoader",
-    "Win32_System_Threading",
-    "Win32_System_WindowsProgramming",
-    "Win32_UI_WindowsAndMessaging",
-    "Win32_Media_MediaFoundation",
-    "Win32_UI_Shell_PropertiesSystem",
-    "Win32_System_Performance",
+    # "Win32_System_LibraryLoader",
+    # "Win32_UI_Input_KeyboardAndMouse",
+    # # "Win32_Graphics_Direct3D12",
+    # "Win32_Graphics_Direct3D11",
+    # "Win32_Graphics_Dxgi_Common",
+    # "Win32_Security",
+    # "Win32_System_LibraryLoader",
+    # "Win32_System_Threading",
+    # "Win32_System_WindowsProgramming",
+    # "Win32_UI_WindowsAndMessaging",
+    # "Win32_Media_MediaFoundation",
+    # "Win32_UI_Shell_PropertiesSystem",
+    # "Win32_System_Performance",
 ]
-
-# [patch.crates-io]
-
-# ring = { git = "https://github.com/awakecoding/ring", branch = "0.16.20_alpha" }
-# webrtc = { git = "https://github.com/emily33901/webrtc/" }
 
 [profile.release]
 panic = "abort"

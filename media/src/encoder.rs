@@ -3,7 +3,6 @@ mod windows;
 
 use std::str::FromStr;
 
-use ::windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::mpsc;

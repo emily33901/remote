@@ -5,20 +5,17 @@ use tokio::sync::mpsc::{self, error::TryRecvError};
 use tracing::Instrument;
 use windows::{
     core::Interface,
-    Win32::{
-        Graphics::{
-            Direct3D11::{
-                ID3D11Texture2D, D3D11_BOX, D3D11_RESOURCE_MISC_FLAG,
-                D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX, D3D11_TEXTURE2D_DESC,
-            },
-            Dxgi::{
-                Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_MODE_DESC},
-                IDXGIAdapter, IDXGIDevice2, IDXGIKeyedMutex, IDXGIOutput1, IDXGIResource,
-                DXGI_ENUM_MODES_DISABLED_STEREO, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_DESC,
-                DXGI_OUTDUPL_FRAME_INFO, DXGI_OUTPUT_DESC,
-            },
+    Win32::Graphics::{
+        Direct3D11::{
+            ID3D11Texture2D, D3D11_BOX, D3D11_RESOURCE_MISC_FLAG,
+            D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX, D3D11_TEXTURE2D_DESC,
         },
-        System::Performance::QueryPerformanceCounter,
+        Dxgi::{
+            Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_MODE_DESC},
+            IDXGIAdapter, IDXGIDevice2, IDXGIKeyedMutex, IDXGIOutput1, IDXGIResource,
+            DXGI_ENUM_MODES_DISABLED_STEREO, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_DESC,
+            DXGI_OUTDUPL_FRAME_INFO, DXGI_OUTPUT_DESC,
+        },
     },
 };
 
@@ -127,8 +124,6 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
 
         event_tx.blocking_send(DDEvent::Size(desc.ModeDesc.Height, desc.ModeDesc.Height))?;
 
-        let mut start = 0;
-        unsafe { QueryPerformanceCounter(&mut start) }?;
         let start_time = std::time::SystemTime::now();
 
         let mut control_rx_open = || match control_rx.try_recv() {
