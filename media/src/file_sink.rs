@@ -85,6 +85,7 @@ pub fn file_sink(
                         time,
                         duration,
                         key_frame: _,
+                        statistics: _,
                     }) => {
                         let len = data.len();
                         let media_buffer = MFCreateMemoryBuffer(len as u32)?;

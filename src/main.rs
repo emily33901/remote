@@ -2,11 +2,13 @@ mod audio;
 mod chunk;
 mod config;
 mod ext;
+mod input;
 mod logic;
 mod peer;
 mod player;
 mod ui;
 mod video;
+mod windows;
 
 use crate::config::Config;
 use std::str::FromStr;
@@ -100,7 +102,7 @@ async fn main() -> Result<()> {
         // .with(console_subscriber::spawn())
         // .with(tracing_tracy::TracyLayer::default())
         .with(filter)
-        .with(tracing_subscriber::fmt::layer().compact())
+        .with(tracing_subscriber::fmt::layer().pretty())
         .init();
 
     tracing::info!(args.command, config.signal_server, "remote");
@@ -169,10 +171,10 @@ async fn peer_connected(
         async move {
             while let Some(event) = h264_event.recv().await {
                 match event {
-                    media::decoder::DecoderEvent::Frame(tex, time) => {
+                    media::decoder::DecoderEvent::Frame(tex, time, _statistics) => {
                         // Try and give video to player otherwise drop it.
                         // TODO(emily): Probably back pressure
-                        let _ = video_sink_tx.send((tex, time)).await;
+                        let _ = video_sink_tx.send((Arc::new(tex), time)).await;
                     }
                 }
             }

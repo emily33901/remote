@@ -1,7 +1,8 @@
-use std::time::SystemTimeError;
+use std::{collections::HashSet, time::SystemTimeError};
 
 use encoder::FrameIsKeyframe;
 use serde::{Deserialize, Serialize};
+pub use statistics::Statistics;
 
 pub mod dx;
 
@@ -15,6 +16,7 @@ pub mod desktop_duplication;
 pub mod file_sink;
 mod media_queue;
 mod mf;
+mod statistics;
 mod texture_pool;
 mod yuv_buffer;
 
@@ -43,6 +45,10 @@ impl Timestamp {
         Ok(Self(now.duration_since(start)?))
     }
 
+    pub fn new_diff_instant(start: std::time::Instant, now: std::time::Instant) -> Self {
+        Self(now.duration_since(start))
+    }
+
     pub fn hns(&self) -> i64 {
         (self.0.as_nanos() / 100) as i64
     }
@@ -59,6 +65,7 @@ pub struct VideoBuffer {
     pub time: crate::Timestamp,
     pub duration: std::time::Duration,
     pub key_frame: FrameIsKeyframe,
+    pub statistics: Statistics,
 }
 
 impl std::fmt::Debug for VideoBuffer {

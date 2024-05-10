@@ -22,4 +22,8 @@ impl<E> MediaQueue<E> {
     pub(crate) fn drain(&mut self) {
         let _ = self.queue.drain(..);
     }
+
+    pub(crate) fn len(&self) -> usize {
+        self.queue.len()
+    }
 }

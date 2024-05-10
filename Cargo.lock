@@ -2343,12 +2343,13 @@ dependencies = [
 name = "input"
 version = "0.1.0"
 dependencies = [
+ "bitflags 2.5.0",
  "derive_more",
  "eyre",
+ "libloading",
  "parking_lot",
  "scopeguard",
  "serde",
- "telemetry",
  "tokio",
  "tracing",
  "windows 0.56.0",
@@ -3759,6 +3760,7 @@ dependencies = [
  "eyre",
  "futures",
  "humantime",
+ "input",
  "media",
  "once_cell",
  "parking_lot",

@@ -105,7 +105,7 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
                                 let mut chunk_complete = false;
 
                                 if let Ok(_) = chunk.deadline.elapsed() {
-                                    // Ignore elapsed chunk
+                                    // Ignore elapsed chunk 
                                     tracing::trace!("ignoring elapsed chunk");
                                     return Ok(());
                                 }

@@ -19,13 +19,14 @@ impl Drop for Texture {
 }
 
 impl Texture {
-    pub(crate) fn unpooled(texture: ID3D11Texture2D) -> Self {
+    pub fn unpooled(texture: ID3D11Texture2D) -> Self {
         Self(texture, Weak::new())
     }
 }
 
 struct _TexturePool {
-    // TODO(emily): Would probably be smart
+    // TODO(emily): Would probably be smart to use an mpsc channel here as then
+    // we can wait for a pool element and dont need to panic
     pool: VecDeque<ID3D11Texture2D>,
 }
 

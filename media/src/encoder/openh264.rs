@@ -1,4 +1,7 @@
-use std::cell::RefCell;
+use std::{
+    cell::RefCell,
+    time::{Instant, SystemTime},
+};
 
 use openh264::{
     self,
@@ -11,7 +14,11 @@ use eyre::{eyre, Result};
 use tokio::sync::mpsc;
 use tracing::Instrument;
 
-use crate::{dx::ID3D11Texture2DExt, ARBITRARY_MEDIA_CHANNEL_LIMIT};
+use crate::{
+    dx::ID3D11Texture2DExt,
+    statistics::{self, EncodeStatistics},
+    ARBITRARY_MEDIA_CHANNEL_LIMIT,
+};
 
 use crate::yuv_buffer::YUVBuffer2;
 
@@ -88,6 +95,7 @@ pub async fn h264_encoder(
                 .build()?;
 
         loop {
+            // TODO(emily): Like in the media foundation encoder, is this the right thing to do?
             let control = {
                 let mut control = None;
                 while let Ok(c) = control_rx.try_recv() {
@@ -108,6 +116,8 @@ pub async fn h264_encoder(
             let EncoderControl::Frame(frame, time) = control;
 
             {
+                let input_time = Instant::now();
+
                 crate::dx::copy_texture(&staging_texture, &frame, None)?;
 
                 staging_texture.map(&context, |data, source_row_pitch| {
@@ -139,6 +149,14 @@ pub async fn h264_encoder(
                     time: time,
                     duration: std::time::Duration::from_secs_f32(1.0 / target_framerate as f32),
                     key_frame: super::FrameIsKeyframe::No,
+                    statistics: crate::Statistics {
+                        encode: Some(EncodeStatistics {
+                            media_queue_len: 0,
+                            time: input_time.elapsed(),
+                            end_time: SystemTime::now(),
+                        }),
+                        ..Default::default()
+                    },
                 }))?;
             }
         }

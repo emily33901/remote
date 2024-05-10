@@ -6,13 +6,13 @@ use std::str::FromStr;
 use eyre::Result;
 use tokio::sync::mpsc;
 
-use crate::{texture_pool::Texture, VideoBuffer};
+use crate::{texture_pool::Texture, Statistics, VideoBuffer};
 
 pub enum DecoderControl {
     Data(VideoBuffer),
 }
 pub enum DecoderEvent {
-    Frame(Texture, crate::Timestamp),
+    Frame(Texture, crate::Timestamp, Statistics),
 }
 
 #[derive(Debug)]

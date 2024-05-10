@@ -124,8 +124,6 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
 
         event_tx.blocking_send(DDEvent::Size(desc.ModeDesc.Height, desc.ModeDesc.Height))?;
 
-        let start_time = std::time::SystemTime::now();
-
         let mut control_rx_open = || match control_rx.try_recv() {
             Ok(_) | Err(TryRecvError::Empty) => true,
             Err(TryRecvError::Disconnected) => false,
@@ -152,6 +150,8 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
         scopeguard::defer! {
             tracing::debug!("stopping");
         }
+
+        let start_time = std::time::Instant::now();
 
         while control_rx_open() {
             let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
@@ -233,7 +233,10 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
                         // TODO(emily): We should probably allow ourselves to be backpressured here
                         match event_tx.try_send(DDEvent::Frame(
                             out_texture,
-                            crate::Timestamp::new_diff(start_time, std::time::SystemTime::now())?,
+                            crate::Timestamp::new_diff_instant(
+                                start_time,
+                                std::time::Instant::now(),
+                            ),
                         )) {
                             Ok(_) => {}
                             Err(mpsc::error::TrySendError::Closed(_)) => break,

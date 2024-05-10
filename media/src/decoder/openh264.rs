@@ -1,3 +1,5 @@
+use std::time::{Instant, SystemTime};
+
 use openh264::{
     decoder::{Decoder, DecoderConfig},
     formats::YUVSource,
@@ -6,7 +8,10 @@ use openh264::{
 use tokio::sync::mpsc;
 use tracing::Instrument;
 
-use crate::{dx::ID3D11Texture2DExt, texture_pool::TexturePool, ARBITRARY_MEDIA_CHANNEL_LIMIT};
+use crate::{
+    dx::ID3D11Texture2DExt, statistics::DecodeStatistics, texture_pool::TexturePool, Statistics,
+    ARBITRARY_MEDIA_CHANNEL_LIMIT,
+};
 
 use super::{DecoderControl, DecoderEvent};
 
@@ -95,6 +100,9 @@ pub async fn h264_decoder(
                         .blocking_recv()
                         .ok_or(eyre!("decoder control closed"))?;
 
+                    let input_time = Instant::now();
+                    let decode_start_time = SystemTime::now();
+
                     for unit in nal_units(&buffer.data) {
                         if let Ok(Some(output)) = decoder.decode(unit) {
                             // WebRTC uses the timestamp of the packet rather than the decoded buffer
@@ -124,7 +132,18 @@ pub async fn h264_decoder(
                                 Ok(())
                             })?;
 
-                            event_tx.blocking_send(DecoderEvent::Frame(frame, timestamp))?;
+                            event_tx.blocking_send(DecoderEvent::Frame(
+                                frame,
+                                timestamp,
+                                Statistics {
+                                    decode: Some(DecodeStatistics {
+                                        media_queue_len: 0,
+                                        time: input_time.elapsed(),
+                                        start_time: decode_start_time,
+                                    }),
+                                    ..buffer.statistics.clone()
+                                },
+                            ))?;
                         }
                     }
                 }

@@ -6,13 +6,13 @@ use crate::player::video::NV12TextureRender;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use derive_more::{Deref, DerefMut};
 
 use media::decoder::DecoderEvent;
 use media::produce::MediaControl;
-use media::{Texture, Timestamp, VideoBuffer};
+use media::{Statistics, Texture, Timestamp, VideoBuffer};
 
 use tracing::Instrument;
 
@@ -695,6 +695,7 @@ struct PeerMediaState {
     start_time: Instant,
     time: Timestamp,
     texture: Arc<Texture>,
+    statistics: Statistics,
 }
 
 #[derive(Default)]
@@ -712,6 +713,7 @@ struct PeerWindowState {
     >,
 
     stream_texture_renderer: Arc<std::sync::OnceLock<NV12TextureRender>>,
+    sink: std::sync::OnceLock<mpsc::Sender<(Arc<media::Texture>, Timestamp)>>,
     connected_peer_media: HashMap<
         PeerId,
         (
@@ -728,6 +730,8 @@ enum ShouldRemove {
 
 impl PeerWindowState {
     fn ui(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, peer: &UIPeer) -> ShouldRemove {
+        let config = Config::load();
+
         let mut result = ShouldRemove::No;
 
         let id = peer.our_id();
@@ -742,7 +746,9 @@ impl PeerWindowState {
             }
         });
 
-        egui::Window::new(format!("Peer {id}")).show(ctx, |ui| {
+        let mut peer_window_open = true;
+
+        egui::Window::new(format!("Peer {id}")).open(&mut peer_window_open).show(ctx, |ui| {
             ui.text_edit_singleline(&mut self.connect_peer_id);
             if ui.button("connect").clicked() {
                 tokio::spawn({
@@ -789,30 +795,31 @@ impl PeerWindowState {
                 if let Some((last_media, decoder_event)) =
                     self.connected_peer_media.get_mut(their_peer_id)
                 {
-                    let mut texture = MediaResult::Empty(last_media.clone());
+                    let mut media = MediaResult::Empty(last_media.clone());
 
                     loop {
                         match decoder_event.try_recv() {
-                            Ok(DecoderEvent::Frame(new_texture, time)) => {
-                                texture = MediaResult::Texture(PeerMediaState {
+                            Ok(DecoderEvent::Frame(new_texture, time, statistics)) => {
+                                media = MediaResult::Texture(PeerMediaState {
                                     start_time: last_media
                                         .as_ref()
                                         .map(|m| m.start_time)
                                         .unwrap_or(Instant::now()),
                                     time: time,
                                     texture: Arc::new(new_texture),
+                                    statistics: statistics,
                                 })
                             }
                             Err(err) => {
                                 if let mpsc::error::TryRecvError::Disconnected = err {
-                                    texture = MediaResult::Done;
+                                    media = MediaResult::Done;
                                 }
                                 break;
                             }
                         }
                     }
 
-                    match texture {
+                    match media {
                         MediaResult::Done => {
                             self.connected_peer_media.remove(their_peer_id).unwrap();
                         }
@@ -821,32 +828,68 @@ impl PeerWindowState {
                             *last_media = Some(media.clone());
 
                             {
-                                let time_diff =
-                                    if media.start_time.elapsed() > media.time.duration() {
-                                        media.start_time.elapsed() - media.time.duration()
-                                    } else {
-                                        media.time.duration() - media.start_time.elapsed()
-                                    };
-                                ui.horizontal(|ui| {
-                                    ui.colored_label(
-                                        color::interpolate_color(
-                                            egui::Color32::GREEN,
-                                            egui::Color32::RED,
-                                            ((time_diff.as_secs_f32() * 1000.0) / 50.0)
-                                                .clamp(0.0, 1.0),
-                                        ),
-                                        format!(
-                                            "{:8}ms ({:8}ms)",
-                                            media.time.duration().as_millis(),
-                                            time_diff.as_millis()
-                                        ),
+                                ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
+                                let time_diff = (media.start_time.elapsed().saturating_sub(media.time.duration()))
+                                    .max(media.time.duration().saturating_sub(media.start_time.elapsed()));
+
+                                ui.colored_label(
+                                    color::interpolate_color(
+                                        egui::Color32::GREEN,
+                                        egui::Color32::RED,
+                                        ((time_diff.as_secs_f32() * 1000.0) / 50.0).clamp(0.0, 1.0),
+                                    ),
+                                    format!(
+                                        "{:8}ms (duplicated to display) ({:8}ms)",
+                                        time_diff.as_millis(),
+                                        media.time.duration().as_millis(),
+                                    ),
+                                );
+                                ui.end_row();
+                                let stat = |ui: &mut egui::Ui, label, len, time: Duration| {
+                                    ui.label(format!("{len:8} {label} queued",));
+                                    ui.end_row();
+                                    ui.label(format!(
+                                        "{:8}ms ({:2.2} frames) {label} time",
+                                        time.as_millis(),
+                                        time.as_secs_f32() / (1.0 / (config.framerate as f32)),
+                                    ));
+                                    ui.end_row();
+                                };
+
+                                if let Some(encode) = &media.statistics.encode {
+                                    stat(ui, "encoder", encode.media_queue_len, encode.time);
+                                }
+
+                                if let Some(decode) = &media.statistics.decode {
+                                    stat(
+                                        ui,
+                                        "decoder",
+                                        decode.media_queue_len,
+                                        decode.time,
                                     );
-                                });
+                                }
+
+                                if let Ok(network_time) = media
+                                    .statistics
+                                    .decode
+                                    .unwrap()
+                                    .start_time
+                                    .duration_since(media.statistics.encode.unwrap().end_time)
+                                {
+                                    ui.label(format!(
+                                        "{:8}ms ({:2.2} frames) network time (encode end - decode start)",
+                                        network_time.as_millis(),
+                                        network_time.as_secs_f32()
+                                            / (1.0 / (config.framerate as f32)),
+                                    ));
+                                    ui.end_row();
+                                }
                             }
 
-                            const ASPECT: f32 = 9.0 / 16.0;
+                            let config = Config::load();
+                            let aspect: f32 = config.height as f32 / config.width as f32;
 
-                            let desired_size = ui.available_width() * egui::vec2(1.0, ASPECT);
+                            let desired_size = ui.available_width() * egui::vec2(1.0, aspect);
                             let (_id, rect) = ui.allocate_space(desired_size);
 
                             let cb = egui::PaintCallback {
@@ -933,7 +976,11 @@ impl PeerWindowState {
             }
         });
 
-        result
+        if !peer_window_open {
+            ShouldRemove::Yes
+        } else {
+            result
+        }
     }
 }
 
@@ -1100,10 +1147,9 @@ impl App {
 }
 
 pub async fn ui() -> Result<()> {
-    // telemetry::client::sink().await;
+    let _system = crate::windows::System::new()?;
 
     let mut app = App::default();
-
     let config = Config::load();
 
     let (width, height) = (config.width, config.height);
@@ -1111,7 +1157,7 @@ pub async fn ui() -> Result<()> {
     let event_loop = EventLoopBuilder::new().build()?; // .with_any_thread(true).build()?;
     let window = WindowBuilder::new()
         .with_title("remote")
-        .with_inner_size(PhysicalSize::new(width / 2, height / 2))
+        .with_inner_size(PhysicalSize::new(width, height))
         .build(&event_loop)?;
 
     let window_handle = if let RawWindowHandle::Win32(raw) = window.window_handle()?.as_raw() {

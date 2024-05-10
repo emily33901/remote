@@ -1,4 +1,7 @@
-use std::{sync::Arc, time::UNIX_EPOCH};
+use std::{
+    sync::Arc,
+    time::{Instant, SystemTime, UNIX_EPOCH},
+};
 
 use ::windows::{core::Interface, Win32::Media::MediaFoundation::*};
 use eyre::{eyre, Result};
@@ -9,6 +12,7 @@ use crate::{
     dx::{self, TextureCPUAccess, TextureUsage},
     media_queue::MediaQueue,
     mf::make_dxgi_sample,
+    statistics::{EncodeStatistics, Statistics},
     texture_pool::TexturePool,
 };
 
@@ -23,6 +27,7 @@ use ::windows::Win32::Graphics::Direct3D11::*;
 
 use super::{EncoderControl, EncoderEvent};
 
+#[tracing::instrument]
 pub async fn h264_encoder(
     width: u32,
     height: u32,
@@ -31,7 +36,12 @@ pub async fn h264_encoder(
 ) -> Result<(mpsc::Sender<EncoderControl>, mpsc::Receiver<EncoderEvent>)> {
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
     let (control_tx, control_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
+
+    let span = tracing::Span::current();
+
     tokio::task::spawn_blocking(move || unsafe {
+        let _span_guard = span.enter();
+
         mf::init()?;
 
         let (device, context) = dx::create_device()?;
@@ -112,6 +122,8 @@ pub async fn h264_encoder(
 
         let codec_api = transform.cast::<ICodecAPI>()?;
         codec_api.SetValue(&CODECAPI_AVLowLatencyMode, &true.into())?;
+        codec_api.SetValue(&CODECAPI_AVEncCommonLowLatency, &true.into())?;
+        codec_api.SetValue(&CODECAPI_AVEncMPVDefaultBPictureCount, &0.into())?;
 
         {
             let output_type = MFCreateMediaType()?;
@@ -235,45 +247,17 @@ unsafe fn hardware(
     // whenever it asks for one. So keep the last control around so that we can use it again if needed.
     let mut last_control: Option<EncoderControl> = None;
 
-    'main: loop {
+    loop {
         let event = event_gen.GetEvent(MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS(0))?;
         let event_type = event.GetType()?;
-
-        // tracing::info!("encoder event {event_type}");
 
         match event_type {
             // METransformNeedInput
             601 => {
-                // TODO(emily): I really don't know whether there is any reason here to even to this.
-                // We take the most recent texture here and throw anything that is behind that. I don't know whether
-                // that is the correct thing to do though. Maybe we should only do that if we are behind?
                 let EncoderControl::Frame(frame, time) = {
-                    let mut control = None;
-
-                    loop {
-                        match control_rx.try_recv() {
-                            Ok(new_control) => control = Some(new_control),
-                            Err(TryRecvError::Disconnected) => {
-                                tracing::debug!("EncoderControl disconnected, going down");
-                                break 'main;
-                            }
-                            Err(TryRecvError::Empty) => break,
-                        }
-                    }
-
-                    // If we didn't get a frame, and we don't have one from previously then wait for one now
-                    if control.is_none() && last_control.is_none() {
-                        tracing::warn!("encoder starved and no last_control");
-                        control = Some(
-                            control_rx
-                                .blocking_recv()
-                                .ok_or(eyre!("encoder control closed"))?,
-                        );
-                    } else if control.is_none() {
-                        control = Some(last_control.take().unwrap());
-                    };
-
-                    control.unwrap()
+                    control_rx
+                        .blocking_recv()
+                        .ok_or(eyre!("encoder control closed"))?
                 };
 
                 let texture = texture_pool.acquire();
@@ -284,19 +268,9 @@ unsafe fn hardware(
                 sample.SetSampleTime(time.hns())?;
                 sample.SetSampleDuration(10_000_000 / target_framerate as i64)?;
 
-                media_queue.push_back(texture.clone());
+                media_queue.push_back((texture.clone(), Instant::now()));
 
                 transform.ProcessInput(input_stream_id, &sample, 0)?;
-
-                // NOTE(emily): Retain last frame so that we can re-use if encoder is starved.
-                // TODO(emily): I don't necessarily know that the timestamp on this is correct here.
-                // This time could be ahead of the
-                // next frame that we get from color conversion and we have no way of knowing. This requires slightly
-                // more thought.
-                // last_control = Some(EncoderControl::Frame(
-                //     frame,
-                //     crate::Timestamp::new(time.duration() + std::time::Duration::from_millis(10)),
-                // ));
             }
 
             // METransformHaveOutput
@@ -369,7 +343,7 @@ unsafe fn hardware(
                             );
                         };
 
-                        media_queue.pop_front();
+                        let (_input_texture, input_time) = media_queue.pop_front();
 
                         // TODO(emily): Given what was said above we really shouldn't be blocking here.
                         event_tx.blocking_send(EncoderEvent::Data(VideoBuffer {
@@ -378,6 +352,14 @@ unsafe fn hardware(
                             time: crate::Timestamp::new_hns(sample_time),
                             duration: duration,
                             key_frame: is_keyframe,
+                            statistics: Statistics {
+                                encode: Some(EncodeStatistics {
+                                    media_queue_len: media_queue.len(),
+                                    time: input_time.elapsed(),
+                                    end_time: SystemTime::now(),
+                                }),
+                                ..Default::default()
+                            },
                         }))?;
                     }
 
@@ -528,6 +510,9 @@ unsafe fn software(
                                 time: crate::Timestamp::new_hns(sample_time as i64),
                                 duration: duration,
                                 key_frame: is_keyframe,
+                                statistics: Statistics {
+                                    ..Default::default()
+                                },
                             }))
                             .unwrap();
 

@@ -1,3 +1,8 @@
+use std::{
+    cell::RefCell,
+    time::{Instant, SystemTime},
+};
+
 use ::windows::{
     core::Interface,
     Win32::{
@@ -10,8 +15,10 @@ use tokio::sync::mpsc;
 use windows::{core::VARIANT, Win32::Graphics::Direct3D11::ID3D11Texture2D};
 
 use crate::{
+    media_queue::MediaQueue,
+    statistics::DecodeStatistics,
     texture_pool::{Texture, TexturePool},
-    VideoBuffer, ARBITRARY_MEDIA_CHANNEL_LIMIT,
+    Statistics, VideoBuffer, ARBITRARY_MEDIA_CHANNEL_LIMIT,
 };
 
 use crate::{
@@ -87,7 +94,7 @@ pub async fn h264_decoder(
         codec_api.SetValue(&CODECAPI_AVLowLatencyMode, &1_u32.into())?;
         codec_api.SetValue(&CODECAPI_AVDecNumWorkerThreads, &8_i32.into())?;
         codec_api.SetValue(&CODECAPI_AVDecVideoAcceleration_H264, &1_u32.into())?;
-        // codec_api.SetValue(&CODECAPI_AVDecVideoThumbnailGenerationMode, &FALSE.into())?;
+        codec_api.SetValue(&CODECAPI_AVDecVideoThumbnailGenerationMode, &0_u32.into())?;
 
         let attributes = transform.GetAttributes()?;
         // attributes.set_u32(&CODECAPI_AVLowLatencyMode, 1)?;
@@ -195,6 +202,8 @@ unsafe fn hardware(
         10,
     );
 
+    let mut media_queue = RefCell::new(MediaQueue::new());
+
     loop {
         let DecoderControl::Data(VideoBuffer {
             data,
@@ -202,6 +211,7 @@ unsafe fn hardware(
             time,
             duration,
             key_frame: _,
+            statistics,
         }) = control_rx
             .blocking_recv()
             .ok_or(eyre::eyre!("decoder control closed"))?;
@@ -227,8 +237,8 @@ unsafe fn hardware(
         sample.SetSampleTime(time.hns())?;
         sample.SetSampleDuration(duration.as_nanos() as i64 / 100)?;
 
-        let process_output =
-            || -> Result<Option<(Texture, crate::Timestamp)>, windows::core::Error> {
+        let mut process_output =
+            || -> Result<Option<(Texture, crate::Timestamp, Statistics)>, windows::core::Error> {
                 let mut output_buffer = MFT_OUTPUT_DATA_BUFFER::default();
                 output_buffer.dwStatus = 0;
                 output_buffer.dwStreamID = 0;
@@ -250,9 +260,24 @@ unsafe fn hardware(
 
                         copy_texture(&output_texture, &texture, Some(subresource_index))?;
 
+                        let (input_statistics, input_time, decode_start_time): (
+                            _,
+                            Instant,
+                            SystemTime,
+                        ) = media_queue.borrow_mut().pop_front();
+
                         Ok(Some((
                             output_texture,
                             crate::Timestamp::new_hns(timestamp_hns),
+                            Statistics {
+                                decode: Some(DecodeStatistics {
+                                    media_queue_len: media_queue.borrow().len(),
+                                    time: input_time.elapsed(),
+                                    start_time: decode_start_time,
+                                }),
+
+                                ..input_statistics
+                            },
                         )))
                     }
                     Err(err) => {
@@ -262,14 +287,19 @@ unsafe fn hardware(
                 }
             };
 
+        media_queue
+            .borrow_mut()
+            .push_back((statistics, Instant::now(), SystemTime::now()));
+
         match transform
             .ProcessInput(0, &sample, 0)
             .map_err(|err| err.code())
         {
             Ok(_) => loop {
                 match process_output().map_err(|err| err.code()) {
-                    Ok(Some((texture, timestamp))) => {
-                        event_tx.blocking_send(DecoderEvent::Frame(texture, timestamp))?;
+                    Ok(Some((texture, timestamp, statistics))) => {
+                        event_tx
+                            .blocking_send(DecoderEvent::Frame(texture, timestamp, statistics))?;
                     }
                     Ok(None) => {
                         // Continue trying to get more frames
@@ -332,6 +362,8 @@ unsafe fn software(
     transform.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
     transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
 
+    let media_queue = RefCell::new(MediaQueue::new());
+
     loop {
         let DecoderControl::Data(VideoBuffer {
             data,
@@ -339,6 +371,7 @@ unsafe fn software(
             time,
             duration,
             key_frame: _,
+            statistics,
         }) = control_rx
             .blocking_recv()
             .ok_or(eyre::eyre!("decoder control closed"))?;
@@ -408,10 +441,21 @@ unsafe fn software(
 
                     copy_texture(&output_texture, &staging_texture, None)?;
 
+                    let (input_statistics, input_time, decode_start_time): (_, Instant, _) =
+                        media_queue.borrow_mut().pop_front();
+
                     event_tx
                         .blocking_send(DecoderEvent::Frame(
                             Texture::unpooled(output_texture),
                             crate::Timestamp::new_hns(timestamp),
+                            Statistics {
+                                decode: Some(DecodeStatistics {
+                                    media_queue_len: media_queue.borrow().len(),
+                                    time: input_time.elapsed(),
+                                    start_time: decode_start_time,
+                                }),
+                                ..input_statistics
+                            },
                         ))
                         .unwrap();
 
@@ -423,6 +467,10 @@ unsafe fn software(
                 }
             }
         };
+
+        media_queue
+            .borrow_mut()
+            .push_back((statistics, Instant::now(), SystemTime::now()));
 
         match transform
             .ProcessInput(0, &sample, 0)

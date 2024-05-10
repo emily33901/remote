@@ -45,7 +45,7 @@ pub(crate) fn create_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
 
         let mut flags = FLAGS;
 
-        // #[cfg(debug_assertions)]
+        #[cfg(debug_assertions)]
         {
             flags |= D3D11_CREATE_DEVICE_DEBUG;
         }
@@ -85,7 +85,7 @@ pub fn create_device_and_swapchain(
                 Width: width,
                 Height: height,
                 RefreshRate: windows::Win32::Graphics::Dxgi::Common::DXGI_RATIONAL {
-                    Numerator: 60,
+                    Numerator: 144,
                     Denominator: 1,
                 },
                 Format: DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
@@ -416,7 +416,6 @@ pub fn copy_texture(
     };
 
     let context3: ID3D11DeviceContext3 = context.cast()?;
-
     unsafe { context3.Flush1(D3D11_CONTEXT_TYPE_COPY, None) };
 
     Ok(())
