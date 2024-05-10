@@ -175,6 +175,8 @@ pub(crate) async fn converter(
                     input_type.set_fraction(&MF_MT_FRAME_SIZE, input_width, input_height)?;
                     input_type.set_u32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
 
+                    mf::debug_video_format(&input_type)?;
+
                     transform.SetInputType(0, &input_type, 0)?;
                 }
 
@@ -186,7 +188,9 @@ pub(crate) async fn converter(
                     output_type.set_fraction(&MF_MT_FRAME_SIZE, output_width, output_height)?;
 
                     if format == output_format.into() {
+                        mf::debug_video_format(&output_type)?;
                         transform.SetOutputType(0, &output_type, 0)?;
+
                         break;
                     }
                 }
@@ -195,8 +199,8 @@ pub(crate) async fn converter(
                     || {
                         super::dx::TextureBuilder::new(
                             &device,
-                            output_width,
-                            output_height,
+                            input_width,
+                            input_height,
                             input_format.into(),
                         )
                         .bind_render_target()
