@@ -140,7 +140,7 @@ pub async fn h264_encoder(
             // output_type.SetUINT32(&MF_MT_MAX_KEYFRAME_SPACING, 100)?;
             // output_type.set_u32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
 
-            output_type.set_u32(&MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Base.0 as u32)?;
+            output_type.set_u32(&MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_High.0 as u32)?;
 
             debug_video_format(&output_type)?;
 

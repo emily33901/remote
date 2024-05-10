@@ -42,10 +42,24 @@ float3 ConvertYUVtoRGB(float3 yuv)
     return saturate(yuv);
 }
 
+float3 RGBtoSRGB(float3 rgb) 
+{
+    float3 s1 = sqrt(rgb);
+    float3 s2 = sqrt(s1);
+    float3 s3 = sqrt(s2);
+    return saturate(0.585122381 * s1 + 0.783140355 * s2 - 0.368262736 * s3);
+}
+
+float3 SRGBtoRGB(float3 srgb) {
+    return 0.012522878 * srgb +
+        0.682171111 * srgb * srgb +
+        0.305306011 * srgb * srgb * srgb;
+}
+
 float4 ps_main(VS_Output input) : SV_Target
 {
     float y = luminanceChannel.Sample(defaultSampler, input.uv);
-    float2 uv = chrominanceChannel.Sample(defaultSampler, input.uv);
+    float2 uv = chrominanceChannel.Sample(defaultSampler, input.uv);    
 
-    return min16float4(ConvertYUVtoRGB(float3(y, uv)), 1.f);
+    return min16float4(SRGBtoRGB(ConvertYUVtoRGB(float3(y, uv))), 1.f);
 }

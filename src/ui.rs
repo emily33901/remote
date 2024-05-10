@@ -892,6 +892,10 @@ impl PeerWindowState {
                             let desired_size = ui.available_width() * egui::vec2(1.0, aspect);
                             let (_id, rect) = ui.allocate_space(desired_size);
 
+                            let _ = self.sink.get_or_init(|| {
+                                crate::player::video::sink(config.width, config.height, "remote-player-window").unwrap()
+                            }).try_send((media.texture.clone(), Timestamp::new_millis(0)));
+
                             let cb = egui::PaintCallback {
                                 rect: rect,
                                 callback: std::sync::Arc::new(egui_directx11::CallbackFn::new({
