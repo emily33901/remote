@@ -24,7 +24,7 @@ use crate::{
     encoder::{self, Encoder},
     produce::{MediaControl, MediaEvent},
     texture_pool::{Texture, TexturePool},
-    ARBITRARY_MEDIA_CHANNEL_LIMIT,
+    Encoding, EncodingOptions, ARBITRARY_MEDIA_CHANNEL_LIMIT,
 };
 
 use super::dx;
@@ -265,20 +265,21 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
 
 pub async fn duplicate_desktop(
     encoder_api: Encoder,
+    encoding: Encoding,
+    encoding_options: EncodingOptions,
     width: u32,
     height: u32,
-    framerate: u32,
-    bitrate: u32,
 ) -> Result<(mpsc::Sender<MediaControl>, mpsc::Receiver<MediaEvent>)> {
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
     let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
 
-    let (h264_control, mut h264_event) = encoder_api.run(width, height, framerate, bitrate).await?;
+    let (h264_control, mut h264_event) = encoder_api
+        .run(width, height, encoding, encoding_options)
+        .await?;
 
     let (convert_control, mut convert_event) = color_conversion::converter(
         width,
         height,
-        framerate,
         color_conversion::Format::BGRA,
         color_conversion::Format::NV12,
     )

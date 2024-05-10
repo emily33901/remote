@@ -124,6 +124,10 @@ pub async fn h264_encoder(
         codec_api.SetValue(&CODECAPI_AVLowLatencyMode, &true.into())?;
         codec_api.SetValue(&CODECAPI_AVEncCommonLowLatency, &true.into())?;
         codec_api.SetValue(&CODECAPI_AVEncMPVDefaultBPictureCount, &0.into())?;
+        codec_api.SetValue(
+            &CODECAPI_AVEncCommonRateControlMode,
+            &(eAVEncCommonRateControlMode_Quality.0 as u32).into(),
+        )?;
 
         {
             let output_type = MFCreateMediaType()?;
@@ -140,7 +144,7 @@ pub async fn h264_encoder(
             // output_type.SetUINT32(&MF_MT_MAX_KEYFRAME_SPACING, 100)?;
             // output_type.set_u32(&MF_MT_ALL_SAMPLES_INDEPENDENT, 1)?;
 
-            output_type.set_u32(&MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_High.0 as u32)?;
+            output_type.set_u32(&MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Base.0 as u32)?;
 
             debug_video_format(&output_type)?;
 

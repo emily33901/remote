@@ -17,6 +17,7 @@ use std::{collections::HashMap, fmt::Display};
 
 use clap::Parser;
 use eyre::Result;
+use media::{Encoding, EncodingOptions, H264EncodingOptions};
 use peer::PeerControl;
 use rtc;
 use signal::SignallingControl;
@@ -357,23 +358,29 @@ async fn peer(produce: &bool) -> Result<()> {
                 match async move {
                     // let maybe_file = std::env::var("media_filename").ok();
 
+                    let encoding = Encoding::H264;
+                    let encoding_options = EncodingOptions::H264(H264EncodingOptions {
+                        target_bitrate: config.bitrate,
+                        target_framerate: config.framerate,
+                    });
+
                     let (_tx, mut rx) = if let Some(file) = config.media_filename.as_ref() {
                         media::produce::produce(
                             config.encoder_api,
+                            encoding,
+                            encoding_options,
                             file,
                             config.width,
                             config.height,
-                            config.framerate,
-                            config.bitrate,
                         )
                         .await?
                     } else {
                         media::desktop_duplication::duplicate_desktop(
                             config.encoder_api,
+                            encoding,
+                            encoding_options,
                             config.width,
                             config.height,
-                            config.framerate,
-                            config.bitrate,
                         )
                         .await?
                     };

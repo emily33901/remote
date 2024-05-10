@@ -58,7 +58,6 @@ impl From<Format> for super::dx::TextureFormat {
 pub(crate) async fn converter(
     output_width: u32,
     output_height: u32,
-    target_framerate: u32,
     input_format: Format,
     output_format: Format,
 ) -> Result<(mpsc::Sender<ConvertControl>, mpsc::Receiver<ConvertEvent>)> {
@@ -219,7 +218,8 @@ pub(crate) async fn converter(
             let (mut last_input_width, mut last_input_height) = (output_width, output_height);
 
             loop {
-                let ConvertControl::Frame(frame, time) = {
+                // TODO(emily): Like in encoder why are we pulling multiple frames here, just pull the current one
+                let ConvertControl::Frame(frame, timestamp) = {
                     let mut control = None;
 
                     loop {
@@ -286,8 +286,9 @@ pub(crate) async fn converter(
                     make_dxgi_sample(&texture, None)?
                 };
 
-                sample.SetSampleTime(time.hns())?;
-                sample.SetSampleDuration(10_000_000 / target_framerate as i64)?;
+                sample.SetSampleTime(10)?;
+                // sample.SetSampleDuration(10_000_000 / target_framerate as i64)?;
+                sample.SetSampleDuration(1000)?;
 
                 let result = transform
                     .ProcessInput(0, &sample, 0)
@@ -301,7 +302,7 @@ pub(crate) async fn converter(
                             .map_err(|err| err.code());
 
                         match output_result {
-                            Ok((output_texture, timestamp)) => {
+                            Ok((output_texture, _)) => {
                                 media_queue.pop_front();
 
                                 match event_tx

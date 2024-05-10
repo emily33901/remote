@@ -1,6 +1,7 @@
 use std::{collections::HashSet, time::SystemTimeError};
 
 use encoder::FrameIsKeyframe;
+use eyre::Error;
 use serde::{Deserialize, Serialize};
 pub use statistics::Statistics;
 
@@ -19,6 +20,56 @@ mod mf;
 mod statistics;
 mod texture_pool;
 mod yuv_buffer;
+
+#[derive(Debug)]
+pub enum Encoding {
+    H264,
+    H265,
+    AV1,
+    VP9,
+}
+
+#[derive(Debug)]
+pub struct H264EncodingOptions {
+    pub target_framerate: u32,
+    pub target_bitrate: u32,
+}
+
+#[derive(Debug)]
+pub struct H2565EncodingOptions {}
+
+#[derive(Debug)]
+pub struct AV1EncodingOptions {}
+
+#[derive(Debug)]
+pub struct VP9EncodingOptions {}
+
+#[derive(Debug)]
+pub enum EncodingOptions {
+    H264(H264EncodingOptions),
+    H265(H2565EncodingOptions),
+    AV1(AV1EncodingOptions),
+    VP9(VP9EncodingOptions),
+}
+
+impl TryFrom<EncodingOptions> for H264EncodingOptions {
+    type Error = eyre::Report;
+
+    fn try_from(value: EncodingOptions) -> Result<Self, Self::Error> {
+        if let EncodingOptions::H264(options) = value {
+            Ok(options)
+        } else {
+            Err(eyre::eyre!("Not H264 options"))
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum SupportsEncodingOptions {
+    Yes,
+    // TODO(emily): Consider actually saying whats wrong instead of passing back a string
+    No(String),
+}
 
 pub type Texture = texture_pool::Texture;
 

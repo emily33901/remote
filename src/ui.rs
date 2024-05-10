@@ -12,7 +12,9 @@ use derive_more::{Deref, DerefMut};
 
 use media::decoder::DecoderEvent;
 use media::produce::MediaControl;
-use media::{Statistics, Texture, Timestamp, VideoBuffer};
+use media::{
+    Encoding, EncodingOptions, H264EncodingOptions, Statistics, Texture, Timestamp, VideoBuffer,
+};
 
 use tracing::Instrument;
 
@@ -291,24 +293,30 @@ impl RemotePeer {
             async move {
                 let config = Config::load();
 
+                let encoding = Encoding::H264;
+                let encoding_options = EncodingOptions::H264(H264EncodingOptions {
+                    target_bitrate: config.bitrate,
+                    target_framerate: config.framerate,
+                });
+
                 // TODO(emily): Race condition here where tx is being kept alive by rx
                 let (tx, mut rx) = if let Some(file) = config.media_filename.as_ref() {
                     media::produce::produce(
                         config.encoder_api,
+                        encoding,
+                        encoding_options,
                         file,
                         mode.width,
                         mode.height,
-                        mode.refresh_rate,
-                        bitrate,
                     )
                     .await?
                 } else {
                     media::desktop_duplication::duplicate_desktop(
                         config.encoder_api,
+                        encoding,
+                        encoding_options,
                         mode.width,
                         mode.height,
-                        mode.refresh_rate,
-                        bitrate,
                     )
                     .await?
                 };

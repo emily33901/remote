@@ -10,6 +10,10 @@ use tokio::sync::mpsc;
 use eyre::Result;
 
 use crate::texture_pool::Texture;
+use crate::Encoding;
+use crate::EncodingOptions;
+use crate::H264EncodingOptions;
+use crate::SupportsEncodingOptions;
 use crate::VideoBuffer;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -36,23 +40,55 @@ pub enum Encoder {
 }
 
 impl Encoder {
-    #[tracing::instrument]
+    // #[tracing::instrument]
     pub async fn run(
         &self,
         width: u32,
         height: u32,
-        target_framerate: u32,
-        target_bitrate: u32,
+        encoding: Encoding,
+        encoding_options: EncodingOptions,
     ) -> Result<(mpsc::Sender<EncoderControl>, mpsc::Receiver<EncoderEvent>)> {
+        match encoding {
+            Encoding::H264 => {
+                let options: H264EncodingOptions = encoding_options.try_into()?;
+                match self {
+                    Encoder::MediaFoundation => {
+                        windows::h264_encoder(
+                            width,
+                            height,
+                            options.target_framerate,
+                            options.target_bitrate,
+                        )
+                        .await
+                    }
+                    Encoder::X264 => todo!("x264 not implemented"),
+                    Encoder::OpenH264 => {
+                        openh264::h264_encoder(
+                            width,
+                            height,
+                            options.target_framerate,
+                            options.target_bitrate,
+                        )
+                        .await
+                    }
+                }
+            }
+            _ => unimplemented!(),
+        }
+    }
+
+    pub fn supported_encodings(&self) -> &[Encoding] {
         match self {
             Encoder::MediaFoundation => {
-                windows::h264_encoder(width, height, target_framerate, target_bitrate).await
+                &[Encoding::AV1, Encoding::H264, Encoding::H265, Encoding::VP9]
             }
-            Encoder::X264 => todo!("x264 not implemented"),
-            Encoder::OpenH264 => {
-                openh264::h264_encoder(width, height, target_framerate, target_bitrate).await
-            }
+            Encoder::X264 => &[Encoding::H264],
+            Encoder::OpenH264 => &[Encoding::H264],
         }
+    }
+
+    pub fn supports_encoding_options(&self, options: &EncodingOptions) -> SupportsEncodingOptions {
+        SupportsEncodingOptions::Yes
     }
 }
 
