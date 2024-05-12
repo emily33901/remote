@@ -20,7 +20,7 @@ use windows::{
 };
 
 use crate::{
-    color_conversion,
+    conversion,
     encoder::{self, Encoder},
     produce::{MediaControl, MediaEvent},
     texture_pool::{Texture, TexturePool},
@@ -278,11 +278,11 @@ pub async fn duplicate_desktop(
         .run(width, height, frame_rate, encoding, encoding_options)
         .await?;
 
-    let (convert_control, mut convert_event) = color_conversion::converter(
+    let (convert_control, mut convert_event) = conversion::converter(
         width,
         height,
-        color_conversion::Format::BGRA,
-        color_conversion::Format::NV12,
+        conversion::Format::BGRA,
+        conversion::Format::NV12,
     )
     .await?;
 
@@ -305,7 +305,7 @@ pub async fn duplicate_desktop(
                     DDEvent::Size(_, _) => {}
                     DDEvent::Frame(texture, time) => {
                         convert_control
-                            .send(color_conversion::ConvertControl::Frame(texture, time))
+                            .send(conversion::ConvertControl::Frame(texture, time))
                             .await?
                     }
                 }
@@ -323,7 +323,7 @@ pub async fn duplicate_desktop(
         match async move {
             while let Some(event) = convert_event.recv().await {
                 match event {
-                    color_conversion::ConvertEvent::Frame(frame, time, statistics) => {
+                    conversion::ConvertEvent::Frame(frame, time, statistics) => {
                         h264_control
                             .send(encoder::EncoderControl::Frame(
                                 frame,

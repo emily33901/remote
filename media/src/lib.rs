@@ -12,7 +12,7 @@ pub mod produce;
 pub mod decoder;
 pub mod encoder;
 
-mod color_conversion;
+mod conversion;
 pub mod desktop_duplication;
 pub mod file_sink;
 mod media_queue;
