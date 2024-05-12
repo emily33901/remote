@@ -1,4 +1,5 @@
 use eyre::Result;
+use media::{Encoding, EncodingOptions};
 use serde::{Deserialize, Serialize};
 
 use tokio::sync::mpsc;
@@ -15,16 +16,26 @@ pub(crate) struct Mode {
     pub(crate) refresh_rate: u32,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PeerStreamRequest {
     pub(crate) preferred_mode: Option<Mode>,
-    pub(crate) preferred_bitrate: Option<u32>,
+    pub(crate) preferred_encoding: Option<Encoding>,
+    pub(crate) preferred_encoding_options: Option<EncodingOptions>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) enum PeerStreamRequestResponse {
-    Accept { mode: Mode, bitrate: u32 },
-    Negotiate { viable_modes: Vec<Mode> },
+    /// Accept is 'this is what I am going to be sending to you'
+    Accept {
+        mode: Mode,
+        encoding: Encoding,
+        encoding_options: EncodingOptions,
+    },
+    /// Negotiate is 'here is what I can offer, pick one of these'
+    Negotiate {
+        viable_modes: Vec<Mode>,
+        viable_encodings: Vec<Encoding>,
+    },
     Reject,
 }
 

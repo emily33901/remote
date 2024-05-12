@@ -4,13 +4,16 @@ use crate::config::{self, Config};
 use crate::logic::{Mode, PeerStreamRequest, PeerStreamRequestResponse};
 use crate::player::video::NV12TextureRender;
 
-use std::collections::HashMap;
+use core::time;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
 use derive_more::{Deref, DerefMut};
 
+use egui::Layout;
 use media::decoder::DecoderEvent;
+use media::encoder::Encoder;
 use media::produce::MediaControl;
 use media::{
     Encoding, EncodingOptions, H264EncodingOptions, Statistics, Texture, Timestamp, VideoBuffer,
@@ -162,12 +165,16 @@ impl RemotePeer {
                 }
 
                 PeerEvent::RequestStreamResponse(response) => match response {
-                    PeerStreamRequestResponse::Accept { mode, bitrate } => {
-                        tracing::info!(?mode, bitrate, "stream accepted");
+                    PeerStreamRequestResponse::Accept {
+                        mode,
+                        encoding,
+                        encoding_options,
+                    } => {
+                        tracing::info!(?mode, ?encoding, ?encoding_options, "stream accepted");
 
                         let (control, event) = config
                             .decoder_api
-                            .run(mode.width, mode.height, mode.refresh_rate, bitrate)
+                            .run(mode.width, mode.height, mode.refresh_rate)
                             .await?;
 
                         decoder_control = Some(control);
@@ -219,8 +226,11 @@ impl RemotePeer {
     fn stream_request(
         peer_control: &mpsc::WeakSender<PeerControl>,
         media_control: &Weak<Mutex<Option<mpsc::Sender<MediaControl>>>>,
-    ) -> oneshot::Sender<PeerStreamRequestResponse> {
-        let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+    ) -> oneshot::Sender<(PeerStreamRequestResponse, Option<Encoder>)> {
+        let (response_tx, response_rx): (
+            oneshot::Sender<(PeerStreamRequestResponse, Option<Encoder>)>,
+            _,
+        ) = tokio::sync::oneshot::channel();
 
         tokio::spawn({
             let peer_control = peer_control.clone();
@@ -229,11 +239,24 @@ impl RemotePeer {
                 let response = response_rx.await;
                 if let Some(peer_control) = peer_control.upgrade() {
                     match response {
-                        Ok(response) => {
-                            if let PeerStreamRequestResponse::Accept { mode, bitrate } = &response {
-                                // If we accepted then start the stream
-                                let media_sender_rx =
-                                    Self::start_streaming(&peer_control.downgrade(), mode, bitrate);
+                        Ok((response, encoder)) => {
+                            if let PeerStreamRequestResponse::Accept {
+                                mode,
+                                encoding,
+                                encoding_options,
+                            } = &response
+                            {
+                                // We accepted the stream
+                                let config = Config::load();
+
+                                let media_sender_rx = Self::start_streaming(
+                                    &peer_control.downgrade(),
+                                    config.media_filename.as_deref(),
+                                    mode,
+                                    encoder.clone().unwrap_or(config.encoder_api),
+                                    encoding.clone(),
+                                    encoding_options.clone(),
+                                );
 
                                 tokio::spawn({
                                     async move {
@@ -272,8 +295,11 @@ impl RemotePeer {
     #[tracing::instrument]
     fn start_streaming(
         peer_control: &mpsc::WeakSender<PeerControl>,
+        media_filename: Option<&str>,
         mode: &Mode,
-        bitrate: &u32,
+        encoder: Encoder,
+        encoding: Encoding,
+        encoding_options: EncodingOptions,
     ) -> oneshot::Receiver<mpsc::Sender<MediaControl>> {
         // TODO(emily): Thinking that here we can return 2 channels, one for video_tx and one for audio_tx.
         // these could even come from higher up in peer instead of just sending to peer-control. This would also avoid
@@ -289,34 +315,30 @@ impl RemotePeer {
         tokio::spawn({
             let weak_control = peer_control.clone();
             let mode = mode.clone();
-            let bitrate = bitrate.clone();
+            let media_filename = media_filename.map(|s| s.to_owned());
             async move {
                 let config = Config::load();
 
-                let encoding = Encoding::H264;
-                let encoding_options = EncodingOptions::H264(H264EncodingOptions {
-                    target_bitrate: config.bitrate,
-                    target_framerate: config.framerate,
-                });
-
                 // TODO(emily): Race condition here where tx is being kept alive by rx
-                let (tx, mut rx) = if let Some(file) = config.media_filename.as_ref() {
+                let (tx, mut rx) = if let Some(file) = media_filename.as_ref() {
                     media::produce::produce(
-                        config.encoder_api,
+                        encoder,
                         encoding,
                         encoding_options,
                         file,
                         mode.width,
                         mode.height,
+                        mode.refresh_rate,
                     )
                     .await?
                 } else {
                     media::desktop_duplication::duplicate_desktop(
-                        config.encoder_api,
+                        encoder,
                         encoding,
                         encoding_options,
                         mode.width,
                         mode.height,
+                        mode.refresh_rate,
                     )
                     .await?
                 };
@@ -712,11 +734,12 @@ struct PeerWindowState {
     connect_peer_id: String,
     connection_requests: HashMap<ConnectionId, PeerId>,
     connected_peers: HashMap<PeerId, mpsc::Sender<PeerControl>>,
+    stream_request: PeerStreamRequest,
     stream_requests: HashMap<
         PeerId,
         (
             PeerStreamRequest,
-            oneshot::Sender<PeerStreamRequestResponse>,
+            oneshot::Sender<(PeerStreamRequestResponse, Option<Encoder>)>,
         ),
     >,
 
@@ -729,6 +752,7 @@ struct PeerWindowState {
             mpsc::Receiver<media::decoder::DecoderEvent>,
         ),
     >,
+    peer_statistics_average: HashMap<PeerId, VecDeque<Statistics>>,
 }
 
 enum ShouldRemove {
@@ -736,62 +760,157 @@ enum ShouldRemove {
     No,
 }
 
-impl PeerWindowState {
-    fn ui(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, peer: &UIPeer) -> ShouldRemove {
-        let config = Config::load();
+impl PeerStreamRequest {
+    fn ui(&mut self, ui: &mut egui::Ui, peer: &UIPeer, their_peer_id: &PeerId) {
+        ui.group(|ui| {
+            ui.label("start stream");
+            ui.end_row();
 
-        let mut result = ShouldRemove::No;
+            ui.separator();
+            ui.end_row();
 
-        let id = peer.our_id();
-        ui.horizontal(|ui| {
-            ui.label(format!("{}", id));
+            egui::Grid::new(ui.id()).num_columns(2).show(ui, |ui| {
+                let mut changed = false;
+                ui.label("encoding");
 
-            ui.selectable_value(&mut self.visible, Visible::No, "hide");
-            ui.selectable_value(&mut self.visible, Visible::Yes, "show");
+                ui.horizontal(|ui| {
+                    changed = changed
+                        || ui
+                            .selectable_value(
+                                &mut self.preferred_encoding,
+                                Some(Encoding::H264),
+                                "H264",
+                            )
+                            .changed();
+                    changed = changed
+                        || ui
+                            .selectable_value(
+                                &mut self.preferred_encoding,
+                                Some(Encoding::H265),
+                                "H265",
+                            )
+                            .changed();
+                    changed = changed
+                        || ui
+                            .selectable_value(
+                                &mut self.preferred_encoding,
+                                Some(Encoding::AV1),
+                                "AV1",
+                            )
+                            .changed();
+                    changed = changed
+                        || ui
+                            .selectable_value(
+                                &mut self.preferred_encoding,
+                                Some(Encoding::VP9),
+                                "VP9",
+                            )
+                            .changed();
+                    changed = changed
+                        || ui
+                            .selectable_value(&mut self.preferred_encoding, None, "Default")
+                            .changed();
+                });
 
-            if ui.button("disconnect").clicked() {
-                result = ShouldRemove::Yes;
-            }
-        });
+                ui.end_row();
 
-        let mut peer_window_open = true;
+                if changed {
+                    self.preferred_encoding_options = match self.preferred_encoding {
+                        Some(Encoding::H264) => Some(EncodingOptions::H264(H264EncodingOptions {
+                            rate_control: media::RateControlMode::Quality(70),
+                        })),
+                        Some(Encoding::AV1) => {
+                            Some(EncodingOptions::AV1(media::AV1EncodingOptions {}))
+                        }
+                        Some(Encoding::H265) => {
+                            Some(EncodingOptions::H265(media::H2565EncodingOptions {}))
+                        }
+                        Some(Encoding::VP9) => {
+                            Some(EncodingOptions::VP9(media::VP9EncodingOptions {}))
+                        }
+                        None => None,
+                    }
+                }
 
-        egui::Window::new(format!("Peer {id}")).open(&mut peer_window_open).show(ctx, |ui| {
-            ui.text_edit_singleline(&mut self.connect_peer_id);
-            if ui.button("connect").clicked() {
+                match &mut self.preferred_encoding_options {
+                    Some(EncodingOptions::H264(encoding_options)) => {
+                        ui.label("rate control");
+                        ui.horizontal(|ui| {
+                            ui.selectable_value(
+                                &mut encoding_options.rate_control,
+                                media::RateControlMode::Quality(70),
+                                "Quality",
+                            )
+                            .changed();
+                            ui.selectable_value(
+                                &mut encoding_options.rate_control,
+                                media::RateControlMode::Bitrate(8000000),
+                                "Bitrate",
+                            )
+                            .changed();
+                        });
+                        ui.end_row();
+
+                        ui.label("parameter");
+
+                        match &mut encoding_options.rate_control {
+                            media::RateControlMode::Bitrate(bitrate) => {
+                                ui.add(
+                                    egui::Slider::new(bitrate, 100000..=8000000).logarithmic(true),
+                                );
+                            }
+                            media::RateControlMode::Quality(quality) => {
+                                ui.add(egui::Slider::new(quality, 0..=100));
+                            }
+                        }
+                        ui.end_row();
+                    }
+                    Some(_) => {}
+                    None => {}
+                }
+
+                ui.end_row();
+            });
+
+            if ui.button("request").clicked() {
                 tokio::spawn({
-                    let connect_peer_id: PeerId = self.connect_peer_id.clone().into();
                     let peer = peer.clone();
+                    let peer_id = their_peer_id.clone();
+                    let stream_request = self.clone();
                     async move {
-                        peer.connect(connect_peer_id.clone()).await.unwrap();
+                        peer.request_stream(peer_id, stream_request).await.unwrap();
                     }
                 });
             }
-            ui.end_row();
+        });
+    }
+}
 
-            ui.heading("Connected Peers");
-            ui.end_row();
+impl PeerWindowState {
+    fn window_ui(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, peer: &UIPeer) {
+        let config = Config::load();
 
-            for (their_peer_id, _control) in &self.connected_peers {
-                ui.label(format!("{}", their_peer_id));
-
-                if ui.button("request stream").clicked() {
-                    tokio::spawn({
-                        let peer = peer.clone();
-                        let peer_id = their_peer_id.clone();
-                        async move {
-                            peer.request_stream(
-                                peer_id,
-                                PeerStreamRequest {
-                                    preferred_mode: None,
-                                    preferred_bitrate: None,
-                                },
-                            )
-                            .await
-                            .unwrap();
-                        }
-                    });
+        ui.text_edit_singleline(&mut self.connect_peer_id);
+        if ui.button("connect").clicked() {
+            tokio::spawn({
+                let connect_peer_id: PeerId = self.connect_peer_id.clone().into();
+                let peer = peer.clone();
+                async move {
+                    peer.connect(connect_peer_id.clone()).await.unwrap();
                 }
+            });
+        }
+        ui.end_row();
+
+        ui.heading("Connected Peers");
+        ui.end_row();
+
+        for (their_peer_id, _control) in &self.connected_peers {
+            ui.group(|ui| {
+                ui.heading(format!("{}", their_peer_id));
+
+                self.stream_request.ui(ui, peer, their_peer_id);
+
                 ui.end_row();
 
                 enum MediaResult {
@@ -853,28 +972,65 @@ impl PeerWindowState {
                                     ),
                                 );
                                 ui.end_row();
-                                let stat = |ui: &mut egui::Ui, label, len, time: Duration| {
+
+                                fn stat(ui: &mut egui::Ui, label: &str, len: usize, time: Duration, time_iter: impl Iterator<Item = Duration>) {
+                                    let config = Config::load();
+
+                                    let (total_duration, count) = time_iter.fold((time::Duration::from_secs(0), 0_usize), |(duration, count), other_duration| { (duration + other_duration, count + 1)});
+                                    let average_millis = total_duration.as_millis() as f32 / count as f32;
+
                                     ui.label(format!("{len:8} {label} queued",));
                                     ui.end_row();
                                     ui.label(format!(
-                                        "{:8}ms ({:2.2} frames) {label} time",
+                                        "{:8}ms {:8}ms avg ({:2.2} frames) {label} time",
                                         time.as_millis(),
+                                        average_millis,
                                         time.as_secs_f32() / (1.0 / (config.framerate as f32)),
                                     ));
                                     ui.end_row();
+                                }
+
+                                let average_statistics = self.peer_statistics_average
+                                    .get_mut(their_peer_id);
+
+                                let average_statistics = if let None = average_statistics {
+                                    self.peer_statistics_average.insert(their_peer_id.clone(), VecDeque::new());
+                                        self.peer_statistics_average.get_mut(their_peer_id).unwrap()
+                                } else {
+                                    average_statistics.unwrap()
                                 };
 
+                                average_statistics.push_back(media.statistics.clone());
+                                if average_statistics.len() > 200 {
+                                    average_statistics.pop_front();
+                                }
+
                                 if let Some(encode) = &media.statistics.encode {
-                                    stat(ui, "encoder", encode.media_queue_len, encode.time);
+                                    let duration_iter = average_statistics
+                                        .iter()
+                                        .filter_map(|s| s.encode.as_ref().map(|e| e.time));
+                                    stat(ui, "encoder", encode.media_queue_len, encode.time, duration_iter);
                                 }
 
                                 if let Some(decode) = &media.statistics.decode {
+                                    let duration_iter = average_statistics
+                                        .iter()
+                                        .filter_map(|s| s.decode.as_ref().map(|e| e.time));
+
                                     stat(
                                         ui,
                                         "decoder",
                                         decode.media_queue_len,
                                         decode.time,
+                                        duration_iter
                                     );
+                                }
+
+                                if let Some(conversion) = &media.statistics.convert {
+                                    let duration_iter = average_statistics
+                                        .iter()
+                                        .filter_map(|s| s.convert.as_ref().map(|e| e.time));
+                                    stat(ui, "conversion", conversion.media_queue_len, conversion.time, duration_iter);
                                 }
 
                                 if let Ok(network_time) = media
@@ -885,7 +1041,7 @@ impl PeerWindowState {
                                     .duration_since(media.statistics.encode.unwrap().end_time)
                                 {
                                     ui.label(format!(
-                                        "{:8}ms ({:2.2} frames) network time (encode end - decode start)",
+                                        "{:8}ms ({:2.2} frames) network time (decode start - encode end)",
                                         network_time.as_millis(),
                                         network_time.as_secs_f32()
                                             / (1.0 / (config.framerate as f32)),
@@ -899,10 +1055,6 @@ impl PeerWindowState {
 
                             let desired_size = ui.available_width() * egui::vec2(1.0, aspect);
                             let (_id, rect) = ui.allocate_space(desired_size);
-
-                            let _ = self.sink.get_or_init(|| {
-                                crate::player::video::sink(config.width, config.height, "remote-player-window").unwrap()
-                            }).try_send((media.texture.clone(), Timestamp::new_millis(0)));
 
                             let cb = egui::PaintCallback {
                                 rect: rect,
@@ -922,71 +1074,102 @@ impl PeerWindowState {
                             ui.painter().add(cb);
                         }
                     }
-                }
-            }
 
-            ui.heading("Connection Requests");
+                }
+            });
+        }
+
+        ui.heading("Connection Requests");
+        ui.end_row();
+
+        for (c_id, p_id) in &self.connection_requests {
+            ui.label(format!("{}", p_id));
+            ui.label(format!("{}", c_id));
+
+            if ui.button("accept").clicked() {
+                tokio::spawn({
+                    let peer = peer.clone();
+                    let p_id = p_id.clone();
+                    async move {
+                        peer.accept_connection(&p_id).await.unwrap();
+                    }
+                });
+            }
             ui.end_row();
+        }
 
-            for (c_id, p_id) in &self.connection_requests {
-                ui.label(format!("{}", p_id));
-                ui.label(format!("{}", c_id));
+        ui.heading("Stream Requests");
+        ui.end_row();
 
-                if ui.button("accept").clicked() {
-                    tokio::spawn({
-                        let peer = peer.clone();
-                        let p_id = p_id.clone();
-                        async move {
-                            peer.accept_connection(&p_id).await.unwrap();
-                        }
-                    });
-                }
-                ui.end_row();
+        let mut stream_request_clicked = None;
+
+        for (peer_id, (request, _)) in &self.stream_requests {
+            ui.label(format!("{} {:?}", peer_id, request));
+
+            if ui.button("accept").clicked() {
+                let config = Config::load();
+
+                stream_request_clicked = Some((
+                    peer_id.clone(),
+                    PeerStreamRequestResponse::Accept {
+                        mode: request
+                            .preferred_mode
+                            .as_ref()
+                            .map(|m| crate::logic::Mode {
+                                width: m.width,
+                                height: m.height,
+                                refresh_rate: m.refresh_rate,
+                            })
+                            .unwrap_or(crate::logic::Mode {
+                                width: config.width,
+                                height: config.height,
+                                refresh_rate: config.framerate,
+                            }),
+                        encoding: request.preferred_encoding.clone().unwrap_or(Encoding::H264),
+                        encoding_options: request.preferred_encoding_options.clone().unwrap_or(
+                            EncodingOptions::H264(H264EncodingOptions {
+                                rate_control: media::RateControlMode::Quality(70),
+                            }),
+                        ),
+                    },
+                    // TODO(emily): Do not hardcode this value please please please please
+                    Encoder::MediaFoundation,
+                ));
             }
-
-            ui.heading("Stream Requests");
             ui.end_row();
+        }
 
-            let mut stream_request_clicked = None;
+        if let Some((peer_id, response, encoder)) = stream_request_clicked {
+            let (_request, response_channel) = self.stream_requests.remove(&peer_id).unwrap();
 
-            for (peer_id, (request, _)) in &self.stream_requests {
-                ui.label(format!("{} {:?}", peer_id, request));
-                if ui.button("accept").clicked() {
-                    let config = Config::load();
+            response_channel.send((response, Some(encoder))).unwrap();
+        }
+    }
 
-                    stream_request_clicked = Some((
-                        peer_id.clone(),
-                        PeerStreamRequestResponse::Accept {
-                            mode: crate::logic::Mode {
-                                width: request
-                                    .preferred_mode
-                                    .as_ref()
-                                    .map(|m| m.width)
-                                    .unwrap_or(config.width),
-                                height: request
-                                    .preferred_mode
-                                    .as_ref()
-                                    .map(|m| m.height)
-                                    .unwrap_or(config.height),
-                                refresh_rate: request
-                                    .preferred_mode
-                                    .as_ref()
-                                    .map(|m| m.refresh_rate)
-                                    .unwrap_or(config.framerate),
-                            },
-                            bitrate: request.preferred_bitrate.unwrap_or(config.bitrate),
-                        },
-                    ));
-                }
-                ui.end_row();
-            }
+    fn ui(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, peer: &UIPeer) -> ShouldRemove {
+        let config = Config::load();
 
-            if let Some((peer_id, response)) = stream_request_clicked {
-                let (_request, response_channel) = self.stream_requests.remove(&peer_id).unwrap();
+        let mut result = ShouldRemove::No;
 
-                response_channel.send(response).unwrap();
+        let id = peer.our_id();
+        ui.horizontal(|ui| {
+            ui.label(format!("{}", id));
+
+            ui.selectable_value(&mut self.visible, Visible::No, "hide");
+            ui.selectable_value(&mut self.visible, Visible::Yes, "show");
+
+            if ui.button("disconnect").clicked() {
+                result = ShouldRemove::Yes;
             }
         });
+
+        let mut peer_window_open = true;
+
+        egui::Window::new(format!("Peer {id}"))
+            .open(&mut peer_window_open)
+            .show(ctx, |ui| {
+                self.window_ui(ctx, ui, peer);
+            });
 
         if !peer_window_open {
             ShouldRemove::Yes
@@ -1018,7 +1201,7 @@ enum AppEvent {
         (
             PeerId,
             PeerStreamRequest,
-            tokio::sync::oneshot::Sender<crate::logic::PeerStreamRequestResponse>,
+            tokio::sync::oneshot::Sender<(PeerStreamRequestResponse, Option<Encoder>)>,
         ),
     ),
     DecoderEvent(
@@ -1150,6 +1333,8 @@ impl App {
                                 .connected_peers
                                 .remove(&their_id)
                                 .expect("Expect remote PeerControl to exist when it goes away");
+
+                            peer_window_state.connected_peer_media.remove(&their_id);
                         }
                     }
                 }

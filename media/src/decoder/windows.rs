@@ -12,7 +12,6 @@ use ::windows::{
 };
 use eyre::Result;
 use tokio::sync::mpsc;
-use windows::{core::VARIANT, Win32::Graphics::Direct3D11::ID3D11Texture2D};
 
 use crate::{
     media_queue::MediaQueue,
@@ -36,9 +35,6 @@ pub async fn h264_decoder(
 ) -> Result<(mpsc::Sender<DecoderControl>, mpsc::Receiver<DecoderEvent>)> {
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
     let (control_tx, control_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
-
-    telemetry::client::watch_channel(&control_tx, "h264-decoder-control").await;
-    telemetry::client::watch_channel(&event_tx, "h264-decoder-event").await;
 
     tokio::task::spawn_blocking(move || unsafe {
         mf::init()?;
@@ -144,7 +140,7 @@ pub async fn h264_decoder(
             input_type.set_fraction(&MF_MT_FRAME_RATE, target_framerate, 1)?;
             input_type.set_fraction(&MF_MT_PIXEL_ASPECT_RATIO, 1, 1)?;
 
-            input_type.set_u32(&MF_MT_AVG_BITRATE, target_bitrate)?;
+            // input_type.set_u32(&MF_MT_AVG_BITRATE, target_bitrate)?;
 
             input_type.set_u32(&MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive.0 as u32)?;
 
@@ -156,7 +152,7 @@ pub async fn h264_decoder(
             output_type.set_guid(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
             output_type.set_guid(&MF_MT_SUBTYPE, &MFVideoFormat_NV12)?;
 
-            output_type.set_u32(&MF_MT_AVG_BITRATE, target_bitrate)?;
+            // output_type.set_u32(&MF_MT_AVG_BITRATE, target_bitrate)?;
 
             output_type.set_fraction(&MF_MT_FRAME_SIZE, width, height)?;
             output_type.set_fraction(&MF_MT_FRAME_RATE, target_framerate, 1)?;

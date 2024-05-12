@@ -28,14 +28,13 @@ impl Decoder {
         width: u32,
         height: u32,
         target_framerate: u32,
-        target_bitrate: u32,
     ) -> Result<(mpsc::Sender<DecoderControl>, mpsc::Receiver<DecoderEvent>)> {
         match self {
             Decoder::MediaFoundation => {
-                windows::h264_decoder(width, height, target_framerate, target_bitrate).await
+                windows::h264_decoder(width, height, target_framerate, 0).await
             }
             Decoder::OpenH264 => {
-                openh264::h264_decoder(width, height, target_framerate, target_bitrate).await
+                openh264::h264_decoder(width, height, target_framerate, 0).await
                 // openh264::h264_decoder(width, height, target_framerate, target_bitrate).await
             }
         }

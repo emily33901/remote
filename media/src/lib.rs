@@ -21,7 +21,7 @@ mod statistics;
 mod texture_pool;
 mod yuv_buffer;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Encoding {
     H264,
     H265,
@@ -29,22 +29,27 @@ pub enum Encoding {
     VP9,
 }
 
-#[derive(Debug)]
-pub struct H264EncodingOptions {
-    pub target_framerate: u32,
-    pub target_bitrate: u32,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum RateControlMode {
+    Bitrate(u32),
+    Quality(u32),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct H264EncodingOptions {
+    pub rate_control: RateControlMode,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct H2565EncodingOptions {}
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AV1EncodingOptions {}
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VP9EncodingOptions {}
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EncodingOptions {
     H264(H264EncodingOptions),
     H265(H2565EncodingOptions),

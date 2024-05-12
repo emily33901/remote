@@ -17,7 +17,7 @@ use tracing::Instrument;
 use crate::{
     dx::ID3D11Texture2DExt,
     statistics::{self, EncodeStatistics},
-    ARBITRARY_MEDIA_CHANNEL_LIMIT,
+    RateControlMode, ARBITRARY_MEDIA_CHANNEL_LIMIT,
 };
 
 use crate::yuv_buffer::YUVBuffer2;
@@ -70,7 +70,7 @@ pub async fn h264_encoder(
     width: u32,
     height: u32,
     target_framerate: u32,
-    target_bitrate: u32,
+    rate_control: RateControlMode,
 ) -> Result<(mpsc::Sender<EncoderControl>, mpsc::Receiver<EncoderEvent>)> {
     let (event_tx, event_rx) = mpsc::channel::<EncoderEvent>(ARBITRARY_MEDIA_CHANNEL_LIMIT);
     let (control_tx, mut control_rx) =
@@ -81,7 +81,19 @@ pub async fn h264_encoder(
 
         let config = EncoderConfig::new()
             .max_frame_rate(target_framerate as f32)
-            .set_bitrate_bps(target_bitrate);
+            .enable_skip_frame(true);
+
+        let config = match rate_control {
+            RateControlMode::Bitrate(bitrate) => config
+                .rate_control_mode(openh264::encoder::RateControlMode::Bitrate)
+                .set_bitrate_bps(bitrate),
+            RateControlMode::Quality(quality) => {
+                config
+                    .rate_control_mode(openh264::encoder::RateControlMode::Quality)
+                    .set_bitrate_bps(8_000_000)
+                // TODO(emily): OpenH264-rs has no way to set quality param
+            }
+        };
 
         let api = OpenH264API::from_source();
         let mut encoder = Encoder::with_api_config(api, config)?;
@@ -113,7 +125,7 @@ pub async fn h264_encoder(
                 control.unwrap()
             };
 
-            let EncoderControl::Frame(frame, time) = control;
+            let EncoderControl::Frame(frame, time, statistics) = control;
 
             {
                 let input_time = Instant::now();
@@ -155,7 +167,7 @@ pub async fn h264_encoder(
                             time: input_time.elapsed(),
                             end_time: SystemTime::now(),
                         }),
-                        ..Default::default()
+                        ..statistics
                     },
                 }))?;
             }

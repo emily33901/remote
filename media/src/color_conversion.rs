@@ -1,4 +1,4 @@
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use eyre::{eyre, Result};
 use tokio::sync::mpsc::{self, error::TryRecvError};
@@ -14,6 +14,7 @@ use windows::{
 use crate::{
     dx::ID3D11Texture2DExt,
     media_queue::MediaQueue,
+    statistics::ConversionStatistics,
     texture_pool::{Texture, TexturePool},
     ARBITRARY_MEDIA_CHANNEL_LIMIT,
 };
@@ -27,7 +28,7 @@ pub(crate) enum ConvertControl {
     Frame(Texture, crate::Timestamp),
 }
 pub(crate) enum ConvertEvent {
-    Frame(Texture, crate::Timestamp),
+    Frame(Texture, crate::Timestamp, ConversionStatistics),
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -244,6 +245,7 @@ pub(crate) async fn converter(
 
                     control.unwrap()
                 };
+                let start_time = Instant::now();
 
                 let sample = {
                     let (width, height) = {
@@ -305,9 +307,14 @@ pub(crate) async fn converter(
                             Ok((output_texture, _)) => {
                                 media_queue.pop_front();
 
-                                match event_tx
-                                    .blocking_send(ConvertEvent::Frame(output_texture, timestamp))
-                                {
+                                match event_tx.blocking_send(ConvertEvent::Frame(
+                                    output_texture,
+                                    timestamp,
+                                    ConversionStatistics {
+                                        media_queue_len: 0,
+                                        time: start_time.elapsed(),
+                                    },
+                                )) {
                                     Err(err) => {
                                         tracing::debug!("Failed to send convert event, done");
                                         break;

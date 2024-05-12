@@ -269,12 +269,13 @@ pub async fn duplicate_desktop(
     encoding_options: EncodingOptions,
     width: u32,
     height: u32,
+    frame_rate: u32,
 ) -> Result<(mpsc::Sender<MediaControl>, mpsc::Receiver<MediaEvent>)> {
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
     let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
 
     let (h264_control, mut h264_event) = encoder_api
-        .run(width, height, encoding, encoding_options)
+        .run(width, height, frame_rate, encoding, encoding_options)
         .await?;
 
     let (convert_control, mut convert_event) = color_conversion::converter(
@@ -322,9 +323,17 @@ pub async fn duplicate_desktop(
         match async move {
             while let Some(event) = convert_event.recv().await {
                 match event {
-                    color_conversion::ConvertEvent::Frame(frame, time) => {
+                    color_conversion::ConvertEvent::Frame(frame, time, statistics) => {
                         h264_control
-                            .send(encoder::EncoderControl::Frame(frame, time))
+                            .send(encoder::EncoderControl::Frame(
+                                frame,
+                                time,
+                                crate::Statistics {
+                                    encode: None,
+                                    decode: None,
+                                    convert: Some(statistics),
+                                },
+                            ))
                             .await?
                     }
                 }

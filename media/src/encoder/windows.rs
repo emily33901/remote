@@ -14,6 +14,7 @@ use crate::{
     mf::make_dxgi_sample,
     statistics::{EncodeStatistics, Statistics},
     texture_pool::TexturePool,
+    RateControlMode,
 };
 
 use crate::{mf::debug_video_format, VideoBuffer, ARBITRARY_MEDIA_CHANNEL_LIMIT};
@@ -32,7 +33,7 @@ pub async fn h264_encoder(
     width: u32,
     height: u32,
     target_framerate: u32,
-    target_bitrate: u32,
+    rate_control: RateControlMode,
 ) -> Result<(mpsc::Sender<EncoderControl>, mpsc::Receiver<EncoderEvent>)> {
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
     let (control_tx, control_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
@@ -124,17 +125,37 @@ pub async fn h264_encoder(
         codec_api.SetValue(&CODECAPI_AVLowLatencyMode, &true.into())?;
         codec_api.SetValue(&CODECAPI_AVEncCommonLowLatency, &true.into())?;
         codec_api.SetValue(&CODECAPI_AVEncMPVDefaultBPictureCount, &0.into())?;
-        codec_api.SetValue(
-            &CODECAPI_AVEncCommonRateControlMode,
-            &(eAVEncCommonRateControlMode_Quality.0 as u32).into(),
-        )?;
+
+        match rate_control {
+            RateControlMode::Quality(quality) => {
+                codec_api.SetValue(
+                    &CODECAPI_AVEncCommonRateControlMode,
+                    &(eAVEncCommonRateControlMode_Quality.0 as u32).into(),
+                )?;
+
+                codec_api.SetValue(&CODECAPI_AVEncCommonQuality, &quality.into())?;
+            }
+            RateControlMode::Bitrate(bitrate) => {
+                codec_api.SetValue(
+                    &CODECAPI_AVEncCommonRateControlMode,
+                    &(eAVEncCommonRateControlMode_UnconstrainedVBR.0 as u32).into(),
+                )?;
+
+                codec_api.SetValue(&CODECAPI_AVEncCommonMaxBitRate, &bitrate.into())?;
+            }
+        }
 
         {
             let output_type = MFCreateMediaType()?;
             output_type.set_guid(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
             output_type.set_guid(&MF_MT_SUBTYPE, &MFVideoFormat_H264)?;
 
-            output_type.set_u32(&MF_MT_AVG_BITRATE, target_bitrate)?;
+            // match rate_control {
+            //     RateControlMode::Bitrate(bitrate) => {
+            //         output_type.set_u32(&MF_MT_AVG_BITRATE, bitrate)?;
+            //     }
+            //     _ => {}
+            // }
 
             output_type.set_fraction(&MF_MT_FRAME_SIZE, width, height)?;
             output_type.set_fraction(&MF_MT_FRAME_RATE, target_framerate, 1)?;
@@ -258,7 +279,7 @@ unsafe fn hardware(
         match event_type {
             // METransformNeedInput
             601 => {
-                let EncoderControl::Frame(frame, time) = {
+                let EncoderControl::Frame(frame, time, statistics) = {
                     control_rx
                         .blocking_recv()
                         .ok_or(eyre!("encoder control closed"))?
@@ -272,7 +293,7 @@ unsafe fn hardware(
                 sample.SetSampleTime(time.hns())?;
                 sample.SetSampleDuration(10_000_000 / target_framerate as i64)?;
 
-                media_queue.push_back((texture.clone(), Instant::now()));
+                media_queue.push_back((texture.clone(), Instant::now(), statistics));
 
                 transform.ProcessInput(input_stream_id, &sample, 0)?;
             }
@@ -347,7 +368,7 @@ unsafe fn hardware(
                             );
                         };
 
-                        let (_input_texture, input_time) = media_queue.pop_front();
+                        let (_input_texture, input_time, statistics) = media_queue.pop_front();
 
                         // TODO(emily): Given what was said above we really shouldn't be blocking here.
                         event_tx.blocking_send(EncoderEvent::Data(VideoBuffer {
@@ -362,7 +383,7 @@ unsafe fn hardware(
                                     time: input_time.elapsed(),
                                     end_time: SystemTime::now(),
                                 }),
-                                ..Default::default()
+                                ..statistics
                             },
                         }))?;
                     }
@@ -404,7 +425,7 @@ unsafe fn software(
     transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
 
     loop {
-        let EncoderControl::Frame(frame, time) = control_rx
+        let EncoderControl::Frame(frame, time, statistics) = control_rx
             .blocking_recv()
             .ok_or(eyre::eyre!("encoder control closed"))?;
 

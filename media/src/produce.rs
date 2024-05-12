@@ -375,6 +375,7 @@ pub async fn produce(
     path: &str,
     width: u32,
     height: u32,
+    frame_rate: u32,
 ) -> Result<(mpsc::Sender<MediaControl>, mpsc::Receiver<MediaEvent>)> {
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
     let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
@@ -386,7 +387,7 @@ pub async fn produce(
     });
 
     let (h264_control, mut h264_event) = encoder_api
-        .run(width, height, encoding, encoding_options)
+        .run(width, height, frame_rate, encoding, encoding_options)
         .await?;
 
     tokio::task::spawn_blocking({
@@ -448,6 +449,9 @@ pub async fn produce(
                     h264_control.blocking_send(encoder::EncoderControl::Frame(
                         output_texture,
                         crate::Timestamp::new_hns(media.video_timestamp),
+                        crate::Statistics {
+                            ..Default::default()
+                        },
                     ))?
                 }
 

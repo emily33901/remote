@@ -13,6 +13,7 @@ use crate::texture_pool::Texture;
 use crate::Encoding;
 use crate::EncodingOptions;
 use crate::H264EncodingOptions;
+use crate::Statistics;
 use crate::SupportsEncodingOptions;
 use crate::VideoBuffer;
 
@@ -25,7 +26,7 @@ pub enum FrameIsKeyframe {
 
 // #[derive(Clone)]
 pub enum EncoderControl {
-    Frame(Texture, crate::Timestamp),
+    Frame(Texture, crate::Timestamp, Statistics),
 }
 
 pub enum EncoderEvent {
@@ -40,11 +41,12 @@ pub enum Encoder {
 }
 
 impl Encoder {
-    // #[tracing::instrument]
+    #[tracing::instrument]
     pub async fn run(
         &self,
         width: u32,
         height: u32,
+        frame_rate: u32,
         encoding: Encoding,
         encoding_options: EncodingOptions,
     ) -> Result<(mpsc::Sender<EncoderControl>, mpsc::Receiver<EncoderEvent>)> {
@@ -53,23 +55,12 @@ impl Encoder {
                 let options: H264EncodingOptions = encoding_options.try_into()?;
                 match self {
                     Encoder::MediaFoundation => {
-                        windows::h264_encoder(
-                            width,
-                            height,
-                            options.target_framerate,
-                            options.target_bitrate,
-                        )
-                        .await
+                        windows::h264_encoder(width, height, frame_rate, options.rate_control).await
                     }
                     Encoder::X264 => todo!("x264 not implemented"),
                     Encoder::OpenH264 => {
-                        openh264::h264_encoder(
-                            width,
-                            height,
-                            options.target_framerate,
-                            options.target_bitrate,
-                        )
-                        .await
+                        openh264::h264_encoder(width, height, frame_rate, options.rate_control)
+                            .await
                     }
                 }
             }
