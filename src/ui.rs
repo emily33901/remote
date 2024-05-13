@@ -1001,7 +1001,7 @@ impl PeerWindowState {
                                 };
 
                                 average_statistics.push_back(media.statistics.clone());
-                                if average_statistics.len() > 200 {
+                                if average_statistics.len() > 400 {
                                     average_statistics.pop_front();
                                 }
 

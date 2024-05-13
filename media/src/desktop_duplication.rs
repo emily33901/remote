@@ -278,7 +278,7 @@ pub async fn duplicate_desktop(
         .run(width, height, frame_rate, encoding, encoding_options)
         .await?;
 
-    let (convert_control, mut convert_event) = conversion::converter(
+    let (convert_control, mut convert_event) = conversion::dxva_converter(
         width,
         height,
         conversion::Format::BGRA,

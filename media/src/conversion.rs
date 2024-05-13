@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant, UNIX_EPOCH};
+use std::{
+    mem::ManuallyDrop,
+    time::{Duration, Instant, UNIX_EPOCH},
+};
 
 use eyre::{eyre, Result};
 use tokio::sync::mpsc::{self, error::TryRecvError};
@@ -6,13 +9,23 @@ use tracing::Instrument;
 use windows::{
     core::Interface,
     Win32::{
-        Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D},
+        Foundation::RECT,
+        Graphics::Direct3D11::{
+            ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, ID3D11VideoContext,
+            ID3D11VideoDevice, ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator,
+            ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView,
+            D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CAPS,
+            D3D11_VIDEO_PROCESSOR_CONTENT_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC,
+            D3D11_VIDEO_PROCESSOR_OUTPUT_RATE_NORMAL, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC,
+            D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VIDEO_USAGE_PLAYBACK_NORMAL,
+            D3D11_VPIV_DIMENSION_TEXTURE2D, D3D11_VPOV_DIMENSION_TEXTURE2D,
+        },
         Media::MediaFoundation::*,
     },
 };
 
 use crate::{
-    dx::ID3D11Texture2DExt,
+    dx::{self, ID3D11Texture2DExt},
     media_queue::MediaQueue,
     statistics::ConversionStatistics,
     texture_pool::{Texture, TexturePool},
@@ -378,4 +391,260 @@ fn process_output(
             Err(err) => Err(err),
         }
     }
+}
+
+#[tracing::instrument]
+pub(crate) async fn dxva_converter(
+    output_width: u32,
+    output_height: u32,
+    input_format: Format,
+    output_format: Format,
+) -> Result<(mpsc::Sender<ConvertControl>, mpsc::Receiver<ConvertEvent>)> {
+    let (event_tx, event_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
+    let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
+
+    let span = tracing::Span::current();
+    tokio::task::spawn_blocking(move || unsafe {
+        let _span_guard = span.enter();
+
+        let (device, context) = super::dx::create_device()?;
+
+        struct Storage {
+            input_width: u32,
+            input_height: u32,
+            processor: ID3D11VideoProcessor,
+            context: ID3D11VideoContext,
+            input_texture: ID3D11Texture2D,
+            output_texture: ID3D11Texture2D,
+            input_view: ID3D11VideoProcessorInputView,
+            output_view: ID3D11VideoProcessorOutputView,
+            output_texture_pool: TexturePool,
+        }
+
+        unsafe fn build_storage(
+            input_width: u32,
+            input_height: u32,
+            output_width: u32,
+            output_height: u32,
+            input_format: Format,
+            output_format: Format,
+            device: &ID3D11Device,
+            context: &ID3D11DeviceContext,
+        ) -> Result<Storage> {
+            let video_device = device.cast::<ID3D11VideoDevice>()?;
+
+            let content_description = D3D11_VIDEO_PROCESSOR_CONTENT_DESC {
+                InputFrameFormat: D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
+                InputWidth: input_width,
+                InputHeight: input_height,
+                OutputWidth: output_width,
+                OutputHeight: output_height,
+                Usage: D3D11_VIDEO_USAGE_PLAYBACK_NORMAL,
+                ..Default::default()
+            };
+
+            let enumerator = video_device.CreateVideoProcessorEnumerator(&content_description)?;
+
+            let mut caps = D3D11_VIDEO_PROCESSOR_CAPS::default();
+            enumerator.GetVideoProcessorCaps(&mut caps)?;
+
+            let processor = video_device.CreateVideoProcessor(&enumerator, 0)?;
+            let context = context.cast::<ID3D11VideoContext>()?;
+
+            context.VideoProcessorSetStreamFrameFormat(
+                &processor,
+                0,
+                D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
+            );
+
+            context.VideoProcessorSetStreamOutputRate(
+                &processor,
+                0,
+                D3D11_VIDEO_PROCESSOR_OUTPUT_RATE_NORMAL,
+                true,
+                None,
+            );
+
+            let input_rect = RECT {
+                left: 0,
+                top: 0,
+                right: input_width as i32,
+                bottom: input_height as i32,
+            };
+
+            let output_rect = RECT {
+                left: 0,
+                top: 0,
+                right: output_width as i32,
+                bottom: output_height as i32,
+            };
+
+            context.VideoProcessorSetStreamSourceRect(&processor, 0, true, Some(&input_rect));
+            context.VideoProcessorSetStreamDestRect(&processor, 0, true, Some(&output_rect));
+            context.VideoProcessorSetOutputTargetRect(&processor, true, Some(&output_rect));
+
+            let input_texture = crate::dx::TextureBuilder::new(
+                &device,
+                input_width,
+                input_height,
+                input_format.into(),
+            )
+            .build()
+            .unwrap();
+
+            let mut input_view_desc = D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC::default();
+            input_view_desc.FourCC = 0;
+            input_view_desc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
+
+            let mut input_view: Option<ID3D11VideoProcessorInputView> = None;
+            video_device.CreateVideoProcessorInputView(
+                &input_texture,
+                &enumerator,
+                &input_view_desc,
+                Some(&mut input_view),
+            )?;
+
+            let input_view = input_view.unwrap();
+
+            let output_texture_pool = TexturePool::new(
+                || {
+                    crate::dx::TextureBuilder::new(
+                        &device,
+                        output_width,
+                        output_height,
+                        output_format.into(),
+                    )
+                    .keyed_mutex()
+                    .nt_handle()
+                    .build()
+                    .unwrap()
+                },
+                10,
+            );
+
+            let output_texture = crate::dx::TextureBuilder::new(
+                &device,
+                output_width,
+                output_height,
+                output_format.into(),
+            )
+            .bind_render_target()
+            .build()
+            .unwrap();
+
+            let mut output_view_desc = D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC::default();
+            output_view_desc.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
+
+            let mut output_view: Option<ID3D11VideoProcessorOutputView> = None;
+            video_device.CreateVideoProcessorOutputView(
+                &output_texture,
+                &enumerator,
+                &output_view_desc,
+                Some(&mut output_view),
+            )?;
+
+            let output_view = output_view.unwrap();
+
+            Ok(Storage {
+                context,
+                input_height,
+                input_width,
+                input_texture,
+                output_texture,
+                input_view,
+                output_texture_pool,
+                output_view,
+                processor,
+            })
+        }
+
+        // NOTE(emily): Initally assume that the input and output are the same dimensions
+        let mut storage = build_storage(
+            output_width,
+            output_height,
+            output_width,
+            output_height,
+            input_format,
+            output_format,
+            &device,
+            &context,
+        )?;
+
+        loop {
+            // TODO(emily): Like in encoder why are we pulling multiple frames here, just pull the current one
+            let ConvertControl::Frame(frame, timestamp) = {
+                let mut control = None;
+
+                loop {
+                    match control_rx.try_recv() {
+                        Ok(convert_control) => control = Some(convert_control),
+                        Err(TryRecvError::Disconnected) => {
+                            tracing::debug!("control is gone");
+                            return Ok(());
+                        }
+                        Err(TryRecvError::Empty) => break,
+                    }
+                }
+
+                // If we didn't get a frame then wait for one now
+                if control.is_none() {
+                    control = Some(
+                        control_rx
+                            .blocking_recv()
+                            .ok_or(eyre!("ConvertControl channel closed"))?,
+                    );
+                };
+
+                control.unwrap()
+            };
+            let start_time = Instant::now();
+
+            let desc = frame.desc();
+
+            if desc.Width != storage.input_width || desc.Height != storage.input_height {
+                storage = build_storage(
+                    desc.Width,
+                    desc.Height,
+                    output_width,
+                    output_height,
+                    input_format,
+                    output_format,
+                    &device,
+                    &context,
+                )?;
+            }
+
+            dx::copy_texture(&storage.input_texture, &frame, None)?;
+
+            let stream = D3D11_VIDEO_PROCESSOR_STREAM {
+                Enable: true.into(),
+                pInputSurface: ManuallyDrop::new(Some(storage.input_view.clone())),
+                ..Default::default()
+            };
+
+            storage.context.VideoProcessorBlt(
+                &storage.processor,
+                Some(&storage.output_view),
+                0,
+                &[stream],
+            )?;
+
+            let output = storage.output_texture_pool.acquire();
+
+            dx::copy_texture(&output, &storage.output_texture, None)?;
+
+            event_tx.blocking_send(ConvertEvent::Frame(
+                output,
+                timestamp,
+                ConversionStatistics {
+                    media_queue_len: 0,
+                    time: Instant::now() - start_time,
+                },
+            ))?;
+        }
+
+        eyre::Ok(())
+    });
+
+    Ok((control_tx, event_rx))
 }
