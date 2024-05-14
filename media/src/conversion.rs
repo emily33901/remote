@@ -6,6 +6,7 @@ use std::{
 use eyre::{eyre, Result};
 use tokio::sync::mpsc::{self, error::TryRecvError};
 use tracing::Instrument;
+use util::JoinhandleExt;
 use windows::{
     core::Interface,
     Win32::{
@@ -17,8 +18,9 @@ use windows::{
             D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CAPS,
             D3D11_VIDEO_PROCESSOR_CONTENT_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC,
             D3D11_VIDEO_PROCESSOR_OUTPUT_RATE_NORMAL, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC,
-            D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VIDEO_USAGE_PLAYBACK_NORMAL,
-            D3D11_VPIV_DIMENSION_TEXTURE2D, D3D11_VPOV_DIMENSION_TEXTURE2D,
+            D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VIDEO_USAGE_OPTIMAL_SPEED,
+            D3D11_VIDEO_USAGE_PLAYBACK_NORMAL, D3D11_VPIV_DIMENSION_TEXTURE2D,
+            D3D11_VPOV_DIMENSION_TEXTURE2D,
         },
         Media::MediaFoundation::*,
     },
@@ -602,6 +604,7 @@ pub(crate) async fn dxva_converter(
             let desc = frame.desc();
 
             if desc.Width != storage.input_width || desc.Height != storage.input_height {
+                tracing::debug!("input size changed, changing video processor");
                 storage = build_storage(
                     desc.Width,
                     desc.Height,

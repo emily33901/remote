@@ -120,6 +120,9 @@ pub async fn h264_encoder(
             .unwrap_or_default();
 
         attributes.set_u32(&MF_LOW_LATENCY, 1)?;
+        attributes.set_u32(&CODECAPI_AVLowLatencyMode, 1)?;
+        attributes.set_u32(&CODECAPI_AVEncCommonLowLatency, 1)?;
+        attributes.set_u32(&CODECAPI_AVEncMPVDefaultBPictureCount, 0)?;
 
         let codec_api = transform.cast::<ICodecAPI>()?;
         codec_api.SetValue(&CODECAPI_AVLowLatencyMode, &true.into())?;

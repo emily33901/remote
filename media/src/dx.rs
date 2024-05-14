@@ -38,7 +38,7 @@ const FLAGS: D3D11_CREATE_DEVICE_FLAG = D3D11_CREATE_DEVICE_FLAG(
     D3D11_CREATE_DEVICE_BGRA_SUPPORT.0 as u32 | D3D11_CREATE_DEVICE_VIDEO_SUPPORT.0 as u32,
 );
 
-pub(crate) fn create_device() -> Result<(ID3D11Device, ID3D11DeviceContext)> {
+pub(crate) fn create_device() -> windows::core::Result<(ID3D11Device, ID3D11DeviceContext)> {
     unsafe {
         let mut device: Option<ID3D11Device> = None;
         let mut context: Option<ID3D11DeviceContext> = None;

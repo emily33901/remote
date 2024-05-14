@@ -56,7 +56,7 @@ pub async fn h264_decoder(
                 } | MFT_ENUM_FLAG_SORTANDFILTER,
                 Some(&MFT_REGISTER_TYPE_INFO {
                     guidMajorType: MFMediaType_Video,
-                    guidSubtype: MFVideoFormat_H264_ES,
+                    guidSubtype: MFVideoFormat_H264,
                 }),
                 None,
                 &mut activates,
@@ -134,7 +134,7 @@ pub async fn h264_decoder(
             let input_type = transform.GetInputAvailableType(0, 0)?;
 
             input_type.set_guid(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)?;
-            input_type.set_guid(&MF_MT_SUBTYPE, &MFVideoFormat_H264_ES)?;
+            input_type.set_guid(&MF_MT_SUBTYPE, &MFVideoFormat_H264)?;
 
             input_type.set_fraction(&MF_MT_FRAME_SIZE, width, height)?;
             input_type.set_fraction(&MF_MT_FRAME_RATE, target_framerate, 1)?;
@@ -219,6 +219,10 @@ unsafe fn hardware(
 
         let len = data.len();
 
+        media_queue
+            .borrow_mut()
+            .push_back((statistics, Instant::now(), SystemTime::now()));
+
         let media_buffer = MFCreateMemoryBuffer(len as u32)?;
 
         crate::mf::with_locked_media_buffer(&media_buffer, |buffer, len| {
@@ -233,7 +237,7 @@ unsafe fn hardware(
         sample.SetSampleTime(time.hns())?;
         sample.SetSampleDuration(duration.as_nanos() as i64 / 100)?;
 
-        let mut process_output =
+        let process_output =
             || -> Result<Option<(Texture, crate::Timestamp, Statistics)>, windows::core::Error> {
                 let mut output_buffer = MFT_OUTPUT_DATA_BUFFER::default();
                 output_buffer.dwStatus = 0;
@@ -282,10 +286,6 @@ unsafe fn hardware(
                     }
                 }
             };
-
-        media_queue
-            .borrow_mut()
-            .push_back((statistics, Instant::now(), SystemTime::now()));
 
         match transform
             .ProcessInput(0, &sample, 0)

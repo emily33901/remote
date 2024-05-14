@@ -856,7 +856,7 @@ impl PeerStreamRequest {
                         match &mut encoding_options.rate_control {
                             media::RateControlMode::Bitrate(bitrate) => {
                                 ui.add(
-                                    egui::Slider::new(bitrate, 100000..=8000000).logarithmic(true),
+                                    egui::Slider::new(bitrate, 10000..=80000000).logarithmic(true),
                                 );
                             }
                             media::RateControlMode::Quality(quality) => {
@@ -966,7 +966,7 @@ impl PeerWindowState {
                                         ((time_diff.as_secs_f32() * 1000.0) / 50.0).clamp(0.0, 1.0),
                                     ),
                                     format!(
-                                        "{:8}ms (duplicated to display) ({:8}ms)",
+                                        "{:8}ms total (from frame capture to display) ({:8}ms)",
                                         time_diff.as_millis(),
                                         media.time.duration().as_millis(),
                                     ),
@@ -982,7 +982,7 @@ impl PeerWindowState {
                                     ui.label(format!("{len:8} {label} queued",));
                                     ui.end_row();
                                     ui.label(format!(
-                                        "{:8}ms {:8}ms avg ({:2.2} frames) {label} time",
+                                        "{:8.2}ms {:8.2}ms avg ({:2.2} frames) {label} time",
                                         time.as_millis(),
                                         average_millis,
                                         time.as_secs_f32() / (1.0 / (config.framerate as f32)),
@@ -1001,7 +1001,7 @@ impl PeerWindowState {
                                 };
 
                                 average_statistics.push_back(media.statistics.clone());
-                                if average_statistics.len() > 400 {
+                                if average_statistics.len() > config.framerate as usize {
                                     average_statistics.pop_front();
                                 }
 
@@ -1056,6 +1056,7 @@ impl PeerWindowState {
                             let desired_size = ui.available_width() * egui::vec2(1.0, aspect);
                             let (_id, rect) = ui.allocate_space(desired_size);
 
+                            ctx.request_repaint();
                             let cb = egui::PaintCallback {
                                 rect: rect,
                                 callback: std::sync::Arc::new(egui_directx11::CallbackFn::new({
@@ -1215,6 +1216,7 @@ struct App {
     peers: HashMap<PeerId, (PeerWindowState, UIPeer)>,
     event_rx: mpsc::Receiver<AppEvent>,
     event_tx: mpsc::Sender<AppEvent>,
+    start_time: std::time::Instant,
 }
 
 impl std::fmt::Debug for App {
@@ -1235,6 +1237,7 @@ impl Default for App {
             peers: Default::default(),
             event_rx,
             event_tx,
+            start_time: Instant::now(),
         }
     }
 }
@@ -1242,6 +1245,21 @@ impl Default for App {
 impl App {
     #[tracing::instrument(skip(ctx))]
     fn ui(&mut self, ctx: &egui::Context) {
+        let wallclock = egui::Window::new("Clock");
+
+        wallclock.show(ctx, |ui| {
+            let elapsed = self.start_time.elapsed();
+            ui.label(
+                egui::RichText::new(format!(
+                    "{:8}:{:04}",
+                    elapsed.as_secs(),
+                    elapsed.subsec_millis()
+                ))
+                .font(egui::FontId::monospace(30.0))
+                .size(50.0),
+            )
+        });
+
         let ui = egui::Window::new("App");
 
         ui.show(ctx, |ui| {
