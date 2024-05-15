@@ -723,6 +723,7 @@ enum Visible {
 #[derive(Clone)]
 struct PeerMediaState {
     start_time: Instant,
+    start_timestamp: Timestamp,
     time: Timestamp,
     texture: Arc<Texture>,
     statistics: Statistics,
@@ -930,8 +931,12 @@ impl PeerWindowState {
                                 media = MediaResult::Texture(PeerMediaState {
                                     start_time: last_media
                                         .as_ref()
-                                        .map(|m| m.start_time)
+                                        .map(|m|m.start_time)
                                         .unwrap_or(Instant::now()),
+                                    start_timestamp: last_media
+                                        .as_ref()
+                                        .map(|m|m.start_timestamp.clone())
+                                        .unwrap_or(time.clone()),
                                     time: time,
                                     texture: Arc::new(new_texture),
                                     statistics: statistics,
@@ -956,8 +961,10 @@ impl PeerWindowState {
 
                             {
                                 ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
-                                let time_diff = (media.start_time.elapsed().saturating_sub(media.time.duration()))
-                                    .max(media.time.duration().saturating_sub(media.start_time.elapsed()));
+
+                                let media_time = media.time.sub(media.start_timestamp);
+                                let time_diff = (media.start_time.elapsed().saturating_sub(media_time))
+                                    .max(media_time.saturating_sub(media.start_time.elapsed()));
 
                                 ui.colored_label(
                                     color::interpolate_color(
@@ -989,6 +996,7 @@ impl PeerWindowState {
                                     ));
                                     ui.end_row();
                                 }
+
 
                                 let average_statistics = self.peer_statistics_average
                                     .get_mut(their_peer_id);

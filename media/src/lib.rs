@@ -109,6 +109,10 @@ impl Timestamp {
         (self.0.as_nanos() / 100) as i64
     }
 
+    pub fn sub(&self, other: Self) -> std::time::Duration {
+        self.duration().saturating_sub(other.duration())
+    }
+
     pub fn duration(&self) -> std::time::Duration {
         self.0
     }
