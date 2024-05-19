@@ -61,7 +61,6 @@ impl PeerConnection for WebrtcRsPeerConnection {
     }
 
     async fn offer(&self, controlling: bool) -> Result<()> {
-        // TODO(emily): I feel like this is a little silly.
         if controlling {
             let offer = self.inner.create_offer(None).await?;
             tracing::debug!("made offer {offer:?}");

@@ -720,7 +720,7 @@ enum Visible {
     Yes,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct PeerMediaState {
     start_time: Instant,
     start_timestamp: Timestamp,
@@ -729,31 +729,54 @@ struct PeerMediaState {
     statistics: Statistics,
 }
 
+#[derive(Debug)]
+struct ConnectedPeer {
+    peer_control: mpsc::Sender<PeerControl>,
+    peer_media_state: Option<PeerMediaState>,
+    decoder_receiver: Option<mpsc::Receiver<media::decoder::DecoderEvent>>,
+    stream_requests: Vec<(
+        PeerStreamRequest,
+        oneshot::Sender<(PeerStreamRequestResponse, Option<Encoder>)>,
+    )>,
+    statistics_average: VecDeque<Statistics>,
+}
+
+impl ConnectedPeer {
+    fn new(peer_control: mpsc::Sender<PeerControl>) -> Self {
+        Self {
+            peer_control,
+            peer_media_state: None,
+            decoder_receiver: None,
+            stream_requests: vec![],
+            statistics_average: VecDeque::new(),
+        }
+    }
+}
+
 #[derive(Default)]
 struct PeerWindowState {
     visible: Visible,
     connect_peer_id: String,
     connection_requests: HashMap<ConnectionId, PeerId>,
-    connected_peers: HashMap<PeerId, mpsc::Sender<PeerControl>>,
+    connected_peers: HashMap<PeerId, ConnectedPeer>,
     stream_request: PeerStreamRequest,
-    stream_requests: HashMap<
-        PeerId,
-        (
-            PeerStreamRequest,
-            oneshot::Sender<(PeerStreamRequestResponse, Option<Encoder>)>,
-        ),
-    >,
-
+    // stream_requests: HashMap<
+    //     PeerId,
+    //     (
+    //         PeerStreamRequest,
+    //         oneshot::Sender<(PeerStreamRequestResponse, Option<Encoder>)>,
+    //     ),
+    // >,
     stream_texture_renderer: Arc<std::sync::OnceLock<NV12TextureRender>>,
     sink: std::sync::OnceLock<mpsc::Sender<(Arc<media::Texture>, Timestamp)>>,
-    connected_peer_media: HashMap<
-        PeerId,
-        (
-            Option<PeerMediaState>,
-            mpsc::Receiver<media::decoder::DecoderEvent>,
-        ),
-    >,
-    peer_statistics_average: HashMap<PeerId, VecDeque<Statistics>>,
+    // connected_peer_media: HashMap<
+    //     PeerId,
+    //     (
+    //         Option<PeerMediaState>,
+    //         mpsc::Receiver<media::decoder::DecoderEvent>,
+    //     ),
+    // >,
+    // peer_statistics_average: HashMap<PeerId, VecDeque<Statistics>>,
 }
 
 enum ShouldRemove {
@@ -906,7 +929,7 @@ impl PeerWindowState {
         ui.heading("Connected Peers");
         ui.end_row();
 
-        for (their_peer_id, _control) in &self.connected_peers {
+        for (their_peer_id, connected_peer) in &mut self.connected_peers {
             ui.group(|ui| {
                 ui.heading(format!("{}", their_peer_id));
 
@@ -920,8 +943,7 @@ impl PeerWindowState {
                     Texture(PeerMediaState),
                 }
 
-                if let Some((last_media, decoder_event)) =
-                    self.connected_peer_media.get_mut(their_peer_id)
+                if let Some((last_media, decoder_event, average_statistics)) = connected_peer.decoder_receiver.as_mut().map(|r| (&mut connected_peer.peer_media_state, r, &mut connected_peer.statistics_average))
                 {
                     let mut media = MediaResult::Empty(last_media.clone());
 
@@ -953,7 +975,8 @@ impl PeerWindowState {
 
                     match media {
                         MediaResult::Done => {
-                            self.connected_peer_media.remove(their_peer_id).unwrap();
+                            *last_media = None;
+                            average_statistics.clear();
                         }
                         MediaResult::Empty(None) => {}
                         MediaResult::Empty(Some(media)) | MediaResult::Texture(media) => {
@@ -997,16 +1020,15 @@ impl PeerWindowState {
                                     ui.end_row();
                                 }
 
+                                // let average_statistics = self.peer_statistics_average
+                                //     .get_mut(their_peer_id);
 
-                                let average_statistics = self.peer_statistics_average
-                                    .get_mut(their_peer_id);
-
-                                let average_statistics = if let None = average_statistics {
-                                    self.peer_statistics_average.insert(their_peer_id.clone(), VecDeque::new());
-                                        self.peer_statistics_average.get_mut(their_peer_id).unwrap()
-                                } else {
-                                    average_statistics.unwrap()
-                                };
+                                // let average_statistics = if let None = average_statistics {
+                                //     self.peer_statistics_average.insert(their_peer_id.clone(), VecDeque::new());
+                                //         self.peer_statistics_average.get_mut(their_peer_id).unwrap()
+                                // } else {
+                                //     average_statistics.unwrap()
+                                // };
 
                                 average_statistics.push_back(media.statistics.clone());
                                 if average_statistics.len() > config.framerate as usize {
@@ -1110,48 +1132,56 @@ impl PeerWindowState {
         ui.heading("Stream Requests");
         ui.end_row();
 
-        let mut stream_request_clicked = None;
+        for (
+            peer_id,
+            ConnectedPeer {
+                stream_requests, ..
+            },
+        ) in &mut self.connected_peers
+        {
+            let mut stream_request_clicked = None;
 
-        for (peer_id, (request, _)) in &self.stream_requests {
-            ui.label(format!("{} {:?}", peer_id, request));
+            for (i, (request, _response)) in stream_requests.iter().enumerate() {
+                ui.label(format!("{} {:?}", peer_id, request));
 
-            if ui.button("accept").clicked() {
-                let config = Config::load();
+                if ui.button("accept").clicked() {
+                    let config = Config::load();
 
-                stream_request_clicked = Some((
-                    peer_id.clone(),
-                    PeerStreamRequestResponse::Accept {
-                        mode: request
-                            .preferred_mode
-                            .as_ref()
-                            .map(|m| crate::logic::Mode {
-                                width: m.width,
-                                height: m.height,
-                                refresh_rate: m.refresh_rate,
-                            })
-                            .unwrap_or(crate::logic::Mode {
-                                width: config.width,
-                                height: config.height,
-                                refresh_rate: config.framerate,
-                            }),
-                        encoding: request.preferred_encoding.clone().unwrap_or(Encoding::H264),
-                        encoding_options: request.preferred_encoding_options.clone().unwrap_or(
-                            EncodingOptions::H264(H264EncodingOptions {
-                                rate_control: media::RateControlMode::Quality(70),
-                            }),
-                        ),
-                    },
-                    // TODO(emily): Do not hardcode this value please please please please
-                    Encoder::MediaFoundation,
-                ));
+                    stream_request_clicked = Some((
+                        i,
+                        PeerStreamRequestResponse::Accept {
+                            mode: request
+                                .preferred_mode
+                                .as_ref()
+                                .map(|m| crate::logic::Mode {
+                                    width: m.width,
+                                    height: m.height,
+                                    refresh_rate: m.refresh_rate,
+                                })
+                                .unwrap_or(crate::logic::Mode {
+                                    width: config.width,
+                                    height: config.height,
+                                    refresh_rate: config.framerate,
+                                }),
+                            encoding: request.preferred_encoding.clone().unwrap_or(Encoding::H264),
+                            encoding_options: request.preferred_encoding_options.clone().unwrap_or(
+                                EncodingOptions::H264(H264EncodingOptions {
+                                    rate_control: media::RateControlMode::Quality(70),
+                                }),
+                            ),
+                        },
+                        // TODO(emily): Do not hardcode this value please please please please
+                        Encoder::MediaFoundation,
+                    ));
+                }
+                ui.end_row();
             }
-            ui.end_row();
-        }
 
-        if let Some((peer_id, response, encoder)) = stream_request_clicked {
-            let (_request, response_channel) = self.stream_requests.remove(&peer_id).unwrap();
+            if let Some((i, response, encoder)) = stream_request_clicked {
+                let (_request, response_channel) = stream_requests.remove(i);
 
-            response_channel.send((response, Some(encoder))).unwrap();
+                response_channel.send((response, Some(encoder))).unwrap();
+            }
         }
     }
 
@@ -1195,7 +1225,7 @@ impl std::fmt::Debug for PeerWindowState {
             .field("connect_peer_id", &self.connect_peer_id)
             .field("connection_requests", &self.connection_requests)
             .field("connected_peers", &self.connected_peers)
-            .field("stream_requests", &self.stream_requests)
+            // .field("stream_requests", &self.stream_requests)
             // .field("stream_texture_renderer", &self.stream_texture_renderer)
             .finish()
     }
@@ -1320,7 +1350,7 @@ impl App {
                         if let Some((peer_window_state, _)) = self.peers.get_mut(&peer_id) {
                             peer_window_state
                                 .connected_peers
-                                .insert(their_peer_id.clone(), control);
+                                .insert(their_peer_id.clone(), ConnectedPeer::new(control));
                         }
 
                         // If we had a connection request from this peer then we can get rid of it
@@ -1339,18 +1369,26 @@ impl App {
                         }
                     }
                     AppEvent::RemotePeerStreamRequest(our_id, (their_id, request, response_tx)) => {
-                        if let Some((peer_window_state, _)) = self.peers.get_mut(&our_id) {
-                            peer_window_state
-                                .stream_requests
-                                .insert(their_id.clone(), (request, response_tx));
+                        if let Some(connected_peer) =
+                            self.peers
+                                .get_mut(&our_id)
+                                .and_then(|(peer_window_state, _)| {
+                                    peer_window_state.connected_peers.get_mut(&their_id)
+                                })
+                        {
+                            connected_peer.stream_requests.push((request, response_tx));
                         }
                     }
 
                     AppEvent::DecoderEvent(our_id, (their_id, decoder_event)) => {
-                        if let Some((peer_window_state, _)) = self.peers.get_mut(&our_id) {
-                            peer_window_state
-                                .connected_peer_media
-                                .insert(their_id, (None, decoder_event));
+                        if let Some(connected_peer) =
+                            self.peers
+                                .get_mut(&our_id)
+                                .and_then(|(peer_window_state, _)| {
+                                    peer_window_state.connected_peers.get_mut(&their_id)
+                                })
+                        {
+                            connected_peer.decoder_receiver = Some(decoder_event);
                         }
                     }
                     AppEvent::PeerClosed(our_id, their_id) => {
@@ -1359,8 +1397,6 @@ impl App {
                                 .connected_peers
                                 .remove(&their_id)
                                 .expect("Expect remote PeerControl to exist when it goes away");
-
-                            peer_window_state.connected_peer_media.remove(&their_id);
                         }
                     }
                 }
