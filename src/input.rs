@@ -1,10 +1,6 @@
-use crate::ARBITRARY_CHANNEL_LIMIT;
 use input::mouse::{ButtonAction, MouseButton};
-use rtc::{self, ChannelControl, ChannelEvent, PeerConnection};
-use tokio::sync::mpsc;
+use rtc::{self};
 
-use anyhow::Result;
-use tracing::Instrument;
 
 pub(crate) enum Mouse {
     Absolute(i32, i32),

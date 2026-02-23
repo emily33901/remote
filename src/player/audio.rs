@@ -70,7 +70,7 @@ impl Iterator for SinkReader {
             if store.len() >= 2 {
                 bytes[0] = store.pop_front().unwrap();
                 bytes[1] = store.pop_front().unwrap();
-                let sample: i16 = unsafe { std::mem::transmute(bytes) };
+                let sample: i16 = unsafe { i16::from_ne_bytes(bytes) };
                 Some(sample)
             } else {
                 Some(0)
@@ -161,7 +161,7 @@ impl Inner {
         self.sink_stream.lock().await.reset();
     }
 
-    async fn sink(&self) -> MappedMutexGuard<rodio::Sink> {
+    async fn sink(&self) -> MappedMutexGuard<'_, rodio::Sink> {
         tokio::sync::MutexGuard::map(self.sink_stream.lock().await, |s| &mut s.sink)
     }
 

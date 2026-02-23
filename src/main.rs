@@ -12,22 +12,16 @@ mod windows;
 
 use crate::config::Config;
 use std::str::FromStr;
-use std::sync::Arc;
-use std::{collections::HashMap, fmt::Display};
+use std::fmt::Display;
 
 use clap::Parser;
 use anyhow::Result;
-use media::{Encoding, EncodingOptions, H264EncodingOptions};
-use peer::PeerControl;
 use rtc;
-use signal::SignallingControl;
-use signal::{ConnectionId, PeerId};
+use signal::PeerId;
 
-use tokio::sync::{mpsc, Mutex};
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use uuid::Uuid;
 
 const ARBITRARY_CHANNEL_LIMIT: usize = 5;
 

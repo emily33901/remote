@@ -28,18 +28,11 @@ use windows::{
     },
 };
 
-use winit::{
-    dpi::PhysicalSize,
-    event_loop::EventLoopBuilder,
-    platform::windows::EventLoopBuilderExtWindows,
-    raw_window_handle::{HasWindowHandle, RawWindowHandle},
-    window::Window,
-};
 
 use crate::ARBITRARY_CHANNEL_LIMIT;
 
 use media::dx::{
-    self, compile_shader, copy_texture, create_device_and_swapchain, ID3D11Texture2DExt,
+    self, compile_shader, create_device_and_swapchain, ID3D11Texture2DExt,
 };
 
 fn create_render_target_for_swap_chain(
@@ -660,7 +653,7 @@ pub(crate) fn sink(
                         }
                     }
 
-                    if let Some((texture, timestamp)) = match rx.try_recv() {
+                    if let Some((texture, _timestamp)) = match rx.try_recv() {
                         Ok(ok) => Some(ok),
                         Err(TryRecvError::Disconnected) => break,
                         Err(TryRecvError::Empty) => None,

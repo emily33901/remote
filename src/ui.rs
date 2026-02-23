@@ -11,7 +11,6 @@ use std::time::{Duration, Instant};
 
 use derive_more::{Deref, DerefMut};
 
-use egui::Layout;
 use media::decoder::DecoderEvent;
 use media::encoder::Encoder;
 use media::produce::MediaControl;
@@ -318,7 +317,7 @@ impl RemotePeer {
             let mode = mode.clone();
             let media_filename = media_filename.map(|s| s.to_owned());
             async move {
-                let config = Config::load();
+                let _config = Config::load();
 
                 // TODO(emily): Race condition here where tx is being kept alive by rx
                 let (tx, mut rx) = if let Some(file) = media_filename.as_ref() {
@@ -466,7 +465,7 @@ impl UIPeer {
         Arc::downgrade(&self.1)
     }
 
-    async fn inner(&self) -> tokio::sync::MappedMutexGuard<_Peer> {
+    async fn inner(&self) -> tokio::sync::MappedMutexGuard<'_, _Peer> {
         MutexGuard::map(self.lock().await, |peer| peer)
     }
 
@@ -1200,7 +1199,7 @@ impl PeerWindowState {
     }
 
     fn ui(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, peer: &UIPeer) -> ShouldRemove {
-        let config = Config::load();
+        let _config = Config::load();
 
         let mut result = ShouldRemove::No;
 
