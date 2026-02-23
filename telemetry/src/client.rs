@@ -1,15 +1,14 @@
 use std::{
-    collections::HashMap,
     sync::{atomic::AtomicUsize, Arc},
 };
 
 use async_bincode::tokio::AsyncBincodeWriter;
-use futures::{Sink, SinkExt};
+use futures::SinkExt;
 use once_cell::sync::OnceCell;
 use tokio::sync::{mpsc, Mutex};
 
 use crate::{
-    next_id, ChannelEvent, ChannelStatistic, CounterEvent, CounterStatistic, Id, TelemetryEvent,
+    next_id, ChannelEvent, ChannelStatistic, CounterEvent, CounterStatistic, TelemetryEvent,
 };
 
 static STATS_SINK: OnceCell<mpsc::Sender<TelemetryEvent>> = OnceCell::new();

@@ -1,9 +1,4 @@
-use std::{collections::HashSet, future::Future, thread::yield_now};
-
-use tokio::{
-    pin,
-    task::{JoinError, JoinHandle},
-};
+use tokio::task::JoinHandle;
 
 pub trait JoinhandleExt<T> {
     fn watch<F: FnOnce(T) -> () + Send + 'static>(self, f: F) -> ();

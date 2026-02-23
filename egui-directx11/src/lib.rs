@@ -34,9 +34,7 @@ const fn zeroed<T>() -> T {
 }
 
 use egui::{
-    epaint::{
-        textures::TexturesDelta, ClippedShape, PaintCallback, Primitive, Vertex,
-    },
+    epaint::{textures::TexturesDelta, ClippedShape, Primitive, Vertex},
     ClippedPrimitive, Pos2,
 };
 

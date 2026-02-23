@@ -28,12 +28,9 @@ use windows::{
     },
 };
 
-
 use crate::ARBITRARY_CHANNEL_LIMIT;
 
-use media::dx::{
-    self, compile_shader, create_device_and_swapchain, ID3D11Texture2DExt,
-};
+use media::dx::{self, compile_shader, create_device_and_swapchain, ID3D11Texture2DExt};
 
 fn create_render_target_for_swap_chain(
     device: &ID3D11Device,
@@ -55,7 +52,15 @@ fn resize_swap_chain_and_render_target(
 ) -> Result<()> {
     render_target.take();
 
-    unsafe { swap_chain.ResizeBuffers(1, new_width, new_height, new_format, windows::Win32::Graphics::Dxgi::DXGI_SWAP_CHAIN_FLAG(0)) }?;
+    unsafe {
+        swap_chain.ResizeBuffers(
+            1,
+            new_width,
+            new_height,
+            new_format,
+            windows::Win32::Graphics::Dxgi::DXGI_SWAP_CHAIN_FLAG(0),
+        )
+    }?;
     render_target.replace(create_render_target_for_swap_chain(device, swap_chain)?);
     Ok(())
 }
@@ -648,7 +653,7 @@ pub(crate) fn sink(
                     unsafe {
                         let mut message = MSG::default();
                         while PeekMessageA(&mut message, None, 0, 0, PM_REMOVE).into() {
-                            TranslateMessage(&message);
+                            let _ = TranslateMessage(&message);
                             DispatchMessageA(&message);
                         }
                     }
@@ -666,7 +671,8 @@ pub(crate) fn sink(
                     }
 
                     unsafe {
-                        match swap_chain.Present(1, windows::Win32::Graphics::Dxgi::DXGI_PRESENT(0)) {
+                        match swap_chain.Present(1, windows::Win32::Graphics::Dxgi::DXGI_PRESENT(0))
+                        {
                             S_OK => {}
                             err => {
                                 tracing::debug!("Failed present {err}")

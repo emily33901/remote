@@ -1,7 +1,6 @@
-use std::{collections::HashSet, time::SystemTimeError};
+use std::time::SystemTimeError;
 
 use encoder::FrameIsKeyframe;
-use anyhow::Error;
 use serde::{Deserialize, Serialize};
 pub use statistics::Statistics;
 

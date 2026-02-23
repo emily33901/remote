@@ -15,7 +15,7 @@ use windows::{
                 },
                 IDXGIKeyedMutex, IDXGIResource1, IDXGISwapChain, DXGI_ERROR_DEVICE_REMOVED,
                 DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE, DXGI_SWAP_CHAIN_DESC,
-                DXGI_SWAP_EFFECT_DISCARD, DXGI_USAGE_RENDER_TARGET_OUTPUT,
+                DXGI_USAGE_RENDER_TARGET_OUTPUT,
             },
         },
     },

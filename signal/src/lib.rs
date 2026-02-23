@@ -2,12 +2,16 @@ use std::{collections::HashMap, sync::Arc};
 
 use futures::stream::SplitSink;
 use futures::SinkExt;
-use futures::{FutureExt, StreamExt, TryStreamExt};
+use futures::{FutureExt, StreamExt};
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
-use tokio_tungstenite::tungstenite::{Bytes, Message::{self, Binary, Close, Frame, Ping, Pong, Text}, Utf8Bytes};
+use tokio_tungstenite::tungstenite::{
+    Bytes,
+    Message::{self, Binary, Close, Frame, Ping, Pong, Text},
+    Utf8Bytes,
+};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use uuid::Uuid;
 
@@ -491,7 +495,9 @@ async fn handle_message(
         }
         Binary(_) | Frame(_) => Err(anyhow!("No idea what to do with binary")),
         Close(_) => Err(anyhow!("Going down")),
-        Ping(data) => Ok(control_tx.send(SignallingControl::_Pong(data.to_vec())).await?),
+        Ping(data) => Ok(control_tx
+            .send(SignallingControl::_Pong(data.to_vec()))
+            .await?),
         Pong(_) => Ok(()),
     }
 }

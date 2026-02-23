@@ -11,11 +11,10 @@ mod video;
 mod windows;
 
 use crate::config::Config;
-use std::str::FromStr;
-use std::fmt::Display;
+use anyhow::Result;
+use std::{fmt::Display, str::FromStr};
 
 use clap::Parser;
-use anyhow::Result;
 use rtc;
 use signal::PeerId;
 

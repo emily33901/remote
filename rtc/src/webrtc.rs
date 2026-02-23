@@ -3,7 +3,7 @@ pub(crate) mod peer;
 
 use std::sync::Arc;
 
-use ::webrtc::{data_channel::RTCDataChannel, peer_connection::RTCPeerConnection};
+use ::webrtc::data_channel::RTCDataChannel;
 use tokio::sync::mpsc;
 use webrtc::{
     data_channel::data_channel_init::RTCDataChannelInit,

@@ -2,12 +2,11 @@ use std::{ops::Deref, time::Duration};
 
 use anyhow::Result;
 use tokio::sync::mpsc::{self, error::TryRecvError};
-use tracing::Instrument;
 use util::JoinhandleExt;
 use windows::{
     core::Interface,
     Win32::{
-        Foundation::{ERROR_ACCESS_DENIED, E_ACCESSDENIED},
+        Foundation::E_ACCESSDENIED,
         Graphics::{
             Direct3D11::{
                 ID3D11Device, ID3D11Texture2D, D3D11_BOX, D3D11_RESOURCE_MISC_FLAG,

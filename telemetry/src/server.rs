@@ -3,7 +3,7 @@ use tokio::sync::mpsc;
 
 use crate::{next_id, ClientId, TelemetryEvent};
 
-use futures::{Stream, StreamExt};
+use futures::StreamExt;
 
 pub async fn stream() -> mpsc::Receiver<(ClientId, TelemetryEvent)> {
     let (tx, rx) = mpsc::channel(100);

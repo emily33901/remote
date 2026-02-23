@@ -1,6 +1,4 @@
 use input::mouse::{ButtonAction, MouseButton};
-use rtc::{self};
-
 
 pub(crate) enum Mouse {
     Absolute(i32, i32),

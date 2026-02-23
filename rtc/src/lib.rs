@@ -3,9 +3,9 @@ mod datachannel;
 
 mod webrtc;
 
-use std::{collections::HashMap, fmt::Display, str::FromStr, sync::Arc};
+use std::{fmt::Display, str::FromStr, sync::Arc};
 
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
 
 use anyhow::Result;
 

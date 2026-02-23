@@ -5,18 +5,17 @@ use std::{
 
 use openh264::{
     self,
-    encoder::{BitRate, Encoder, EncoderConfig, FrameRate, QpRange},
+    encoder::{BitRate, Encoder, EncoderConfig, FrameRate},
     formats::YUVSource,
     OpenH264API,
 };
 
 use anyhow::{anyhow, Result};
 use tokio::sync::mpsc;
-use tracing::Instrument;
 
 use crate::{
     dx::ID3D11Texture2DExt,
-    statistics::{self, EncodeStatistics},
+    statistics::EncodeStatistics,
     RateControlMode, ARBITRARY_MEDIA_CHANNEL_LIMIT,
 };
 

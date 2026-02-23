@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::{Arc, Weak},
+    sync::Arc,
 };
 
 use tokio::sync::{mpsc, Mutex};

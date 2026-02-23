@@ -1,24 +1,22 @@
 use std::{
     mem::ManuallyDrop,
-    time::{Duration, Instant, UNIX_EPOCH},
+    time::Instant,
 };
 
 use anyhow::{anyhow, Result};
 use tokio::sync::mpsc::{self, error::TryRecvError};
-use tracing::Instrument;
-use util::JoinhandleExt;
 use windows::{
     core::Interface,
     Win32::{
         Foundation::RECT,
         Graphics::Direct3D11::{
             ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, ID3D11VideoContext,
-            ID3D11VideoDevice, ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator,
+            ID3D11VideoDevice, ID3D11VideoProcessor,
             ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView,
             D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CAPS,
             D3D11_VIDEO_PROCESSOR_CONTENT_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC,
             D3D11_VIDEO_PROCESSOR_OUTPUT_RATE_NORMAL, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC,
-            D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VIDEO_USAGE_OPTIMAL_SPEED,
+            D3D11_VIDEO_PROCESSOR_STREAM,
             D3D11_VIDEO_USAGE_PLAYBACK_NORMAL, D3D11_VPIV_DIMENSION_TEXTURE2D,
             D3D11_VPOV_DIMENSION_TEXTURE2D,
         },

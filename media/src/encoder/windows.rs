@@ -1,12 +1,11 @@
 use std::{
-    sync::Arc,
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime},
 };
 
 use ::windows::{core::Interface, Win32::Media::MediaFoundation::*};
 use anyhow::{anyhow, Result};
 
-use tokio::sync::mpsc::{self, error::TryRecvError};
+use tokio::sync::mpsc;
 
 use crate::{
     dx::{self, TextureCPUAccess, TextureUsage},

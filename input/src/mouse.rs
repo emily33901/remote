@@ -1,4 +1,4 @@
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 
 use bitflags::bitflags;
 use windows::Win32::Foundation::POINT;

@@ -3,7 +3,6 @@ use std::{borrow::Cow, mem::MaybeUninit};
 use windows::{
     core::{IUnknown, Interface, Param, PWSTR},
     Win32::{
-        Foundation::FALSE,
         Graphics::Direct3D11::{ID3D11Device, ID3D11Texture2D},
         Media::MediaFoundation::{
             IMFAttributes, IMFDXGIBuffer, IMFDXGIDeviceManager, IMFMediaBuffer, IMFMediaType,
@@ -17,8 +16,6 @@ use windows::{
         },
     },
 };
-
-use windows_core::BOOL;
 
 use anyhow::Result;
 
