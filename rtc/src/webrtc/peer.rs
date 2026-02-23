@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use tokio::sync::mpsc;
 
-use eyre::Result;
+use anyhow::Result;
 use webrtc::{
     api::{
         interceptor_registry::register_default_interceptors, media_engine::MediaEngine,

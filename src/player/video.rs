@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use eyre::Result;
+use anyhow::Result;
 use tokio::sync::{mpsc, mpsc::error::TryRecvError};
 
 use windows::{
@@ -33,7 +33,7 @@ use winit::{
     event_loop::EventLoopBuilder,
     platform::windows::EventLoopBuilderExtWindows,
     raw_window_handle::{HasWindowHandle, RawWindowHandle},
-    window::WindowBuilder,
+    window::Window,
 };
 
 use crate::ARBITRARY_CHANNEL_LIMIT;
@@ -62,7 +62,7 @@ fn resize_swap_chain_and_render_target(
 ) -> Result<()> {
     render_target.take();
 
-    unsafe { swap_chain.ResizeBuffers(1, new_width, new_height, new_format, 0) }?;
+    unsafe { swap_chain.ResizeBuffers(1, new_width, new_height, new_format, windows::Win32::Graphics::Dxgi::DXGI_SWAP_CHAIN_FLAG(0)) }?;
     render_target.replace(create_render_target_for_swap_chain(device, swap_chain)?);
     Ok(())
 }
@@ -434,6 +434,120 @@ impl NV12TextureRender {
 
         Ok(())
     }
+
+    pub(crate) fn render_texture_with_context(
+        &self,
+        texture: &ID3D11Texture2D,
+        device: &ID3D11Device,
+        context: &ID3D11DeviceContext,
+    ) -> Result<()> {
+        // NOTE(emily): Always expect to be able to lock here, there should NEVER be any contention over this.
+
+        // NOTE(emily): Unwrap or default because we dont care whether we already have a holder or not
+        // if the sizes DONT match then we make a new holder.
+        let mut texture_holder = self
+            .texture_holder
+            .try_lock()
+            .expect("there should be no contention on the texture_holder");
+        {
+            let (width, height) = texture_holder
+                .as_ref()
+                .map(|h| (h.width, h.height))
+                .unwrap_or_default();
+            let (input_width, input_height) = {
+                let desc = texture.desc();
+                (desc.Width, desc.Height)
+            };
+
+            if width != input_width || height != input_height {
+                *texture_holder = Some(NV12TextureHolder::new(
+                    device,
+                    context,
+                    input_width,
+                    input_height,
+                )?);
+            }
+        }
+
+        let texture_holder = texture_holder.as_ref().unwrap();
+
+        dx::copy_texture(&texture_holder.texture, texture, None)?;
+
+        let topology = D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
+
+        unsafe {
+            context.IASetInputLayout(&self.input_layout);
+            context.VSSetShader(&self.vertex_shader, None);
+            context.PSSetShader(&self.pixel_shader, None);
+        }
+
+        unsafe {
+            context.PSSetShaderResources(
+                0,
+                Some(&[
+                    Some(texture_holder.texture_lum_view.clone()),
+                    Some(texture_holder.texture_chrom_view.clone()),
+                ]),
+            );
+            context.PSSetSamplers(0, Some(&[Some(self.sampler_state.clone())]));
+        }
+
+        unsafe {
+            let mut offset = 0_u32;
+            let stride = std::mem::size_of::<Vertex>() as u32;
+            context.IASetVertexBuffers(
+                0,
+                1,
+                Some(&Some(self.vertex_buffer.clone()) as *const _),
+                Some(&stride as *const _),
+                Some(&mut offset),
+            );
+            context.IASetPrimitiveTopology(topology);
+        }
+
+        const VERTICES: &[Vertex; 6] = &[
+            Vertex {
+                x: -1.0,
+                y: -1.0,
+                u: 0.0,
+                v: 1.0,
+            },
+            Vertex {
+                x: -1.0,
+                y: 1.0,
+                u: 0.0,
+                v: 0.0,
+            },
+            Vertex {
+                x: 1.0,
+                y: 1.0,
+                u: 1.0,
+                v: 0.0,
+            },
+            Vertex {
+                x: 1.0,
+                y: -1.0,
+                u: 1.0,
+                v: 1.0,
+            },
+            Vertex {
+                x: -1.0,
+                y: -1.0,
+                u: 0.0,
+                v: 1.0,
+            },
+            Vertex {
+                x: 1.0,
+                y: 1.0,
+                u: 1.0,
+                v: 0.0,
+            },
+        ];
+
+        unsafe { context.Draw(VERTICES.len() as u32, 0) };
+
+        Ok(())
+    }
 }
 
 extern "system" fn wndproc(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -457,7 +571,7 @@ extern "system" fn wndproc(window: HWND, message: u32, wparam: WPARAM, lparam: L
 fn make_window(parent: Option<HWND>, window_class: PCSTR) -> Result<HWND> {
     unsafe {
         let instance = GetModuleHandleA(None)?;
-        debug_assert!(instance.0 != 0);
+        debug_assert!(!instance.is_invalid());
 
         let wc = WNDCLASSA {
             hCursor: LoadCursorW(None, IDC_ARROW)?,
@@ -481,11 +595,11 @@ fn make_window(parent: Option<HWND>, window_class: PCSTR) -> Result<HWND> {
             CW_USEDEFAULT,
             1920,
             1080,
-            parent.unwrap_or_default(),
+            parent,
             None,
-            instance,
+            Some(instance.into()),
             None,
-        );
+        )?;
 
         Ok(window_handle)
     }
@@ -507,7 +621,7 @@ pub(crate) fn sink(
         async move {
             telemetry::client::watch_channel(&tx, &format!("player-sink-{}", name)).await;
 
-            match tokio::task::spawn_blocking(move || -> eyre::Result<()> {
+            match tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
                 let window_title = s!("remote-player-window");
                 let window_handle = make_window(None, window_title)?;
 
@@ -559,7 +673,7 @@ pub(crate) fn sink(
                     }
 
                     unsafe {
-                        match swap_chain.Present(1, 0) {
+                        match swap_chain.Present(1, windows::Win32::Graphics::Dxgi::DXGI_PRESENT(0)) {
                             S_OK => {}
                             err => {
                                 tracing::debug!("Failed present {err}")

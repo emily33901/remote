@@ -9,7 +9,7 @@ use crate::{
 
 use media::VideoBuffer;
 
-use eyre::Result;
+use anyhow::Result;
 use std::str::FromStr;
 
 pub(crate) enum VideoEvent {
@@ -61,7 +61,7 @@ pub(crate) async fn video_channel(
                     }
                 }
 
-                eyre::Ok(())
+                anyhow::Ok(())
             }
             .await
             {
@@ -98,7 +98,7 @@ pub(crate) async fn video_channel(
                     }
                 }
             }
-            eyre::Ok(())
+            anyhow::Ok(())
         }
         .instrument(span)
         .in_current_span()
@@ -116,7 +116,7 @@ pub(crate) async fn video_channel(
                         }
                     }
                 }
-                eyre::Ok(())
+                anyhow::Ok(())
             })
             .await
             {
@@ -149,7 +149,7 @@ pub(crate) async fn video_channel(
                     }
                 }
 
-                eyre::Ok(())
+                anyhow::Ok(())
             })
             .await
             {

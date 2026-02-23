@@ -6,7 +6,7 @@ use crate::{PeerId, ARBITRARY_CHANNEL_LIMIT};
 use media::VideoBuffer;
 use signal::SignallingControl;
 
-use eyre::Result;
+use anyhow::Result;
 use tokio::sync::mpsc;
 use tracing::Instrument;
 
@@ -124,7 +124,7 @@ pub(crate) async fn peer(
                         }
                     }
                 }
-                eyre::Ok(())
+                anyhow::Ok(())
             }
             .await
             {
@@ -152,7 +152,7 @@ pub(crate) async fn peer(
                     }
                 }
 
-                eyre::Ok(())
+                anyhow::Ok(())
             }
             .await
             {
@@ -191,7 +191,7 @@ pub(crate) async fn peer(
                     }
                 }
 
-                eyre::Ok(())
+                anyhow::Ok(())
             }
             .await
             {
@@ -219,7 +219,7 @@ pub(crate) async fn peer(
                     }
                 }
 
-                eyre::Ok(())
+                anyhow::Ok(())
             }
             .await
             {
@@ -274,7 +274,7 @@ pub(crate) async fn peer(
                     }
                 }
 
-                eyre::Ok(())
+                anyhow::Ok(())
             }
             .await
             {

@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant, UNIX_EPOCH},
 };
 
-use eyre::{eyre, Result};
+use anyhow::{anyhow, Result};
 use tokio::sync::mpsc::{self, error::TryRecvError};
 use tracing::Instrument;
 use util::JoinhandleExt;
@@ -254,7 +254,7 @@ pub(crate) async fn converter(
                         control = Some(
                             control_rx
                                 .blocking_recv()
-                                .ok_or(eyre!("ConvertControl channel closed"))?,
+                                .ok_or(anyhow!("ConvertControl channel closed"))?,
                         );
                     };
 
@@ -354,7 +354,7 @@ pub(crate) async fn converter(
                 }
             }
 
-            eyre::Ok(())
+            anyhow::Ok(())
         }
     });
 
@@ -593,7 +593,7 @@ pub(crate) async fn dxva_converter(
                     control = Some(
                         control_rx
                             .blocking_recv()
-                            .ok_or(eyre!("ConvertControl channel closed"))?,
+                            .ok_or(anyhow!("ConvertControl channel closed"))?,
                     );
                 };
 
@@ -646,7 +646,7 @@ pub(crate) async fn dxva_converter(
             ))?;
         }
 
-        eyre::Ok(())
+        anyhow::Ok(())
     });
 
     Ok((control_tx, event_rx))

@@ -1,7 +1,7 @@
 use std::{collections::HashSet, time::SystemTimeError};
 
 use encoder::FrameIsKeyframe;
-use eyre::Error;
+use anyhow::Error;
 use serde::{Deserialize, Serialize};
 pub use statistics::Statistics;
 
@@ -58,13 +58,13 @@ pub enum EncodingOptions {
 }
 
 impl TryFrom<EncodingOptions> for H264EncodingOptions {
-    type Error = eyre::Report;
+    type Error = anyhow::Error;
 
     fn try_from(value: EncodingOptions) -> Result<Self, Self::Error> {
         if let EncodingOptions::H264(options) = value {
             Ok(options)
         } else {
-            Err(eyre::eyre!("Not H264 options"))
+            Err(anyhow::anyhow!("Not H264 options"))
         }
     }
 }

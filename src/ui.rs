@@ -23,7 +23,7 @@ use tracing::Instrument;
 
 use crate::peer::{PeerControl, PeerError, PeerEvent};
 
-use eyre::Result;
+use anyhow::Result;
 use media::dx::create_device_and_swapchain;
 
 use signal::{ConnectionId, PeerId};
@@ -38,9 +38,10 @@ use windows::Win32::Graphics::Dxgi::IDXGISwapChain;
 use winit::dpi::PhysicalSize;
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::EventLoopBuilder;
+use winit::window::Window;
 
 use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawWindowHandle};
-use winit::window::WindowBuilder;
+
 
 fn create_render_target_for_swap_chain(
     device: &ID3D11Device,
@@ -62,7 +63,7 @@ fn resize_swap_chain_and_render_target(
 ) -> Result<()> {
     render_target.take();
 
-    unsafe { swap_chain.ResizeBuffers(1, new_width, new_height, new_format, 0) }?;
+    unsafe { swap_chain.ResizeBuffers(1, new_width, new_height, new_format, windows::Win32::Graphics::Dxgi::DXGI_SWAP_CHAIN_FLAG(0)) }?;
     render_target.replace(create_render_target_for_swap_chain(device, swap_chain)?);
     Ok(())
 }
@@ -219,7 +220,7 @@ impl RemotePeer {
                 }
             }
         }
-        eyre::Ok(())
+        anyhow::Ok(())
     }
 
     #[tracing::instrument(skip(peer_control, media_control))]
@@ -364,7 +365,7 @@ impl RemotePeer {
                     }
                 }
 
-                eyre::Ok(())
+                anyhow::Ok(())
             }
             .in_current_span()
         });
@@ -476,7 +477,7 @@ impl UIPeer {
         signal_tx: mpsc::Sender<SignallingControl>,
     ) -> Result<()> {
         while let Some(event) = signal_rx.recv().await {
-            let strong_zelf = zelf.upgrade().ok_or(eyre::eyre!("no peer"))?;
+            let strong_zelf = zelf.upgrade().ok_or(anyhow::anyhow!("no peer"))?;
             let mut zelf = strong_zelf.lock().await;
 
             let span = tracing::debug_span!("SignallingEvent", %zelf.our_peer_id);
@@ -589,7 +590,7 @@ impl UIPeer {
                                     .await
                                     .unwrap();
                             }
-                            eyre::Ok(())
+                            anyhow::Ok(())
                         }
                     });
                 }
@@ -669,7 +670,7 @@ impl UIPeer {
                 ?zelf.connection_peer_id,
                 "no incoming connection request from peer"
             );
-            Err(eyre::eyre!("no incoming connection request from peer"))
+            Err(anyhow::anyhow!("no incoming connection request from peer"))
         }
     }
 
@@ -1089,15 +1090,28 @@ impl PeerWindowState {
                             ctx.request_repaint();
                             let cb = egui::PaintCallback {
                                 rect: rect,
-                                callback: std::sync::Arc::new(egui_directx11::CallbackFn::new({
+                                callback: std::sync::Arc::new(egui_directx11::callback_fn({
                                     let texture_renderer = self.stream_texture_renderer.clone();
-                                    move |_info, renderer| {
+                                    move |info, device, context| {
+                                        // Set up viewport
+                                        let viewport = info.viewport_in_pixels();
+                                        unsafe {
+                                            context.RSSetViewports(Some(&[windows::Win32::Graphics::Direct3D11::D3D11_VIEWPORT {
+                                                TopLeftX: viewport.left_px as f32,
+                                                TopLeftY: viewport.top_px as f32,
+                                                Width: viewport.width_px as f32,
+                                                Height: viewport.height_px as f32,
+                                                MinDepth: 0.0,
+                                                MaxDepth: 1.0,
+                                            }]));
+                                        }
+                                        
                                         let texture_renderer = texture_renderer.get_or_init(|| {
-                                            NV12TextureRender::new(renderer.device()).unwrap()
+                                            NV12TextureRender::new(device).unwrap()
                                         });
 
                                         texture_renderer
-                                            .render_texture(&media.texture, renderer.device())
+                                            .render_texture_with_context(&media.texture, device, context)
                                             .unwrap();
                                     }
                                 })),
@@ -1414,13 +1428,13 @@ pub async fn ui() -> Result<()> {
     let (width, height) = (config.width, config.height);
 
     let event_loop = EventLoopBuilder::new().build()?; // .with_any_thread(true).build()?;
-    let window = WindowBuilder::new()
+    let window_attributes = Window::default_attributes()
         .with_title("remote")
-        .with_inner_size(PhysicalSize::new(width, height))
-        .build(&event_loop)?;
+        .with_inner_size(PhysicalSize::new(width, height));
+    let window = event_loop.create_window(window_attributes)?;
 
     let window_handle = if let RawWindowHandle::Win32(raw) = window.window_handle()?.as_raw() {
-        HWND(raw.hwnd.get())
+        HWND(raw.hwnd.get() as *mut _)
     } else {
         panic!("unexpected RawWindowHandle variant");
     };
@@ -1435,6 +1449,7 @@ pub async fn ui() -> Result<()> {
         egui_ctx.clone(),
         egui_ctx.viewport_id(),
         &window.display_handle()?,
+        None,
         None,
         None,
     );
@@ -1491,9 +1506,8 @@ pub async fn ui() -> Result<()> {
                             render_target,
                             &egui_ctx,
                             renderer_output,
-                            window.scale_factor() as _,
                         );
-                        let _ = unsafe { swap_chain.Present(1, 0) };
+                        let _ = unsafe { swap_chain.Present(1, windows::Win32::Graphics::Dxgi::DXGI_PRESENT(0)) };
                     } else {
                         unreachable!();
                     }

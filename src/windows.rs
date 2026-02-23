@@ -9,7 +9,7 @@ use windows::Win32::{
 pub(crate) struct System;
 
 impl System {
-    pub(crate) fn new() -> eyre::Result<Self> {
+    pub(crate) fn new() -> anyhow::Result<Self> {
         unsafe {
             // Set DPI Awareness for our process
             SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)?;

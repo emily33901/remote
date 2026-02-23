@@ -1,11 +1,10 @@
-use eyre::eyre;
+use anyhow::{anyhow, Result};
 
 use windows::Win32::{
-    Foundation::GetLastError, Foundation::BOOL, Foundation::POINT, Graphics::Gdi, UI::HiDpi::*,
+    Foundation::GetLastError, Foundation::POINT, Graphics::Gdi, UI::HiDpi::*,
     UI::WindowsAndMessaging::*,
 };
-
-use eyre::Result;
+use windows_core::BOOL;
 
 #[derive(Default, Clone, Copy, Debug)]
 pub struct Bounds {
@@ -74,7 +73,7 @@ impl Display {
                 &mut monitor_info_ex.monitorInfo,
             ))
         } {
-            return Err(eyre!("Failed to get monitor info {:?}", unsafe {
+            return Err(anyhow!("Failed to get monitor info {:?}", unsafe {
                 GetLastError()
             }));
         }
@@ -87,7 +86,7 @@ impl Display {
         if let Err(err) =
             unsafe { GetDpiForMonitor(handle, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) }
         {
-            return Err(eyre!("Unable to get DPI for monitor {}", err));
+            return Err(anyhow!("Unable to get DPI for monitor {}", err));
         }
 
         let mut mouse_correction_factor_x = dpi_x as f32 / 96.0;
@@ -123,13 +122,13 @@ impl Display {
         Ok(display)
     }
 
-    pub fn from_point(pos: (i32, i32)) -> eyre::Result<Display> {
+    pub fn from_point(pos: (i32, i32)) -> anyhow::Result<Display> {
         let handle = unsafe {
             Gdi::MonitorFromPoint(POINT { x: pos.0, y: pos.1 }, Gdi::MONITOR_DEFAULTTONULL)
         };
 
         if handle.is_invalid() {
-            return Err(eyre!("Point is not on a monitor"));
+            return Err(anyhow!("Point is not on a monitor"));
         }
 
         Display::new(handle)
@@ -146,7 +145,7 @@ impl Display {
         }
     }
 
-    pub fn update(&mut self) -> eyre::Result<()> {
+    pub fn update(&mut self) -> anyhow::Result<()> {
         *self = Display::new(self.handle)?;
         Ok(())
     }

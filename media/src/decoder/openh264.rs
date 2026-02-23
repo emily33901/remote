@@ -15,7 +15,7 @@ use crate::{
 
 use super::{DecoderControl, DecoderEvent};
 
-use eyre::{eyre, Result};
+use anyhow::{anyhow, Result};
 
 fn i420_components_to_nv12(
     width: usize,
@@ -98,7 +98,7 @@ pub async fn h264_decoder(
                 loop {
                     let DecoderControl::Data(buffer) = control_rx
                         .blocking_recv()
-                        .ok_or(eyre!("decoder control closed"))?;
+                        .ok_or(anyhow!("decoder control closed"))?;
 
                     let input_time = Instant::now();
                     let decode_start_time = SystemTime::now();
@@ -148,7 +148,7 @@ pub async fn h264_decoder(
                     }
                 }
 
-                eyre::Ok(())
+                anyhow::Ok(())
             })
             .await
             .unwrap()

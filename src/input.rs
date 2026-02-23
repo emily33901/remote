@@ -3,7 +3,7 @@ use input::mouse::{ButtonAction, MouseButton};
 use rtc::{self, ChannelControl, ChannelEvent, PeerConnection};
 use tokio::sync::mpsc;
 
-use eyre::Result;
+use anyhow::Result;
 use tracing::Instrument;
 
 pub(crate) enum Mouse {

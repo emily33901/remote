@@ -5,12 +5,12 @@ use std::{
 
 use openh264::{
     self,
-    encoder::{Encoder, EncoderConfig},
+    encoder::{BitRate, Encoder, EncoderConfig, FrameRate, QpRange},
     formats::YUVSource,
     OpenH264API,
 };
 
-use eyre::{eyre, Result};
+use anyhow::{anyhow, Result};
 use tokio::sync::mpsc;
 use tracing::Instrument;
 
@@ -80,18 +80,17 @@ pub async fn h264_encoder(
         let (device, context) = crate::dx::create_device()?;
 
         let config = EncoderConfig::new()
-            .max_frame_rate(target_framerate as f32)
-            .enable_skip_frame(true);
+            .max_frame_rate(FrameRate::from_hz(1.0 / target_framerate as f32))
+            .skip_frames(true);
 
         let config = match rate_control {
             RateControlMode::Bitrate(bitrate) => config
                 .rate_control_mode(openh264::encoder::RateControlMode::Bitrate)
-                .set_bitrate_bps(bitrate),
+                .bitrate(BitRate::from_bps(bitrate)),
+            // TODO(emily): QpRange is between 0..51
+            // TODO(emily): OpenH264-rs has no way to set quality param
             RateControlMode::Quality(quality) => {
-                config
-                    .rate_control_mode(openh264::encoder::RateControlMode::Quality)
-                    .set_bitrate_bps(8_000_000)
-                // TODO(emily): OpenH264-rs has no way to set quality param
+                config.rate_control_mode(openh264::encoder::RateControlMode::Quality)
             }
         };
 
@@ -118,7 +117,7 @@ pub async fn h264_encoder(
                     control = Some(
                         control_rx
                             .blocking_recv()
-                            .ok_or(eyre!("control_rx gone down"))?,
+                            .ok_or(anyhow!("control_rx gone down"))?,
                     );
                 }
 
@@ -173,7 +172,7 @@ pub async fn h264_encoder(
             }
         }
 
-        eyre::Ok(())
+        anyhow::Ok(())
     });
 
     Ok((control_tx, event_rx))

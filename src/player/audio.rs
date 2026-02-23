@@ -9,7 +9,7 @@ use tokio::sync::watch;
 use tokio::sync::MappedMutexGuard;
 use tokio::sync::Mutex;
 
-use eyre::Result;
+use anyhow::Result;
 
 use crate::ARBITRARY_CHANNEL_LIMIT;
 

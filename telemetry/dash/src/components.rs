@@ -1,5 +1,5 @@
 use crossterm::event::{KeyEvent, MouseEvent};
-use eyre::Result;
+use anyhow::Result;
 use ratatui::layout::Rect;
 use tokio::sync::mpsc::UnboundedSender;
 

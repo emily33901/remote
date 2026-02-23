@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use eyre::Result;
+use anyhow::Result;
 use ratatui::{prelude::*, widgets::*};
 
 use super::Component;

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use eyre::Result;
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 use tokio::sync::mpsc;
@@ -121,7 +121,7 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
                                         let v: T = bincode::deserialize(&chunk.data)?;
                                         event_tx.send(AssemblyEvent::Whole(v)).await.map_err(
                                             |_err| {
-                                                eyre::eyre!("Failed to decode reassembled packet")
+                                                anyhow::anyhow!("Failed to decode reassembled packet")
                                             },
                                         )?;
                                     } else {
@@ -143,14 +143,14 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
                                     let v: T = bincode::deserialize(&data)?;
                                     event_tx.send(AssemblyEvent::Whole(v)).await.map_err(
                                         |_err| {
-                                            eyre::eyre!("Failed to decode reassembled packet")
+                                            anyhow::anyhow!("Failed to decode reassembled packet")
                                         },
                                     )?;
                                 }
                             }
                         }
 
-                        eyre::Ok(())
+                        anyhow::Ok(())
                     }
 
                     tokio::select! {
@@ -165,7 +165,7 @@ pub(crate) async fn assembly<T: Serialize + for<'de> Deserialize<'de> + Send + '
                         }
                     }
                 }
-                eyre::Ok(())
+                anyhow::Ok(())
         }.in_current_span()
     });
 
@@ -226,7 +226,7 @@ pub(crate) async fn chunk<T: Serialize + for<'de> Deserialize<'de> + Send + 'sta
                         }
                     }
                 }
-                eyre::Ok(())
+                anyhow::Ok(())
             }
             .await
             {

@@ -13,7 +13,7 @@ pub mod utils;
 
 use clap::Parser;
 use cli::Cli;
-use eyre::Result;
+use anyhow::Result;
 
 use crate::{
     app::App,

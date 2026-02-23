@@ -1,9 +1,9 @@
 use std::{collections::HashMap, fmt, path::PathBuf};
 
+use anyhow::Result;
 use config::Value;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use derive_deref::{Deref, DerefMut};
-use eyre::Result;
 use ratatui::style::{Color, Modifier, Style};
 use serde::{
     de::{self, Deserializer, MapAccess, Visitor},

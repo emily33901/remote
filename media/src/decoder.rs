@@ -3,7 +3,7 @@ mod windows;
 
 use std::str::FromStr;
 
-use eyre::Result;
+use anyhow::Result;
 use tokio::sync::mpsc;
 
 use crate::{texture_pool::Texture, Statistics, VideoBuffer};

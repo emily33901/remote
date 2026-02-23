@@ -7,7 +7,7 @@ use std::{collections::HashMap, fmt::Display, str::FromStr, sync::Arc};
 
 use tokio::sync::{mpsc, Mutex};
 
-use eyre::Result;
+use anyhow::Result;
 
 const ARBITRARY_RTC_CHANNEL_LIMIT: usize = 100;
 

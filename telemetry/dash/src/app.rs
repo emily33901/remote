@@ -1,5 +1,5 @@
 use crossterm::event::KeyEvent;
-use eyre::Result;
+use anyhow::Result;
 use ratatui::prelude::Rect;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;

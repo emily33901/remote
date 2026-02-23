@@ -1,4 +1,4 @@
-use eyre::Result;
+use anyhow::Result;
 use media::{Encoding, EncodingOptions};
 use serde::{Deserialize, Serialize};
 
@@ -84,7 +84,7 @@ pub(crate) async fn logic_channel(
                 }
             }
 
-            eyre::Ok(())
+            anyhow::Ok(())
         }
         .in_current_span()
     });
@@ -97,7 +97,7 @@ pub(crate) async fn logic_channel(
                 tx.send(ChannelControl::Send(encoded)).await?;
             }
 
-            eyre::Ok(())
+            anyhow::Ok(())
         }
         .in_current_span()
     });

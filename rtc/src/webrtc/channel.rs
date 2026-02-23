@@ -12,7 +12,7 @@ use webrtc::{
     peer_connection::RTCPeerConnection,
 };
 
-use eyre::Result;
+use anyhow::Result;
 
 use crate::{
     ARBITRARY_RTC_CHANNEL_LIMIT, {ChannelControl, ChannelEvent},
@@ -147,7 +147,7 @@ async fn on_datachannel(
                             }
                         }
 
-                        eyre::Ok(())
+                        anyhow::Ok(())
                     }
                 });
             })

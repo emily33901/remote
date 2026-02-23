@@ -7,7 +7,7 @@ use crate::{
     ARBITRARY_CHANNEL_LIMIT, {ChannelControl, ChannelEvent, ChannelOptions},
 };
 
-use eyre::Result;
+use anyhow::Result;
 
 use super::peer::{DatachannelStorage, DCH, PCH};
 

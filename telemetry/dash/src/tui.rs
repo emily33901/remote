@@ -11,7 +11,7 @@ use crossterm::{
     },
     terminal::{EnterAlternateScreen, LeaveAlternateScreen},
 };
-use eyre::Result;
+use anyhow::Result;
 use futures::{FutureExt, StreamExt};
 use ratatui::backend::CrosstermBackend as Backend;
 use serde::{Deserialize, Serialize};

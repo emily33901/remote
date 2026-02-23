@@ -1,6 +1,6 @@
 use std::mem::MaybeUninit;
 
-use eyre::Result;
+use anyhow::Result;
 use tokio::sync::mpsc;
 use windows::{core::HSTRING, Win32::Media::MediaFoundation::*};
 
@@ -116,7 +116,7 @@ pub fn file_sink(
                 }
             }
 
-            eyre::Ok(())
+            anyhow::Ok(())
         })
         .await
         .unwrap()

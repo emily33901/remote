@@ -4,7 +4,7 @@ use std::{
 };
 
 use ::windows::{core::Interface, Win32::Media::MediaFoundation::*};
-use eyre::{eyre, Result};
+use anyhow::{anyhow, Result};
 
 use tokio::sync::mpsc::{self, error::TryRecvError};
 
@@ -77,7 +77,7 @@ pub async fn h264_encoder(
             let activates = std::slice::from_raw_parts_mut(activates, count as usize);
             let activate = activates
                 .first()
-                .ok_or_else(|| eyre::eyre!("No encoders"))?;
+                .ok_or_else(|| anyhow::anyhow!("No encoders"))?;
 
             // NOTE(emily): If there is an activate then it should be real
             let activate = activate.as_ref().unwrap();
@@ -89,7 +89,7 @@ pub async fn h264_encoder(
                 tracing::info!("chose encoder {s}");
             }
 
-            eyre::Ok(transform)
+            anyhow::Ok(transform)
         };
 
         let transform = match find_encoder(true) {
@@ -125,26 +125,28 @@ pub async fn h264_encoder(
         attributes.set_u32(&CODECAPI_AVEncMPVDefaultBPictureCount, 0)?;
 
         let codec_api = transform.cast::<ICodecAPI>()?;
-        codec_api.SetValue(&CODECAPI_AVLowLatencyMode, &true.into())?;
-        codec_api.SetValue(&CODECAPI_AVEncCommonLowLatency, &true.into())?;
-        codec_api.SetValue(&CODECAPI_AVEncMPVDefaultBPictureCount, &0.into())?;
+        unsafe {
+            codec_api.SetValue(&CODECAPI_AVLowLatencyMode, &true.into())?;
+            codec_api.SetValue(&CODECAPI_AVEncCommonLowLatency, &true.into())?;
+            codec_api.SetValue(&CODECAPI_AVEncMPVDefaultBPictureCount, &0u32.into())?;
 
-        match rate_control {
-            RateControlMode::Quality(quality) => {
-                codec_api.SetValue(
-                    &CODECAPI_AVEncCommonRateControlMode,
-                    &(eAVEncCommonRateControlMode_Quality.0 as u32).into(),
-                )?;
+            match rate_control {
+                RateControlMode::Quality(quality) => {
+                    codec_api.SetValue(
+                        &CODECAPI_AVEncCommonRateControlMode,
+                        &(eAVEncCommonRateControlMode_Quality.0 as u32).into(),
+                    )?;
 
-                codec_api.SetValue(&CODECAPI_AVEncCommonQuality, &quality.into())?;
-            }
-            RateControlMode::Bitrate(bitrate) => {
-                codec_api.SetValue(
-                    &CODECAPI_AVEncCommonRateControlMode,
-                    &(eAVEncCommonRateControlMode_UnconstrainedVBR.0 as u32).into(),
-                )?;
+                    codec_api.SetValue(&CODECAPI_AVEncCommonQuality, &quality.into())?;
+                }
+                RateControlMode::Bitrate(bitrate) => {
+                    codec_api.SetValue(
+                        &CODECAPI_AVEncCommonRateControlMode,
+                        &(eAVEncCommonRateControlMode_UnconstrainedVBR.0 as u32).into(),
+                    )?;
 
-                codec_api.SetValue(&CODECAPI_AVEncCommonMaxBitRate, &bitrate.into())?;
+                    codec_api.SetValue(&CODECAPI_AVEncCommonMaxBitRate, &bitrate.into())?;
+                }
             }
         }
 
@@ -229,7 +231,7 @@ pub async fn h264_encoder(
             )?;
         }
 
-        eyre::Ok(())
+        anyhow::Ok(())
     });
 
     Ok((control_tx, event_rx))
@@ -246,7 +248,7 @@ unsafe fn hardware(
     input_stream_id: u32,
     width: u32,
     height: u32,
-) -> eyre::Result<()> {
+) -> anyhow::Result<()> {
     transform.ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0)?;
     transform.ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0)?;
     transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
@@ -285,7 +287,7 @@ unsafe fn hardware(
                 let EncoderControl::Frame(frame, time, statistics) = {
                     control_rx
                         .blocking_recv()
-                        .ok_or(eyre!("encoder control closed"))?
+                        .ok_or(anyhow!("encoder control closed"))?
                 };
 
                 let texture = texture_pool.acquire();
@@ -417,7 +419,7 @@ unsafe fn software(
     input_stream_id: u32,
     width: u32,
     height: u32,
-) -> eyre::Result<()> {
+) -> anyhow::Result<()> {
     let staging_texture =
         crate::dx::TextureBuilder::new(device, width, height, crate::dx::TextureFormat::NV12)
             .usage(TextureUsage::Staging)
@@ -430,7 +432,7 @@ unsafe fn software(
     loop {
         let EncoderControl::Frame(frame, time, statistics) = control_rx
             .blocking_recv()
-            .ok_or(eyre::eyre!("encoder control closed"))?;
+            .ok_or(anyhow::anyhow!("encoder control closed"))?;
 
         {
             // Map frame to memory and write to buffer
@@ -597,5 +599,5 @@ unsafe fn software(
         }
     }
 
-    eyre::Ok(())
+    anyhow::Ok(())
 }

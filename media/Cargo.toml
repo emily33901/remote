@@ -3,31 +3,24 @@ name = "media"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-tokio = { version = "1", features = ["full"] }
-eyre = "0.6.10"
-derive_more = "0.99.17"
-tracing = "0.1"
-scopeguard = "1.2.0"
-telemetry = { path = "../telemetry" }
-serde = { version = "1.0", features = ["derive"] }
-openh264 = { path = "../openh264-rs/openh264" }
-parking_lot = "0.12.1"
-windows-core = "0.56"
+anyhow = { workspace = true }
+tokio = { workspace = true }
+derive_more = { workspace = true }
+tracing = { workspace = true }
+scopeguard = { workspace = true }
+serde = { workspace = true }
+# openh264 = { path = "../openh264-rs/openh264" }
+openh264 = { version = "0.9" }
+parking_lot = { workspace = true }
+windows-core = { workspace = true }
 util = { path = "../util" }
+telemetry = { path = "../telemetry" }
 
 [dependencies.windows]
-version = "0.56"
+workspace = true
 features = [
-    "Win32_Foundation",
-    "Win32_System_Com",
-    "Win32_Graphics_Gdi",
-    "Win32_Graphics_Direct3D11",
-    "Win32_Graphics_Direct3D_Fxc",
-    "Win32_Graphics_Dxgi_Common",
-    "Win32_Security",
-    "Win32_Media_MediaFoundation",
-    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
 ]

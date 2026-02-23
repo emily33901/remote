@@ -13,7 +13,7 @@ use webrtc::{
 use self::channel::ChannelStorage;
 
 use super::{ChannelControl, ChannelEvent, ChannelOptions, DataChannel, PeerConnection};
-use eyre::Result;
+use anyhow::Result;
 
 impl DataChannel for RTCDataChannel {}
 

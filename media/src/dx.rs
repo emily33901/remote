@@ -1,18 +1,17 @@
 use std::mem::MaybeUninit;
 
-use eyre::{eyre, Result};
+use anyhow::{anyhow, Result};
 use windows::{
     core::{Interface, PCSTR},
     Win32::{
-        Foundation::{CloseHandle, HWND, TRUE},
+        Foundation::{CloseHandle, HMODULE, HWND, TRUE},
         Graphics::{
             Direct3D::{Fxc::D3DCompile, *},
             Direct3D11::*,
             Dxgi::{
                 Common::{
                     DXGI_FORMAT, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12,
-                    DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM_SRGB,
-                    DXGI_FORMAT_R8_UNORM,
+                    DXGI_FORMAT_R8G8B8A8_UNORM_SRGB, DXGI_FORMAT_R8_UNORM,
                 },
                 IDXGIKeyedMutex, IDXGIResource1, IDXGISwapChain, DXGI_ERROR_DEVICE_REMOVED,
                 DXGI_SHARED_RESOURCE_READ, DXGI_SHARED_RESOURCE_WRITE, DXGI_SWAP_CHAIN_DESC,
@@ -53,7 +52,7 @@ pub(crate) fn create_device() -> windows::core::Result<(ID3D11Device, ID3D11Devi
         D3D11CreateDevice(
             None,
             D3D_DRIVER_TYPE_HARDWARE,
-            None,
+            HMODULE(std::ptr::null_mut()),
             flags,
             Some(&FEATURE_LEVELS),
             D3D11_SDK_VERSION,
@@ -105,7 +104,7 @@ pub fn create_device_and_swapchain(
         D3D11CreateDeviceAndSwapChain(
             None,
             D3D_DRIVER_TYPE_HARDWARE,
-            None,
+            HMODULE(std::ptr::null_mut()),
             FLAGS,
             Some(&FEATURE_LEVELS),
             D3D11_SDK_VERSION,
@@ -282,7 +281,7 @@ impl<'a> TextureBuilder<'a> {
             },
         }?;
 
-        texture.ok_or(eyre!("Unable to create texture"))
+        texture.ok_or(anyhow!("Unable to create texture"))
     }
 }
 
@@ -315,8 +314,9 @@ pub fn copy_texture(
         // Try and use in_texture first, otherwise use out_texture
         if in_flags.contains(D3D11_RESOURCE_MISC_SHARED_NTHANDLE) {
             let dxgi_resource: IDXGIResource1 = in_texture.cast()?;
-            let shared_handle =
-                unsafe { dxgi_resource.CreateSharedHandle(None, DXGI_SHARED_RESOURCE_READ, None) }?;
+            let shared_handle = unsafe {
+                dxgi_resource.CreateSharedHandle(None, DXGI_SHARED_RESOURCE_READ.0 as u32, None)
+            }?;
 
             scopeguard::defer! {  unsafe { CloseHandle(shared_handle).unwrap() } };
 
@@ -329,7 +329,7 @@ pub fn copy_texture(
         } else if out_flags.contains(D3D11_RESOURCE_MISC_SHARED_NTHANDLE) {
             let dxgi_resource: IDXGIResource1 = out_texture.cast()?;
             let shared_handle = unsafe {
-                dxgi_resource.CreateSharedHandle(None, DXGI_SHARED_RESOURCE_WRITE, None)
+                dxgi_resource.CreateSharedHandle(None, DXGI_SHARED_RESOURCE_WRITE.0 as u32, None)
             }?;
 
             scopeguard::defer! {  unsafe { CloseHandle(shared_handle).unwrap() } };
@@ -446,7 +446,7 @@ pub fn compile_shader(data: &str, entry_point: PCSTR, target: PCSTR) -> Result<I
                 let error_slice = std::slice::from_raw_parts(errors as *const u8, len);
                 let err_string = String::from_utf8_lossy(error_slice);
 
-                Err(eyre!("Failed to compile because: {}", err_string))
+                Err(anyhow!("Failed to compile because: {}", err_string))
             }
         }
     }

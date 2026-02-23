@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::{collections::HashMap, fmt::Display};
 
 use clap::Parser;
-use eyre::Result;
+use anyhow::Result;
 use media::{Encoding, EncodingOptions, H264EncodingOptions};
 use peer::PeerControl;
 use rtc;

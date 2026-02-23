@@ -10,7 +10,7 @@ use ::windows::{
         Media::MediaFoundation::*,
     },
 };
-use eyre::Result;
+use anyhow::Result;
 use tokio::sync::mpsc;
 
 use crate::{
@@ -68,14 +68,14 @@ pub async fn h264_decoder(
             let activates = std::slice::from_raw_parts_mut(activates, count as usize);
             let activate = activates
                 .first()
-                .ok_or_else(|| eyre::eyre!("No decoders"))?;
+                .ok_or_else(|| anyhow::anyhow!("No decoders"))?;
 
             // NOTE(emily): If there is an activate then it should be real
             let activate = activate.as_ref().unwrap();
 
             let transform: IMFTransform = activate.ActivateObject()?;
 
-            eyre::Ok(transform)
+            anyhow::Ok(transform)
         };
 
         let transform = match find_decoder(true) {
@@ -87,10 +87,10 @@ pub async fn h264_decoder(
         };
 
         let codec_api = transform.cast::<ICodecAPI>()?;
-        codec_api.SetValue(&CODECAPI_AVLowLatencyMode, &1_u32.into())?;
-        codec_api.SetValue(&CODECAPI_AVDecNumWorkerThreads, &8_i32.into())?;
-        codec_api.SetValue(&CODECAPI_AVDecVideoAcceleration_H264, &1_u32.into())?;
-        codec_api.SetValue(&CODECAPI_AVDecVideoThumbnailGenerationMode, &0_u32.into())?;
+        codec_api.SetValue(&CODECAPI_AVLowLatencyMode, &1u32.into())?;
+        codec_api.SetValue(&CODECAPI_AVDecNumWorkerThreads, &8i32.into())?;
+        codec_api.SetValue(&CODECAPI_AVDecVideoAcceleration_H264, &1u32.into())?;
+        codec_api.SetValue(&CODECAPI_AVDecVideoThumbnailGenerationMode, &0u32.into())?;
 
         let attributes = transform.GetAttributes()?;
         // attributes.set_u32(&CODECAPI_AVLowLatencyMode, 1)?;
@@ -169,7 +169,7 @@ pub async fn h264_decoder(
             )?;
         }
 
-        eyre::Ok(())
+        anyhow::Ok(())
     });
 
     Ok((control_tx, event_rx))
@@ -210,7 +210,7 @@ unsafe fn hardware(
             statistics,
         }) = control_rx
             .blocking_recv()
-            .ok_or(eyre::eyre!("decoder control closed"))?;
+            .ok_or(anyhow::anyhow!("decoder control closed"))?;
 
         if let Some(sequence_header) = sequence_header {
             let input_type = transform.GetInputCurrentType(0)?;
@@ -370,7 +370,7 @@ unsafe fn software(
             statistics,
         }) = control_rx
             .blocking_recv()
-            .ok_or(eyre::eyre!("decoder control closed"))?;
+            .ok_or(anyhow::anyhow!("decoder control closed"))?;
 
         if let Some(sequence_header) = sequence_header {
             let input_type = transform.GetInputCurrentType(0)?;

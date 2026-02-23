@@ -1,93 +1,110 @@
-workspace = { members = [
+[workspace]
+members = [
     "media",
     "signal",
     "telemetry",
     "telemetry/dash",
     "rtc",
-    "media",
     "input",
     "util",
+    "egui-directx11",
+]
+resolver = "2"
+
+[workspace.dependencies]
+tokio = { version = "1.43.0", features = ["full"] }
+anyhow = "1.0.95"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+tracing-error = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bincode = "1.3.3"
+async-trait = "0.1"
+futures = "0.3"
+bytes = "1.10"
+tokio-tungstenite = { version = "0.26", features = ["native-tls"] }
+dashmap = "7.0"
+once_cell = { version = "1.20", features = ["parking_lot"] }
+parking_lot = "0.12"
+derive_more = { version = "2.0", features = ["full"] }
+scopeguard = "1.2"
+clap = { version = "4.5", features = ["derive"] }
+dotenv = "0.15"
+uuid = { version = "1.13", features = ["v4", "fast-rng", "serde"] }
+rodio = "0.20"
+rav1e = "0.7"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Direct3D_Fxc",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_Media_MediaFoundation",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+    "Win32_System_Power",
 ] }
+windows-core = "0.62"
+egui = "0.33"
+egui-winit = "0.33"
+egui_demo_lib = "0.33"
+winit = "0.30"
+webrtc = "0.9"
+datachannel = "0.8"
+async-datachannel = "0.4"
+humantime = "2.1"
+log = "0.4"
 
 [package]
 name = "remote"
 version = "0.1.0"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-eyre = "0.6.10"
-parking_lot = "0.12.1"
-tokio = { version = "1", features = ["full"] }
-clap = { version = "4.4.8", features = ["derive"] }
-once_cell = { version = "1.18.0", features = ["parking_lot"] }
-derive_more = "0.99.17"
-serde_json = "1.0.108"
-serde = { version = "1.0", features = ["derive"] }
-uuid = { version = "1.6.1", features = [
-    "v4",                # Lets you generate random UUIDs
-    "fast-rng",          # Use a faster (but still sufficiently random) RNG
-    "macro-diagnostics", # Enable better diagnostics for compile-time UUIDs
-    "serde",
-] }
-tokio-tungstenite = { version = "0.21", features = ["native-tls"] }
-# tungstenite = { version = "0.21", features = ["rustls-tls-native-roots"] }
-futures = "*"
-tracing = "0.1"
-tracing-tracy = { version = "0.11", default-features = false }
-tracing-subscriber = "0.3"
-humantime = "2.1.0"
-async-trait = "0.1.74"
-bytes = "1.5.0"
-rodio = "0.17.3"
-bincode = "1.3.3"
-console-subscriber = "0.2.0"
-dotenv = "0.15.0"
-thiserror = "1.0"
+anyhow = { workspace = true }
+tokio = { workspace = true }
+clap = { workspace = true }
+once_cell = { workspace = true }
+derive_more = { workspace = true }
+serde_json = { workspace = true }
+serde = { workspace = true }
+uuid = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+humantime = { workspace = true }
+async-trait = { workspace = true }
+bytes = { workspace = true }
+rodio = { workspace = true }
+bincode = { workspace = true }
+dotenv = { workspace = true }
+thiserror = { workspace = true }
+scopeguard = { workspace = true }
+parking_lot = { workspace = true }
+windows = { workspace = true }
+egui = { workspace = true }
+winit = { workspace = true }
+egui-winit = { workspace = true }
+
+# Workspace members
 telemetry = { path = "telemetry" }
 rtc = { path = "rtc" }
-# openh264 = "0.4.4"
-scopeguard = "1.2.0"
 signal = { path = "signal" }
 media = { path = "media" }
-egui = { version = "0.27", features = [] }
-winit = "0.29"
-egui-directx11 = { path = "egui-directx11" }
-egui-winit = "0.27"
-egui_demo_lib = "0.27.2"
 input = { path = "input" }
-rav1e = "0.7"
+egui-directx11 = { path = "egui-directx11" }
 
-[dependencies.windows]
-version = "0.56"
-features = [
-    # "implement",
-    # "Foundation",
-    # "Win32_Foundation",
-    # "Win32_System_Com",
-    # "Win32_System_Ole",
-    # "Win32_System_Memory",
-    # # "Win32_Graphics_Gdi",
-    # "Win32_System_Com_StructuredStorage",
-    # "Win32_System_SystemServices",
-    # "Win32_UI_Shell_Common",
-    # "Win32_UI_Shell",
-    "Win32_UI_WindowsAndMessaging",
-    # "Win32_System_LibraryLoader",
-    # "Win32_UI_Input_KeyboardAndMouse",
-    # # "Win32_Graphics_Direct3D12",
-    # "Win32_Graphics_Direct3D11",
-    # "Win32_Graphics_Dxgi_Common",
-    # "Win32_Security",
-    "Win32_System_LibraryLoader",
-    "Win32_System_Threading",
-    # "Win32_System_WindowsProgramming",
-    # "Win32_UI_WindowsAndMessaging",
-    # "Win32_Media_MediaFoundation",
-    # "Win32_UI_Shell_PropertiesSystem",
-    "Win32_System_Power",
-]
+# Additional dependencies not in workspace
+console-subscriber = "0.4"
+egui_demo_lib = { workspace = true }
 
 [profile.release]
 panic = "abort"

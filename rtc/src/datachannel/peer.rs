@@ -7,7 +7,7 @@ use tokio::sync::{mpsc, oneshot, Mutex};
 
 use async_datachannel::{PeerConnection, RtcConfig};
 use datachannel::{DataChannelHandler, RtcPeerConnection};
-use eyre::Result;
+use anyhow::Result;
 
 use crate::{
     RtcPeerState, ARBITRARY_CHANNEL_LIMIT,

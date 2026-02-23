@@ -1,6 +1,6 @@
 use std::mem::{ManuallyDrop, MaybeUninit};
 
-use eyre::Result;
+use anyhow::Result;
 use tokio::sync::mpsc;
 use windows::{
     core::{IUnknown, Interface, HSTRING},
@@ -181,7 +181,7 @@ impl Media {
             debug_video_format(&first_output)?;
         }
 
-        let debug_audio_type = |output: IMFMediaType, typ: &str| -> eyre::Result<()> {
+        let debug_audio_type = |output: IMFMediaType, typ: &str| -> anyhow::Result<()> {
             let channels = output.get_u32(&MF_MT_AUDIO_NUM_CHANNELS)?;
             let samples_per_sec = output.get_u32(&MF_MT_AUDIO_SAMPLES_PER_SECOND)?;
             let bits_per_sample = output.get_u32(&MF_MT_AUDIO_BITS_PER_SAMPLE)?;
@@ -474,7 +474,7 @@ pub async fn produce(
                 deadline = next_deadline;
             }
 
-            eyre::Ok(())
+            anyhow::Ok(())
         }
     });
 
@@ -490,7 +490,7 @@ pub async fn produce(
                     }
                 }
 
-                eyre::Ok(())
+                anyhow::Ok(())
             })
             .await
             .unwrap()

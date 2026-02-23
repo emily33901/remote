@@ -12,12 +12,15 @@ use windows::{
             MF_MT_FRAME_SIZE, MF_VERSION,
         },
         System::Com::{
-            CoInitializeEx, CoTaskMemFree, COINIT_DISABLE_OLE1DDE, COINIT_MULTITHREADED,
+            CoInitializeEx, CoTaskMemFree, StructuredStorage::PROPVARIANT, COINIT_DISABLE_OLE1DDE,
+            COINIT_MULTITHREADED,
         },
     },
 };
 
-use eyre::Result;
+use windows_core::BOOL;
+
+use anyhow::Result;
 
 pub(crate) fn with_locked_media_buffer<F: FnOnce(&mut [u8], &mut usize) -> Result<()>>(
     buffer: &IMFMediaBuffer,
@@ -53,15 +56,13 @@ pub(crate) fn debug_media_type(typ: &IMFMediaType) -> Result<()> {
 
     for i in 0..unsafe { typ.GetCount()? } {
         let mut guid: windows_core::GUID = windows_core::GUID::zeroed();
-        let mut value = windows_core::PROPVARIANT::default();
+        let mut value = PROPVARIANT::default();
         if let Ok(_) = unsafe { typ.GetItemByIndex(i, &mut guid, Some(&mut value)) } {
-            let vt: PropVariantType =
-                unsafe { value.as_raw().Anonymous.Anonymous.vt }.try_into()?;
+            let vt: PropVariantType = unsafe { value.Anonymous.Anonymous.vt.0 }.try_into()?;
 
             if let PropVariantType::VtClsid = vt {
                 let value = unsafe {
-                    *(value.as_raw().Anonymous.Anonymous.Anonymous.pStorage
-                        as *mut windows_core::GUID)
+                    *(value.Anonymous.Anonymous.Anonymous.puuid as *const windows_core::GUID)
                 };
 
                 text.push_str(&format!(
@@ -341,7 +342,7 @@ pub(crate) fn make_dxgi_sample(
             &ID3D11Texture2D::IID,
             texture,
             subresource_index.unwrap_or_default(),
-            FALSE,
+            false,
         )?
     };
 
@@ -358,7 +359,7 @@ pub(crate) fn init() -> Result<()> {
 }
 
 pub(crate) fn mf_guid_to_name(guid: &windows_core::GUID) -> Cow<'static, str> {
-    use ::windows::Win32::Media::MediaFoundation::*;
+    use windows::Win32::Media::MediaFoundation::*;
     macro_rules! return_if_matches {
         ($i:expr) => {
             if $i == *guid {

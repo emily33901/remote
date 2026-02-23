@@ -7,7 +7,7 @@ use std::{
 use itertools::Itertools;
 
 use crossterm::event::{KeyCode, KeyEvent};
-use eyre::Result;
+use anyhow::Result;
 use ratatui::{prelude::*, widgets::*};
 use serde::{Deserialize, Serialize};
 use telemetry::{ChannelEvent, ClientId, CounterEvent, Id, TelemetryEvent};

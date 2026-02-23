@@ -25,7 +25,7 @@ pub async fn stream() -> mpsc::Receiver<(ClientId, TelemetryEvent)> {
                             tx.send((id, event)).await?
                         }
 
-                        Ok::<_, eyre::Error>(())
+                        Ok::<_, anyhow::Error>(())
                     }
                     .await
                     {

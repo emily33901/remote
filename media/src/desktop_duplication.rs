@@ -1,6 +1,6 @@
 use std::{ops::Deref, time::Duration};
 
-use eyre::Result;
+use anyhow::Result;
 use tokio::sync::mpsc::{self, error::TryRecvError};
 use tracing::Instrument;
 use util::JoinhandleExt;
@@ -131,7 +131,7 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
             let duplicated = unsafe { primary.DuplicateOutput(&device) }?;
 
             let mut desc = DXGI_OUTDUPL_DESC::default();
-            unsafe { duplicated.GetDesc(&mut desc) };
+            let desc = unsafe { duplicated.GetDesc() };
 
             tracing::debug!(?desc);
 
@@ -312,7 +312,7 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
             }
         }
 
-        eyre::Ok(())
+        anyhow::Ok(())
     }).watch(|r| {
         if let Err(err) = r {
             tracing::debug!("failed: {err:?}");
@@ -368,7 +368,7 @@ pub async fn duplicate_desktop(
                     }
                 }
             }
-            eyre::Ok(())
+            anyhow::Ok(())
         }
         .await
         {
@@ -396,7 +396,7 @@ pub async fn duplicate_desktop(
                     }
                 }
             }
-            eyre::Ok(())
+            anyhow::Ok(())
         }
         .await
         {
@@ -417,7 +417,7 @@ pub async fn duplicate_desktop(
                     }
                 }
 
-                eyre::Ok(())
+                anyhow::Ok(())
             }
             .await
             {

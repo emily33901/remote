@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
+use anyhow::Result;
 use directories::ProjectDirs;
-use eyre::Result;
 use lazy_static::lazy_static;
 use tracing::error;
 use tracing_error::ErrorLayer;

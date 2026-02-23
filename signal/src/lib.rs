@@ -7,11 +7,11 @@ use serde::Deserialize;
 use serde::Serialize;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, Mutex};
-use tokio_tungstenite::tungstenite::Message::{self, Binary, Close, Frame, Ping, Pong, Text};
+use tokio_tungstenite::tungstenite::{Bytes, Message::{self, Binary, Close, Frame, Ping, Pong, Text}, Utf8Bytes};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 use uuid::Uuid;
 
-use eyre::{eyre, Result};
+use anyhow::{anyhow, Result};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 #[repr(transparent)]
@@ -255,9 +255,9 @@ async fn handle_incoming_text_message(
     our_peer_id: PeerId,
     connection_requests: ConnectionRequestMap,
     peers: PeerMap,
-    msg: String,
+    msg: Utf8Bytes,
 ) -> core::result::Result<(), Option<ServerToPeerMessage>> {
-    let message = serde_json::from_str::<PeerToServerMessage>(&msg).unwrap();
+    let message = serde_json::from_str::<PeerToServerMessage>(msg.as_str()).unwrap();
     let job_id = message.job_id;
     Ok(
         handle_incoming_message_inner(our_peer_id, connection_requests, peers, message)
@@ -302,7 +302,7 @@ async fn handle_outgoing(
     let message = tokio_tungstenite::tungstenite::Message::text(text);
     outgoing.send(message).await?;
 
-    eyre::Ok(())
+    anyhow::Ok(())
 }
 
 pub async fn server(address: &str) -> Result<()> {
@@ -376,7 +376,7 @@ pub async fn server(address: &str) -> Result<()> {
                         }
                     }
                     _ = ticker.tick().fuse() => {
-                        outgoing.send(Ping(Vec::from(b"ping"))).await.unwrap();
+                        outgoing.send(Ping(Bytes::from_static(b"ping"))).await.unwrap();
                     }
                 }
             }
@@ -384,7 +384,7 @@ pub async fn server(address: &str) -> Result<()> {
             println!("{} {} disconnected", peer_id, &addr);
             peers.lock().await.remove(&peer_id);
 
-            eyre::Ok(())
+            anyhow::Ok(())
         });
     }
 
@@ -419,7 +419,7 @@ async fn send_message(
 ) -> Result<()> {
     let string = serde_json::to_string(&message)?;
     write.send(Message::text(string)).await?;
-    eyre::Ok(())
+    anyhow::Ok(())
 }
 
 async fn handle_control(
@@ -451,7 +451,7 @@ async fn handle_control(
         },
         SignallingControl::RejectConnection(_connection_id) => todo!(),
         SignallingControl::_Pong(data) => {
-            write.send(Message::Pong(data)).await?;
+            write.send(Message::Pong(data.into())).await?;
             return Ok(());
         }
     };
@@ -489,9 +489,9 @@ async fn handle_message(
                 })
                 .await?)
         }
-        Binary(_) | Frame(_) => Err(eyre!("No idea what to do with binary")),
-        Close(_) => Err(eyre!("Going down")),
-        Ping(data) => Ok(control_tx.send(SignallingControl::_Pong(data)).await?),
+        Binary(_) | Frame(_) => Err(anyhow!("No idea what to do with binary")),
+        Close(_) => Err(anyhow!("Going down")),
+        Ping(data) => Ok(control_tx.send(SignallingControl::_Pong(data.to_vec())).await?),
         Pong(_) => Ok(()),
     }
 }

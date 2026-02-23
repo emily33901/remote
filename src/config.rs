@@ -24,7 +24,7 @@ impl Config {
             .get_or_try_init(|| {
                 dotenv::dotenv()?;
 
-                eyre::Ok(Config {
+                anyhow::Ok(Config {
                     width: u32::from_str(&std::env::var("width")?)?,
                     height: u32::from_str(&std::env::var("height")?)?,
                     bitrate: u32::from_str(&std::env::var("bitrate")?)?,
@@ -34,9 +34,9 @@ impl Config {
 
                     webrtc_api: rtc::Api::from_str(&std::env::var("webrtc_api")?)?,
                     decoder_api: media::decoder::Decoder::from_str(&std::env::var("decoder_api")?)
-                        .map_err(|_| eyre::eyre!(""))?,
+                        .map_err(|_| anyhow::anyhow!(""))?,
                     encoder_api: media::encoder::Encoder::from_str(&std::env::var("encoder_api")?)
-                        .map_err(|_| eyre::eyre!(""))?,
+                        .map_err(|_| anyhow::anyhow!(""))?,
                     log_level: tracing::level_filters::LevelFilter::from_str(&std::env::var(
                         "log_level",
                     )?)?,

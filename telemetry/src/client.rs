@@ -56,7 +56,7 @@ pub async fn watch_channel<T: Send + 'static>(sender: &mpsc::Sender<T>, name: &s
                     .await;
                 }
 
-                Ok::<_, eyre::Error>(())
+                Ok::<_, anyhow::Error>(())
             }
             .await
             {
@@ -118,7 +118,7 @@ pub async fn watch_counter(counter: &Counter, unit: crate::Unit, name: &str) {
                     .await;
                 }
 
-                Ok::<_, eyre::Error>(())
+                Ok::<_, anyhow::Error>(())
             }
             .await
             {
@@ -151,7 +151,7 @@ pub async fn sink() {
                     bincode_writer.send(event).await?;
                 }
 
-                Ok::<_, eyre::Error>(())
+                Ok::<_, anyhow::Error>(())
             }
             .await
             {

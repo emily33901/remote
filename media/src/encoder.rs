@@ -7,7 +7,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use tokio::sync::mpsc;
 
-use eyre::Result;
+use anyhow::Result;
 
 use crate::texture_pool::Texture;
 use crate::Encoding;
