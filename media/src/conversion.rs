@@ -1,7 +1,4 @@
-use std::{
-    mem::ManuallyDrop,
-    time::Instant,
-};
+use std::{mem::ManuallyDrop, time::Instant};
 
 use anyhow::{anyhow, Result};
 use tokio::sync::mpsc::{self, error::TryRecvError};
@@ -11,12 +8,11 @@ use windows::{
         Foundation::RECT,
         Graphics::Direct3D11::{
             ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, ID3D11VideoContext,
-            ID3D11VideoDevice, ID3D11VideoProcessor,
-            ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView,
-            D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CAPS,
-            D3D11_VIDEO_PROCESSOR_CONTENT_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC,
-            D3D11_VIDEO_PROCESSOR_OUTPUT_RATE_NORMAL, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC,
-            D3D11_VIDEO_PROCESSOR_STREAM,
+            ID3D11VideoDevice, ID3D11VideoProcessor, ID3D11VideoProcessorInputView,
+            ID3D11VideoProcessorOutputView, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
+            D3D11_VIDEO_PROCESSOR_CAPS, D3D11_VIDEO_PROCESSOR_CONTENT_DESC,
+            D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_OUTPUT_RATE_NORMAL,
+            D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_STREAM,
             D3D11_VIDEO_USAGE_PLAYBACK_NORMAL, D3D11_VPIV_DIMENSION_TEXTURE2D,
             D3D11_VPOV_DIMENSION_TEXTURE2D,
         },
@@ -302,7 +298,7 @@ pub(crate) async fn converter(
                 };
 
                 sample.SetSampleTime(10)?;
-                // sample.SetSampleDuration(10_000_000 / target_framerate as i64)?;
+                // sample.SetSampleDuration(10_000_000 / 60 as i64)?;
                 sample.SetSampleDuration(1000)?;
 
                 let result = transform

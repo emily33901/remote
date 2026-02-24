@@ -12,7 +12,7 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
-tokio = { version = "1.43.0", features = ["full"] }
+tokio = { version = "1.43", features = ["full"] }
 anyhow = "1.0.95"
 thiserror = "2.0"
 tracing = "0.1"
@@ -103,7 +103,7 @@ input = { path = "input" }
 egui-directx11 = { path = "egui-directx11" }
 
 # Additional dependencies not in workspace
-console-subscriber = "0.4"
+console-subscriber = "0.5"
 egui_demo_lib = { workspace = true }
 
 [profile.release]

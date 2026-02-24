@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::Result;
 use derive_more::{Deref, DerefMut};
-use tokio::sync::{mpsc, Mutex, MutexGuard, oneshot};
+use tokio::sync::{mpsc, oneshot, Mutex, MutexGuard};
 
 use crate::config::Config;
 use crate::logic::{Mode, PeerStreamRequest, PeerStreamRequestResponse};
@@ -19,8 +19,8 @@ use media::{
 
 use signal::{ConnectionId, PeerId, SignallingControl, SignallingEvent};
 
-use super::color;
 use super::app::AppEvent;
+use super::color;
 use tracing::Instrument;
 
 pub struct RemotePeer {
@@ -162,7 +162,10 @@ impl RemotePeer {
                 PeerEvent::Error(PeerError::Closed) => {
                     tracing::info!(%our_peer_id, %their_peer_id, "peer closed");
                     app_event_tx
-                        .send(AppEvent::PeerClosed(our_peer_id.clone(), their_peer_id.clone()))
+                        .send(AppEvent::PeerClosed(
+                            our_peer_id.clone(),
+                            their_peer_id.clone(),
+                        ))
                         .await?;
                 }
                 event => {
@@ -179,7 +182,8 @@ impl RemotePeer {
         media_control: &Weak<Mutex<Option<mpsc::Sender<media::produce::MediaControl>>>>,
     ) -> tokio::sync::oneshot::Sender<(PeerStreamRequestResponse, Option<media::encoder::Encoder>)>
     {
-        let (response_tx, mut response_rx) = oneshot::channel::<(PeerStreamRequestResponse, Option<media::encoder::Encoder>)>();
+        let (response_tx, mut response_rx) =
+            oneshot::channel::<(PeerStreamRequestResponse, Option<media::encoder::Encoder>)>();
 
         let peer_control = peer_control.clone();
         let media_control = media_control.clone();
@@ -725,11 +729,19 @@ impl PeerStreamRequest {
                             .changed();
                     changed = changed
                         || ui
-                            .selectable_value(&mut self.preferred_encoding, Some(Encoding::AV1), "AV1")
+                            .selectable_value(
+                                &mut self.preferred_encoding,
+                                Some(Encoding::AV1),
+                                "AV1",
+                            )
                             .changed();
                     changed = changed
                         || ui
-                            .selectable_value(&mut self.preferred_encoding, Some(Encoding::VP9), "VP9")
+                            .selectable_value(
+                                &mut self.preferred_encoding,
+                                Some(Encoding::VP9),
+                                "VP9",
+                            )
                             .changed();
                     changed = changed
                         || ui
@@ -744,9 +756,15 @@ impl PeerStreamRequest {
                         Some(Encoding::H264) => Some(EncodingOptions::H264(H264EncodingOptions {
                             rate_control: media::RateControlMode::Quality(70),
                         })),
-                        Some(Encoding::AV1) => Some(EncodingOptions::AV1(media::AV1EncodingOptions {})),
-                        Some(Encoding::H265) => Some(EncodingOptions::H265(media::H2565EncodingOptions {})),
-                        Some(Encoding::VP9) => Some(EncodingOptions::VP9(media::VP9EncodingOptions {})),
+                        Some(Encoding::AV1) => {
+                            Some(EncodingOptions::AV1(media::AV1EncodingOptions {}))
+                        }
+                        Some(Encoding::H265) => {
+                            Some(EncodingOptions::H265(media::H2565EncodingOptions {}))
+                        }
+                        Some(Encoding::VP9) => {
+                            Some(EncodingOptions::VP9(media::VP9EncodingOptions {}))
+                        }
                         None => None,
                     }
                 }
@@ -774,7 +792,9 @@ impl PeerStreamRequest {
 
                         match &mut encoding_options.rate_control {
                             media::RateControlMode::Bitrate(bitrate) => {
-                                ui.add(egui::Slider::new(bitrate, 10000..=80000000).logarithmic(true));
+                                ui.add(
+                                    egui::Slider::new(bitrate, 10000..=80000000).logarithmic(true),
+                                );
                             }
                             media::RateControlMode::Quality(quality) => {
                                 ui.add(egui::Slider::new(quality, 0..=100));
@@ -855,14 +875,8 @@ impl PeerWindowState {
                                 statistics,
                             )) => {
                                 media = MediaResult::Texture(PeerMediaState {
-                                    start_time: last_media
-                                        .as_ref()
-                                        .map(|m| m.start_time)
-                                        .unwrap_or(Instant::now()),
-                                    start_timestamp: last_media
-                                        .as_ref()
-                                        .map(|m| m.start_timestamp.clone())
-                                        .unwrap_or(time.clone()),
+                                    start_time: Instant::now(),
+                                    start_timestamp: time.clone(),
                                     time: time,
                                     texture: Arc::new(new_texture),
                                     statistics,
@@ -1091,10 +1105,7 @@ impl PeerWindowState {
                                     height: config.height,
                                     refresh_rate: config.framerate,
                                 }),
-                            encoding: request
-                                .preferred_encoding
-                                .clone()
-                                .unwrap_or(Encoding::H264),
+                            encoding: request.preferred_encoding.clone().unwrap_or(Encoding::H264),
                             encoding_options: request.preferred_encoding_options.clone().unwrap_or(
                                 EncodingOptions::H264(H264EncodingOptions {
                                     rate_control: media::RateControlMode::Quality(70),

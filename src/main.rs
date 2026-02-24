@@ -13,6 +13,7 @@ mod windows;
 use crate::config::Config;
 use anyhow::Result;
 use std::{fmt::Display, str::FromStr};
+use tracing_subscriber::Layer;
 
 use clap::Parser;
 use rtc;
@@ -81,17 +82,18 @@ async fn main() -> Result<()> {
     let filter = tracing_subscriber::EnvFilter::builder()
         .with_default_directive(LevelFilter::DEBUG.into())
         .from_env()?
-        // .add_directive("tokio=trace".parse()?)
-        // .add_directive("runtime=trace".parse()?)
         .add_directive("webrtc_sctp::association=info".parse()?)
         .add_directive("webrtc_sctp::association::association_internal=info".parse()?)
         .add_directive("webrtc_sctp::stream=info".parse()?);
 
     tracing_subscriber::registry()
-        // .with(console_subscriber::spawn())
+        .with(console_subscriber::spawn())
         // .with(tracing_tracy::TracyLayer::default())
-        .with(filter)
-        .with(tracing_subscriber::fmt::layer().pretty())
+        .with(
+            tracing_subscriber::fmt::layer()
+                .compact()
+                .with_filter(filter),
+        )
         .init();
 
     tracing::info!(args.command, config.signal_server, "remote");

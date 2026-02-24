@@ -11,9 +11,9 @@ use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_R8G8B8A8_UNORM_SRGB;
 use winit::dpi::PhysicalSize;
 use winit::event::{Event, WindowEvent};
-use winit::event_loop::EventLoopBuilder;
-use winit::window::Window;
+use winit::event_loop::{EventLoop, EventLoopBuilder};
 use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawWindowHandle};
+use winit::window::Window;
 
 use self::app::App;
 use self::window::{create_render_target_for_swap_chain, resize_swap_chain_and_render_target};
@@ -26,7 +26,7 @@ pub async fn ui() -> Result<()> {
 
     let (width, height) = (config.width, config.height);
 
-    let event_loop = EventLoopBuilder::new().build()?;
+    let event_loop = EventLoop::builder().build()?;
     let window_attributes = Window::default_attributes()
         .with_title("remote")
         .with_inner_size(PhysicalSize::new(width, height));
@@ -86,29 +86,28 @@ pub async fn ui() -> Result<()> {
                     }
                 }
                 WindowEvent::RedrawRequested => {
-                    if let Some(render_target) = &render_target {
-                        let egui_input = egui_winit.take_egui_input(&window);
-                        let egui_output = egui_ctx.run(egui_input, |ctx| {
-                            app.ui(ctx);
-                            egui_demo.ui(ctx);
-                        });
-                        let (renderer_output, platform_output, _) =
-                            egui_directx11::split_output(egui_output);
-                        egui_winit.handle_platform_output(&window, platform_output);
-
-                        unsafe {
-                            context.ClearRenderTargetView(render_target, &[0.0, 0.0, 0.0, 1.0]);
-                        }
-                        let _ = egui_renderer.render(
-                            &context,
-                            render_target,
-                            &egui_ctx,
-                            renderer_output,
-                        );
-                        let _ = unsafe { swap_chain.Present(1, windows::Win32::Graphics::Dxgi::DXGI_PRESENT(0)) };
-                    } else {
+                    let Some(render_target) = &render_target else {
                         unreachable!();
+                    };
+
+                    let egui_input = egui_winit.take_egui_input(&window);
+                    let egui_output = egui_ctx.run(egui_input, |ctx| {
+                        app.ui(ctx);
+                        egui_demo.ui(ctx);
+                    });
+                    let (renderer_output, platform_output, _) =
+                        egui_directx11::split_output(egui_output);
+                    egui_winit.handle_platform_output(&window, platform_output);
+
+                    unsafe {
+                        context.ClearRenderTargetView(render_target, &[0.0, 0.0, 0.0, 1.0]);
                     }
+
+                    let _ =
+                        egui_renderer.render(&context, render_target, &egui_ctx, renderer_output);
+                    let _ = unsafe {
+                        swap_chain.Present(0, windows::Win32::Graphics::Dxgi::DXGI_PRESENT(0))
+                    };
                 }
                 _ => (),
             }
