@@ -11,8 +11,6 @@ mod video;
 mod windows;
 
 use crate::config::Config;
-use anyhow::Result;
-use std::{fmt::Display, str::FromStr};
 use tracing_subscriber::Layer;
 
 use clap::Parser;
@@ -25,70 +23,23 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 const ARBITRARY_CHANNEL_LIMIT: usize = 5;
 
-#[derive(Debug, Clone)]
-enum Command {
-    Ui,
-}
-
-#[derive(Debug)]
-struct CommandParseError;
-
-impl Display for CommandParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "CommandParseError")?;
-        Ok(())
-    }
-}
-
-impl std::error::Error for CommandParseError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        None
-    }
-
-    fn description(&self) -> &str {
-        "description() is deprecated; use Display"
-    }
-
-    fn cause(&self) -> Option<&dyn std::error::Error> {
-        self.source()
-    }
-}
-
-impl FromStr for Command {
-    type Err = CommandParseError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "ui" => Ok(Self::Ui),
-            _ => Err(CommandParseError),
-        }
-    }
-}
-
-#[derive(Parser, Debug)]
-#[command(author, version, about, long_about = None)]
-struct Args {
-    command: String,
-}
-
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
     let args = Args::parse();
 
     // Make sure we can load the dotenv and create a config from it.
-    dotenv::dotenv()?;
-    let config = Config::load();
+    dotenv::dotenv().expect("Failed to load dotenv");
 
     let filter = tracing_subscriber::EnvFilter::builder()
         .with_default_directive(LevelFilter::DEBUG.into())
-        .from_env()?
-        .add_directive("webrtc_sctp::association=info".parse()?)
-        .add_directive("webrtc_sctp::association::association_internal=info".parse()?)
-        .add_directive("webrtc_sctp::stream=info".parse()?);
+        .from_env()
+        .expect("Failed to create filter")
+        .add_directive("webrtc_sctp::association=info".parse().unwrap())
+        .add_directive("webrtc_sctp::association::association_internal=info".parse().unwrap())
+        .add_directive("webrtc_sctp::stream=info".parse().unwrap());
 
     tracing_subscriber::registry()
         .with(console_subscriber::spawn())
-        // .with(tracing_tracy::TracyLayer::default())
         .with(
             tracing_subscriber::fmt::layer()
                 .compact()
@@ -96,16 +47,26 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    tracing::info!(args.command, config.signal_server, "remote");
+    let _system = windows::System::new().expect("Failed to initialize Windows system");
+    let config = Config::load();
 
-    std::panic::set_hook(Box::new(|info| {
-        let backtrace = std::backtrace::Backtrace::capture();
-        eprintln!("thread panicked {info}");
-        eprintln!("backtrace\n{backtrace}");
-    }));
+    let options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size(egui::Vec2::new(config.width as f32, config.height as f32)),
+        ..Default::default()
+    };
 
-    let command = args.command.as_str().parse()?;
-    match command {
-        Command::Ui => Ok(ui::ui().await?),
-    }
+    eframe::run_native(
+        "remote",
+        options,
+        Box::new(|cc| Ok(Box::new(ui::app::App::new(cc)))),
+    )
+    .expect("Failed to run eframe");
+}
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    #[arg(default_value = "ui")]
+    command: String,
 }

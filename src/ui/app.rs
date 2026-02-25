@@ -24,6 +24,7 @@ pub enum AppEvent {
         (PeerId, mpsc::Receiver<media::decoder::DecoderEvent>),
     ),
     PeerClosed(PeerId, PeerId),
+    VideoData(PeerId, PeerId, Vec<u8>),
 }
 
 pub struct App {
@@ -31,6 +32,7 @@ pub struct App {
     pub event_rx: mpsc::Receiver<AppEvent>,
     pub event_tx: mpsc::Sender<AppEvent>,
     pub start_time: std::time::Instant,
+    pub gl: std::sync::Arc<glow::Context>,
 }
 
 impl std::fmt::Debug for App {
@@ -41,8 +43,10 @@ impl std::fmt::Debug for App {
     }
 }
 
-impl Default for App {
-    fn default() -> Self {
+impl App {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        let gl = cc.gl.clone().expect("Failed to get OpenGL context");
+        
         let (event_tx, event_rx) = mpsc::channel(10);
 
         Self {
@@ -50,7 +54,14 @@ impl Default for App {
             event_rx,
             event_tx,
             start_time: Instant::now(),
+            gl,
         }
+    }
+}
+
+impl eframe::App for App {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.ui(ctx);
     }
 }
 
@@ -94,7 +105,7 @@ impl App {
 
             {
                 for (id, (window_state, peer)) in self.peers.iter_mut() {
-                    match window_state.ui(ctx, ui, peer) {
+                    match window_state.ui(ctx, ui, peer, &self.gl) {
                         ShouldRemove::Yes => {
                             remove_peers.push(id.clone());
                         }
@@ -170,6 +181,15 @@ impl App {
                                 .connected_peers
                                 .remove(&their_id)
                                 .expect("Expect remote PeerControl to exist when it goes away");
+                        }
+                    }
+                    AppEvent::VideoData(our_id, their_id, data) => {
+                        if let Some((peer_window_state, _)) = self.peers.get_mut(&our_id) {
+                            if let Some(connected_peer) = peer_window_state.connected_peers.get_mut(&their_id) {
+                                if let Ok(mut guard) = connected_peer.latest_h264_data.lock() {
+                                    *guard = Some(data);
+                                }
+                            }
                         }
                     }
                 }

@@ -7,7 +7,6 @@ members = [
     "rtc",
     "input",
     "util",
-    "egui-directx11",
 ]
 resolver = "2"
 
@@ -52,10 +51,11 @@ windows = { version = "0.62", features = [
     "Win32_System_Power",
 ] }
 windows-core = "0.62"
+eframe = "0.33"
 egui = "0.33"
-egui-winit = "0.33"
-egui_demo_lib = "0.33"
-winit = "0.30"
+glow = "0.16"
+egui_glow = "0.33"
+openh264 = "0.9"
 webrtc = "0.9"
 datachannel = "0.8"
 async-datachannel = "0.4"
@@ -90,9 +90,10 @@ thiserror = { workspace = true }
 scopeguard = { workspace = true }
 parking_lot = { workspace = true }
 windows = { workspace = true }
+eframe = { workspace = true }
 egui = { workspace = true }
-winit = { workspace = true }
-egui-winit = { workspace = true }
+glow = { workspace = true }
+egui_glow = { workspace = true }
 
 # Workspace members
 telemetry = { path = "telemetry" }
@@ -100,11 +101,10 @@ rtc = { path = "rtc" }
 signal = { path = "signal" }
 media = { path = "media" }
 input = { path = "input" }
-egui-directx11 = { path = "egui-directx11" }
 
 # Additional dependencies not in workspace
 console-subscriber = "0.5"
-egui_demo_lib = { workspace = true }
+openh264 = { workspace = true }
 
 [profile.release]
 panic = "abort"

@@ -6,12 +6,15 @@ use std::{
 
 use anyhow::Result;
 use derive_more::{Deref, DerefMut};
+use egui_glow::CallbackFn;
+use glow::Context;
 use tokio::sync::{mpsc, oneshot, Mutex, MutexGuard};
 
 use crate::config::Config;
 use crate::logic::{Mode, PeerStreamRequest, PeerStreamRequestResponse};
 use crate::peer::{PeerControl, PeerError, PeerEvent};
-use crate::player::video::NV12TextureRender;
+use crate::player::opengl_video::OpenGLVideoRenderer;
+use openh264::{decoder::Decoder, decoder::DecoderConfig, formats::YUVSource, nal_units, OpenH264API};
 
 use media::{
     Encoding, EncodingOptions, H264EncodingOptions, Statistics, Texture, Timestamp, VideoBuffer,
@@ -151,6 +154,16 @@ impl RemotePeer {
                     }
                 },
                 PeerEvent::Video(video) => {
+                    // Store H264 data for our own decoder
+                    app_event_tx
+                        .send(AppEvent::VideoData(
+                            our_peer_id.clone(),
+                            their_peer_id.clone(),
+                            video.data.clone(),
+                        ))
+                        .await?;
+                    
+                    // Also send to media decoder (for DX11 path, kept for now)
                     if let Some(decoder_control) = &decoder_control {
                         decoder_control
                             .send(media::decoder::DecoderControl::Data(video))
@@ -667,6 +680,18 @@ pub struct ConnectedPeer {
         oneshot::Sender<(PeerStreamRequestResponse, Option<media::encoder::Encoder>)>,
     )>,
     pub statistics_average: VecDeque<Statistics>,
+    pub frame_timelines: VecDeque<FrameTimeline>,
+    pub latest_h264_data: std::sync::Mutex<Option<Vec<u8>>>,
+}
+
+#[derive(Clone, Debug)]
+struct FrameTimeline {
+    conversion: Duration,
+    encode: Duration,
+    network: Duration,
+    decode: Duration,
+    total: Duration,
+    gap: Duration,
 }
 
 impl ConnectedPeer {
@@ -677,6 +702,8 @@ impl ConnectedPeer {
             decoder_receiver: None,
             stream_requests: vec![],
             statistics_average: VecDeque::new(),
+            frame_timelines: VecDeque::new(),
+            latest_h264_data: std::sync::Mutex::new(None),
         }
     }
 }
@@ -688,7 +715,8 @@ pub struct PeerWindowState {
     pub connection_requests: HashMap<ConnectionId, PeerId>,
     pub connected_peers: HashMap<PeerId, ConnectedPeer>,
     pub stream_request: PeerStreamRequest,
-    pub stream_texture_renderer: Arc<std::sync::OnceLock<NV12TextureRender>>,
+    pub stream_texture_renderer: Arc<std::sync::OnceLock<OpenGLVideoRenderer>>,
+    pub video_decoder: Arc<std::sync::Mutex<Option<VideoDecoder>>>,
     pub sink: std::sync::OnceLock<mpsc::Sender<(Arc<media::Texture>, Timestamp)>>,
 }
 
@@ -824,7 +852,7 @@ impl PeerStreamRequest {
 }
 
 impl PeerWindowState {
-    pub fn window_ui(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, peer: &UIPeer) {
+    pub fn window_ui(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, peer: &UIPeer, gl: &glow::Context) {
         let config = Config::load();
 
         ui.text_edit_singleline(&mut self.connect_peer_id);
@@ -856,12 +884,13 @@ impl PeerWindowState {
                     Texture(PeerMediaState),
                 }
 
-                if let Some((last_media, decoder_event, average_statistics)) =
+                if let Some((last_media, decoder_event, average_statistics, frame_timelines)) =
                     connected_peer.decoder_receiver.as_mut().map(|r| {
                         (
                             &mut connected_peer.peer_media_state,
                             r,
                             &mut connected_peer.statistics_average,
+                            &mut connected_peer.frame_timelines,
                         )
                     })
                 {
@@ -989,13 +1018,16 @@ impl PeerWindowState {
                                     );
                                 }
 
-                                if let Ok(network_time) = media
-                                    .statistics
-                                    .decode
-                                    .unwrap()
-                                    .start_time
-                                    .duration_since(media.statistics.encode.unwrap().end_time)
-                                {
+                                // Extract statistics first to avoid borrow issues
+                                let encode_stats = media.statistics.encode.as_ref();
+                                let decode_stats = media.statistics.decode.as_ref();
+                                let convert_stats = media.statistics.convert.as_ref();
+
+                                let network_time = decode_stats.and_then(|d| {
+                                    encode_stats.and_then(|e| d.start_time.duration_since(e.end_time).ok())
+                                });
+
+                                if let Some(network_time) = network_time {
                                     ui.label(format!(
                                         "{:8}ms ({:2.2} frames) network time (decode start - encode end)",
                                         network_time.as_millis(),
@@ -1003,6 +1035,179 @@ impl PeerWindowState {
                                             / (1.0 / (config.framerate as f32)),
                                     ));
                                     ui.end_row();
+
+                                    // Calculate frame timeline
+                                    let conversion_time = convert_stats.map(|c| c.time).unwrap_or_default();
+                                    let encode_time = encode_stats.map(|e| e.time).unwrap_or_default();
+                                    let decode_time = decode_stats.map(|d| d.time).unwrap_or_default();
+                                    let known_sum = conversion_time + encode_time + network_time + decode_time;
+                                    let gap = time_diff.saturating_sub(known_sum);
+
+                                    let timeline = FrameTimeline {
+                                        conversion: conversion_time,
+                                        encode: encode_time,
+                                        network: network_time,
+                                        decode: decode_time,
+                                        total: time_diff,
+                                        gap,
+                                    };
+
+                                    frame_timelines.push_front(timeline);
+                                    if frame_timelines.len() > 10 {
+                                        frame_timelines.pop_back();
+                                    }
+                                }
+                            }
+
+                            // Frame Timeline Visualization
+                            if !frame_timelines.is_empty() {
+                                ui.label("Frame Timeline");
+                                ui.end_row();
+
+                                // Calculate averages
+                                let avg_conversion: Duration = frame_timelines.iter().map(|t| t.conversion).sum::<Duration>() / frame_timelines.len() as u32;
+                                let avg_encode: Duration = frame_timelines.iter().map(|t| t.encode).sum::<Duration>() / frame_timelines.len() as u32;
+                                let avg_network: Duration = frame_timelines.iter().map(|t| t.network).sum::<Duration>() / frame_timelines.len() as u32;
+                                let avg_decode: Duration = frame_timelines.iter().map(|t| t.decode).sum::<Duration>() / frame_timelines.len() as u32;
+                                let avg_gap: Duration = frame_timelines.iter().map(|t| t.gap).sum::<Duration>() / frame_timelines.len() as u32;
+                                let avg_total: Duration = frame_timelines.iter().map(|t| t.total).sum::<Duration>() / frame_timelines.len() as u32;
+
+                                let total_f = avg_total.as_secs_f32();
+                                if total_f > 0.0 {
+                                    let available_width = ui.available_width();
+                                    let bar_height = 15.0;
+
+                                    let conv_width = (avg_conversion.as_secs_f32() / total_f) * available_width;
+                                    let enc_width = (avg_encode.as_secs_f32() / total_f) * available_width;
+                                    let net_width = (avg_network.as_secs_f32() / total_f) * available_width;
+                                    let dec_width = (avg_decode.as_secs_f32() / total_f) * available_width;
+                                    let gap_width = (avg_gap.as_secs_f32() / total_f) * available_width;
+
+                                    let cursor = ui.cursor();
+                                    let y = cursor.min.y;
+
+                                    // Conversion (blue)
+                                    if conv_width > 0.0 {
+                                        ui.painter().rect_filled(
+                                            egui::Rect::from_min_size(
+                                                egui::pos2(ui.min_rect().min.x, y),
+                                                egui::vec2(conv_width, bar_height),
+                                            ),
+                                            0.0,
+                                            egui::Color32::from_rgb(100, 149, 237), // cornflower blue
+                                        );
+                                    }
+                                    // Encode (green)
+                                    if enc_width > 0.0 {
+                                        ui.painter().rect_filled(
+                                            egui::Rect::from_min_size(
+                                                egui::pos2(ui.min_rect().min.x + conv_width, y),
+                                                egui::vec2(enc_width, bar_height),
+                                            ),
+                                            0.0,
+                                            egui::Color32::from_rgb(60, 179, 113), // medium sea green
+                                        );
+                                    }
+                                    // Network (yellow)
+                                    if net_width > 0.0 {
+                                        ui.painter().rect_filled(
+                                            egui::Rect::from_min_size(
+                                                egui::pos2(ui.min_rect().min.x + conv_width + enc_width, y),
+                                                egui::vec2(net_width, bar_height),
+                                            ),
+                                            0.0,
+                                            egui::Color32::from_rgb(255, 215, 0), // gold
+                                        );
+                                    }
+                                    // Decode (red)
+                                    if dec_width > 0.0 {
+                                        ui.painter().rect_filled(
+                                            egui::Rect::from_min_size(
+                                                egui::pos2(ui.min_rect().min.x + conv_width + enc_width + net_width, y),
+                                                egui::vec2(dec_width, bar_height),
+                                            ),
+                                            0.0,
+                                            egui::Color32::from_rgb(220, 20, 60), // crimson
+                                        );
+                                    }
+                                    // Gap (gray)
+                                    if gap_width > 0.0 {
+                                        ui.painter().rect_filled(
+                                            egui::Rect::from_min_size(
+                                                egui::pos2(ui.min_rect().min.x + conv_width + enc_width + net_width + dec_width, y),
+                                                egui::vec2(gap_width, bar_height),
+                                            ),
+                                            0.0,
+                                            egui::Color32::GRAY,
+                                        );
+                                    }
+
+                                    ui.allocate_space(egui::vec2(available_width, bar_height));
+                                    ui.end_row();
+
+                                    // Legend and totals
+                                    ui.label(format!(
+                                        "avg: conv={:.1}ms enc={:.1}ms net={:.1}ms dec={:.1}ms gap={:.1}ms total={:.1}ms",
+                                        avg_conversion.as_secs_f32() * 1000.0,
+                                        avg_encode.as_secs_f32() * 1000.0,
+                                        avg_network.as_secs_f32() * 1000.0,
+                                        avg_decode.as_secs_f32() * 1000.0,
+                                        avg_gap.as_secs_f32() * 1000.0,
+                                        avg_total.as_secs_f32() * 1000.0,
+                                    ));
+                                    ui.end_row();
+                                }
+
+                                // Individual frame bars
+                                for (i, timeline) in frame_timelines.iter().enumerate().take(10) {
+                                    let total_f = timeline.total.as_secs_f32();
+                                    if total_f > 0.0 {
+                                        let available_width = ui.available_width();
+                                        let bar_height = 10.0;
+
+                                        let conv_w = (timeline.conversion.as_secs_f32() / total_f) * available_width;
+                                        let enc_w = (timeline.encode.as_secs_f32() / total_f) * available_width;
+                                        let net_w = (timeline.network.as_secs_f32() / total_f) * available_width;
+                                        let dec_w = (timeline.decode.as_secs_f32() / total_f) * available_width;
+                                        let gap_w = (timeline.gap.as_secs_f32() / total_f) * available_width;
+
+                                        let cursor = ui.cursor();
+                                        let y = cursor.min.y;
+
+                                        if conv_w > 0.0 {
+                                            ui.painter().rect_filled(
+                                                egui::Rect::from_min_size(egui::pos2(ui.min_rect().min.x, y), egui::vec2(conv_w, bar_height)),
+                                                0.0, egui::Color32::from_rgb(100, 149, 237),
+                                            );
+                                        }
+                                        if enc_w > 0.0 {
+                                            ui.painter().rect_filled(
+                                                egui::Rect::from_min_size(egui::pos2(ui.min_rect().min.x + conv_w, y), egui::vec2(enc_w, bar_height)),
+                                                0.0, egui::Color32::from_rgb(60, 179, 113),
+                                            );
+                                        }
+                                        if net_w > 0.0 {
+                                            ui.painter().rect_filled(
+                                                egui::Rect::from_min_size(egui::pos2(ui.min_rect().min.x + conv_w + enc_w, y), egui::vec2(net_w, bar_height)),
+                                                0.0, egui::Color32::from_rgb(255, 215, 0),
+                                            );
+                                        }
+                                        if dec_w > 0.0 {
+                                            ui.painter().rect_filled(
+                                                egui::Rect::from_min_size(egui::pos2(ui.min_rect().min.x + conv_w + enc_w + net_w, y), egui::vec2(dec_w, bar_height)),
+                                                0.0, egui::Color32::from_rgb(220, 20, 60),
+                                            );
+                                        }
+                                        if gap_w > 0.0 {
+                                            ui.painter().rect_filled(
+                                                egui::Rect::from_min_size(egui::pos2(ui.min_rect().min.x + conv_w + enc_w + net_w + dec_w, y), egui::vec2(gap_w, bar_height)),
+                                                0.0, egui::Color32::GRAY,
+                                            );
+                                        }
+
+                                        ui.allocate_space(egui::vec2(available_width, bar_height));
+                                        ui.end_row();
+                                    }
                                 }
                             }
 
@@ -1012,38 +1217,51 @@ impl PeerWindowState {
                             let desired_size = ui.available_width() * egui::vec2(1.0, aspect);
                             let (_id, rect) = ui.allocate_space(desired_size);
 
+                            // Get the latest H264 data from the connected peer
+                            let h264_data = connected_peer.latest_h264_data.lock().unwrap().clone();
+                            let video_decoder = self.video_decoder.clone();
+                            let stream_renderer = self.stream_texture_renderer.clone();
+                            
                             ctx.request_repaint();
+                            
+                            let callback = egui_glow::CallbackFn::new(move |info, painter| {
+                                let gl = painter.gl();
+                                
+                                // Get H264 data
+                                if let Some(ref h264_data) = h264_data {
+                                    // Initialize and use decoder
+                                    let result = {
+                                        let mut guard = video_decoder.lock().unwrap();
+                                        if guard.is_none() {
+                                            *guard = Some(VideoDecoder::new().unwrap());
+                                        }
+                                        guard.as_mut().unwrap().decode(h264_data)
+                                    };
+                                    
+                                    if let Ok((width, height, y_data, uv_data)) = result {
+                                        // Initialize renderer if needed
+                                        let renderer = stream_renderer.get_or_init(|| {
+                                            OpenGLVideoRenderer::new(gl.clone()).unwrap()
+                                        });
+                                        
+                                        // Upload frame data
+                                        renderer.upload_frame(width, height, &y_data, &uv_data);
+                                        
+                                        // Render
+                                        let vp = info.viewport;
+                                        renderer.render([
+                                            vp.min.x,
+                                            vp.min.y,
+                                            vp.max.x - vp.min.x,
+                                            vp.max.y - vp.min.y,
+                                        ]);
+                                    }
+                                }
+                            });
+                            
                             let cb = egui::PaintCallback {
                                 rect,
-                                callback: std::sync::Arc::new(egui_directx11::callback_fn({
-                                    let texture_renderer = self.stream_texture_renderer.clone();
-                                    move |info, device, context| {
-                                        let viewport = info.viewport_in_pixels();
-                                        unsafe {
-                                            context.RSSetViewports(Some(
-                                                &[windows::Win32::Graphics::Direct3D11::D3D11_VIEWPORT {
-                                                    TopLeftX: viewport.left_px as f32,
-                                                    TopLeftY: viewport.top_px as f32,
-                                                    Width: viewport.width_px as f32,
-                                                    Height: viewport.height_px as f32,
-                                                    MinDepth: 0.0,
-                                                    MaxDepth: 1.0,
-                                                }],
-                                            ));
-                                        }
-
-                                        let texture_renderer = texture_renderer
-                                            .get_or_init(|| NV12TextureRender::new(device).unwrap());
-
-                                        texture_renderer
-                                            .render_texture_with_context(
-                                                &media.texture,
-                                                device,
-                                                context,
-                                            )
-                                            .unwrap();
-                                    }
-                                })),
+                                callback: std::sync::Arc::new(callback),
                             };
                             ui.painter().add(cb);
                         }
@@ -1126,7 +1344,7 @@ impl PeerWindowState {
         }
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, peer: &UIPeer) -> ShouldRemove {
+    pub fn ui(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, peer: &UIPeer, gl: &glow::Context) -> ShouldRemove {
         let _config = Config::load();
 
         let mut result = ShouldRemove::No;
@@ -1148,7 +1366,7 @@ impl PeerWindowState {
         egui::Window::new(format!("Peer {id}"))
             .open(&mut peer_window_open)
             .show(ctx, |ui| {
-                self.window_ui(ctx, ui, peer);
+                self.window_ui(ctx, ui, peer, gl);
             });
 
         if !peer_window_open {
@@ -1167,5 +1385,65 @@ impl std::fmt::Debug for PeerWindowState {
             .field("connection_requests", &self.connection_requests)
             .field("connected_peers", &self.connected_peers)
             .finish()
+    }
+}
+
+struct VideoDecoder {
+    decoder: Decoder,
+    width: u32,
+    height: u32,
+}
+
+impl VideoDecoder {
+    fn new() -> Result<Self> {
+        let config = DecoderConfig::new();
+        let api = OpenH264API::from_source();
+        let decoder = Decoder::with_api_config(api, config)?;
+        Ok(Self { decoder, width: 0, height: 0 })
+    }
+    
+    fn decode(&mut self, data: &[u8]) -> Result<(u32, u32, Vec<u8>, Vec<u8>)> {
+        use openh264::nal_units;
+        
+        let nals = nal_units(data);
+        
+        let mut width = 0;
+        let mut height = 0;
+        let mut y_data = Vec::new();
+        let mut uv_data = Vec::new();
+        
+        for nal in nals {
+            match self.decoder.decode(nal) {
+                Ok(Some(output)) => {
+                    let (w, h) = output.dimensions();
+                    width = w as u32;
+                    height = h as u32;
+                    
+                    y_data = output.y().to_vec();
+                    let u = output.u().to_vec();
+                    let v = output.v().to_vec();
+                    
+                    let uv_width = width as usize / 2;
+                    let uv_height = height as usize / 2;
+                    
+                    uv_data = Vec::with_capacity(uv_width * uv_height * 2);
+                    for i in 0..(uv_width * uv_height) {
+                        uv_data.push(u[i]);
+                        uv_data.push(v[i]);
+                    }
+                    break;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::warn!("Decode error: {:?}", e);
+                }
+            }
+        }
+        
+        if y_data.is_empty() {
+            return Err(anyhow::anyhow!("No frame decoded"));
+        }
+        
+        Ok((width, height, y_data, uv_data))
     }
 }
