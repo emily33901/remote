@@ -1396,41 +1396,13 @@ impl VideoDecoder {
         let nals: Vec<_> = nal_units(data).collect();
         tracing::debug!("Decoding {} NAL units, data len: {}", nals.len(), data.len());
         
-        fn nal_type(nal: &[u8]) -> Option<u8> {
-            nal.first().map(|b| b & 0x1F)
-        }
-        
         let mut width = 0;
         let mut height = 0;
         let mut y_data = Vec::new();
         let mut u_data = Vec::new();
         let mut v_data = Vec::new();
         
-        // First pass: decode SPS (7) and PPS (8) NALs to configure decoder
-        for nal in &nals {
-            let nal_type_byte = nal.first().copied();
-            if let Some(nal_type) = nal_type_byte {
-                let nal_unit_type = nal_type & 0x1F;
-                if nal_unit_type == 7 || nal_unit_type == 8 {
-                    match self.decoder.decode(nal) {
-                        Ok(None) => {}, // Expected - SPS/PPS don't produce frames
-                        Ok(Some(_)) => {}, // Also fine
-                        Err(e) => {
-                            tracing::warn!("Decode error on SPS/PPS NAL type {}: {}", nal_unit_type, e);
-                        }
-                    }
-                }
-            }
-        }
-        
-        // Second pass: decode actual frame NALs (non-SPS/PPS)
         for (i, nal) in nals.into_iter().enumerate() {
-            let nal_type_byte = nal.first().copied();
-            let should_skip = nal_type_byte.map(|b| (b & 0x1F) == 7 || (b & 0x1F) == 8).unwrap_or(false);
-            if should_skip {
-                continue;
-            }
-            
             match self.decoder.decode(nal) {
                 Ok(Some(output)) => {
                     let (w, h) = output.dimensions();
@@ -1445,16 +1417,17 @@ impl VideoDecoder {
                     break;
                 }
                 Ok(None) => {
-                    // No frame from this NAL, try next
+                    // No frame from this NAL yet, try next
                 }
                 Err(e) => {
-                    tracing::warn!("Decode error on NAL {}: {}", i, e);
+                    // Just skip errors - decoder handles SPS/PPS internally
+                    tracing::debug!("Decode error on NAL {} (ignored): {}", i, e);
                 }
             }
         }
         
         if y_data.is_empty() {
-            tracing::warn!("No frame decoded from {} bytes", data.len());
+            // No frame decoded - this is normal for SPS/PPS only packets
             return Err(anyhow::anyhow!("No frame decoded"));
         }
         
