@@ -1183,8 +1183,8 @@ impl PeerWindowState {
                             let desired_size = ui.available_width() * egui::vec2(1.0, aspect);
                             let (_id, rect) = ui.allocate_space(desired_size);
 
-                            // Get screen height for coordinate conversion
-                            let screen_height = ctx.available_rect().max.y;
+                            // Get pixels per point for coordinate conversion
+                            let pixels_per_point = ctx.pixels_per_point();
 
                             // Get the latest H264 data from the connected peer
                             let h264_data = connected_peer.latest_h264_data.lock().unwrap().clone();
@@ -1197,7 +1197,7 @@ impl PeerWindowState {
                             let rect_min = rect.min;
                             let rect_max = rect.max;
                             
-                            let callback = egui_glow::CallbackFn::new(move |_info, painter| {
+                            let callback = egui_glow::CallbackFn::new(move |info, painter| {
                                 let gl = painter.gl();
                                 
                                 // Get H264 data
@@ -1227,14 +1227,16 @@ impl PeerWindowState {
                                             // Upload frame data
                                             renderer.upload_frame(width, height, &y_data, &u_data, &v_data);
                                             
-                                            // Render at the correct position (the allocated rect)
-                                            // Pass screen height for coordinate conversion
-                                            renderer.render([
-                                                rect_min.x,
-                                                rect_min.y,
-                                                rect_max.x - rect_min.x,
-                                                rect_max.y - rect_min.y,
-                                            ], screen_height);
+                                            // Convert viewport from egui coordinates (points) to pixels
+                                            // The callback viewport is already in pixels if we use info.viewport
+                                            let vp = info.viewport;
+                                            let x = vp.min.x * pixels_per_point;
+                                            let y = vp.min.y * pixels_per_point;
+                                            let w = (vp.max.x - vp.min.x) * pixels_per_point;
+                                            let h = (vp.max.y - vp.min.y) * pixels_per_point;
+                                            
+                                            // Render at the correct position
+                                            renderer.render([x, y, w, h], info.screen_size_px[1] as f32 * pixels_per_point);
                                         }
                                         Err(e) => {
                                             tracing::warn!("Decode failed: {}", e);
