@@ -880,6 +880,35 @@ impl PeerWindowState {
         ui.end_row();
     }
 
+    fn show_media_stats(
+        ui: &mut egui::Ui,
+        media: &PeerMediaState,
+        average_statistics: &mut std::collections::VecDeque<media::Statistics>,
+    ) {
+        let config = Config::load();
+
+        if let Some(encode) = &media.statistics.encode {
+            let duration_iter = average_statistics
+                .iter()
+                .filter_map(|s| s.encode.as_ref().map(|e| e.time));
+            Self::stat(ui, "encoder", encode.media_queue_len, encode.time, duration_iter);
+        }
+
+        if let Some(decode) = &media.statistics.decode {
+            let duration_iter = average_statistics
+                .iter()
+                .filter_map(|s| s.decode.as_ref().map(|e| e.time));
+            Self::stat(ui, "decoder", decode.media_queue_len, decode.time, duration_iter);
+        }
+
+        if let Some(conversion) = &media.statistics.convert {
+            let duration_iter = average_statistics
+                .iter()
+                .filter_map(|s| s.convert.as_ref().map(|e| e.time));
+            Self::stat(ui, "conversion", conversion.media_queue_len, conversion.time, duration_iter);
+        }
+    }
+
     fn draw_timeline_bar(
         ui: &mut egui::Ui,
         x: f32,
@@ -928,7 +957,78 @@ impl PeerWindowState {
         }
     }
 
-    pub fn window_ui(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, peer: &UIPeer, gl: &glow::Context) {
+    fn draw_frame_timelines(ui: &mut egui::Ui, frame_timelines: &std::collections::VecDeque<FrameTimeline>) {
+        if frame_timelines.is_empty() {
+            return;
+        }
+
+        ui.label("Frame Timeline");
+        ui.end_row();
+
+        let avg_conversion: Duration = frame_timelines.iter().map(|t| t.conversion).sum::<Duration>() / frame_timelines.len() as u32;
+        let avg_encode: Duration = frame_timelines.iter().map(|t| t.encode).sum::<Duration>() / frame_timelines.len() as u32;
+        let avg_network: Duration = frame_timelines.iter().map(|t| t.network).sum::<Duration>() / frame_timelines.len() as u32;
+        let avg_decode: Duration = frame_timelines.iter().map(|t| t.decode).sum::<Duration>() / frame_timelines.len() as u32;
+        let avg_gap: Duration = frame_timelines.iter().map(|t| t.gap).sum::<Duration>() / frame_timelines.len() as u32;
+        let avg_total: Duration = frame_timelines.iter().map(|t| t.total).sum::<Duration>() / frame_timelines.len() as u32;
+
+        let total_f = avg_total.as_secs_f32();
+        if total_f > 0.0 {
+            let available_width = ui.available_width();
+            let bar_height = 15.0;
+
+            let conv_width = (avg_conversion.as_secs_f32() / total_f) * available_width;
+            let enc_width = (avg_encode.as_secs_f32() / total_f) * available_width;
+            let net_width = (avg_network.as_secs_f32() / total_f) * available_width;
+            let dec_width = (avg_decode.as_secs_f32() / total_f) * available_width;
+            let gap_width = (avg_gap.as_secs_f32() / total_f) * available_width;
+
+            let cursor = ui.cursor();
+            let y = cursor.min.y;
+
+            let x = ui.min_rect().min.x;
+            Self::draw_timeline_bar(ui, x, y, conv_width, enc_width, net_width, dec_width, gap_width, bar_height);
+
+            ui.allocate_space(egui::vec2(available_width, bar_height));
+            ui.end_row();
+
+            ui.label(format!(
+                "avg: conv={:.1}ms enc={:.1}ms net={:.1}ms dec={:.1}ms gap={:.1}ms total={:.1}ms",
+                avg_conversion.as_secs_f32() * 1000.0,
+                avg_encode.as_secs_f32() * 1000.0,
+                avg_network.as_secs_f32() * 1000.0,
+                avg_decode.as_secs_f32() * 1000.0,
+                avg_gap.as_secs_f32() * 1000.0,
+                avg_total.as_secs_f32() * 1000.0,
+            ));
+            ui.end_row();
+        }
+
+        for timeline in frame_timelines.iter().take(10) {
+            let total_f = timeline.total.as_secs_f32();
+            if total_f > 0.0 {
+                let available_width = ui.available_width();
+                let bar_height = 10.0;
+
+                let conv_w = (timeline.conversion.as_secs_f32() / total_f) * available_width;
+                let enc_w = (timeline.encode.as_secs_f32() / total_f) * available_width;
+                let net_w = (timeline.network.as_secs_f32() / total_f) * available_width;
+                let dec_w = (timeline.decode.as_secs_f32() / total_f) * available_width;
+                let gap_w = (timeline.gap.as_secs_f32() / total_f) * available_width;
+
+                let cursor = ui.cursor();
+                let y = cursor.min.y;
+
+                let x = ui.min_rect().min.x;
+                Self::draw_timeline_bar(ui, x, y, conv_w, enc_w, net_w, dec_w, gap_w, bar_height);
+
+                ui.allocate_space(egui::vec2(available_width, bar_height));
+                ui.end_row();
+            }
+        }
+    }
+
+    pub fn window_ui(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, peer: &UIPeer, _gl: &glow::Context) {
         let config = Config::load();
 
         ui.text_edit_singleline(&mut self.connect_peer_id);
@@ -1009,7 +1109,8 @@ impl PeerWindowState {
                                 ui.style_mut().override_text_style =
                                     Some(egui::TextStyle::Monospace);
 
-                                let media_time = media.time.sub(media.start_timestamp);
+                                let start_ts = media.start_timestamp.clone();
+                                let media_time = media.time.sub(start_ts);
                                 let time_diff = (media.start_time.elapsed().saturating_sub(media_time))
                                     .max(media_time.saturating_sub(media.start_time.elapsed()));
 
@@ -1027,46 +1128,14 @@ impl PeerWindowState {
                                 );
                                 ui.end_row();
 
-                                average_statistics.push_back(media.statistics.clone());
+                                let stats = media.statistics.clone();
+                                average_statistics.push_back(stats);
                                 if average_statistics.len() > config.framerate as usize {
                                     average_statistics.pop_front();
                                 }
 
-                                if let Some(encode) = &media.statistics.encode {
-                                    let duration_iter = average_statistics
-                                        .iter()
-                                        .filter_map(|s| s.encode.as_ref().map(|e| e.time));
-                                    Self::stat(
-                                        ui,
-                                        "encoder",
-                                        encode.media_queue_len,
-                                        encode.time,
-                                        duration_iter,
-                                    );
-                                }
+                                Self::show_media_stats(ui, &media, average_statistics);
 
-                                if let Some(decode) = &media.statistics.decode {
-                                    let duration_iter = average_statistics
-                                        .iter()
-                                        .filter_map(|s| s.decode.as_ref().map(|e| e.time));
-
-                                    Self::stat(ui, "decoder", decode.media_queue_len, decode.time, duration_iter);
-                                }
-
-                                if let Some(conversion) = &media.statistics.convert {
-                                    let duration_iter = average_statistics
-                                        .iter()
-                                        .filter_map(|s| s.convert.as_ref().map(|e| e.time));
-                                    Self::stat(
-                                        ui,
-                                        "conversion",
-                                        conversion.media_queue_len,
-                                        conversion.time,
-                                        duration_iter,
-                                    );
-                                }
-
-                                // Extract statistics first to avoid borrow issues
                                 let encode_stats = media.statistics.encode.as_ref();
                                 let decode_stats = media.statistics.decode.as_ref();
                                 let convert_stats = media.statistics.convert.as_ref();
@@ -1084,7 +1153,6 @@ impl PeerWindowState {
                                     ));
                                     ui.end_row();
 
-                                    // Calculate frame timeline
                                     let conversion_time = convert_stats.map(|c| c.time).unwrap_or_default();
                                     let encode_time = encode_stats.map(|e| e.time).unwrap_or_default();
                                     let decode_time = decode_stats.map(|d| d.time).unwrap_or_default();
@@ -1107,157 +1175,7 @@ impl PeerWindowState {
                                 }
                             }
 
-                            // Frame Timeline Visualization
-                            if !frame_timelines.is_empty() {
-                                ui.label("Frame Timeline");
-                                ui.end_row();
-
-                                // Calculate averages
-                                let avg_conversion: Duration = frame_timelines.iter().map(|t| t.conversion).sum::<Duration>() / frame_timelines.len() as u32;
-                                let avg_encode: Duration = frame_timelines.iter().map(|t| t.encode).sum::<Duration>() / frame_timelines.len() as u32;
-                                let avg_network: Duration = frame_timelines.iter().map(|t| t.network).sum::<Duration>() / frame_timelines.len() as u32;
-                                let avg_decode: Duration = frame_timelines.iter().map(|t| t.decode).sum::<Duration>() / frame_timelines.len() as u32;
-                                let avg_gap: Duration = frame_timelines.iter().map(|t| t.gap).sum::<Duration>() / frame_timelines.len() as u32;
-                                let avg_total: Duration = frame_timelines.iter().map(|t| t.total).sum::<Duration>() / frame_timelines.len() as u32;
-
-                                let total_f = avg_total.as_secs_f32();
-                                if total_f > 0.0 {
-                                    let available_width = ui.available_width();
-                                    let bar_height = 15.0;
-
-                                    let conv_width = (avg_conversion.as_secs_f32() / total_f) * available_width;
-                                    let enc_width = (avg_encode.as_secs_f32() / total_f) * available_width;
-                                    let net_width = (avg_network.as_secs_f32() / total_f) * available_width;
-                                    let dec_width = (avg_decode.as_secs_f32() / total_f) * available_width;
-                                    let gap_width = (avg_gap.as_secs_f32() / total_f) * available_width;
-
-                                    let cursor = ui.cursor();
-                                    let y = cursor.min.y;
-
-                                    // Conversion (blue)
-                                    if conv_width > 0.0 {
-                                        ui.painter().rect_filled(
-                                            egui::Rect::from_min_size(
-                                                egui::pos2(ui.min_rect().min.x, y),
-                                                egui::vec2(conv_width, bar_height),
-                                            ),
-                                            0.0,
-                                            egui::Color32::from_rgb(100, 149, 237), // cornflower blue
-                                        );
-                                    }
-                                    // Encode (green)
-                                    if enc_width > 0.0 {
-                                        ui.painter().rect_filled(
-                                            egui::Rect::from_min_size(
-                                                egui::pos2(ui.min_rect().min.x + conv_width, y),
-                                                egui::vec2(enc_width, bar_height),
-                                            ),
-                                            0.0,
-                                            egui::Color32::from_rgb(60, 179, 113), // medium sea green
-                                        );
-                                    }
-                                    // Network (yellow)
-                                    if net_width > 0.0 {
-                                        ui.painter().rect_filled(
-                                            egui::Rect::from_min_size(
-                                                egui::pos2(ui.min_rect().min.x + conv_width + enc_width, y),
-                                                egui::vec2(net_width, bar_height),
-                                            ),
-                                            0.0,
-                                            egui::Color32::from_rgb(255, 215, 0), // gold
-                                        );
-                                    }
-                                    // Decode (red)
-                                    if dec_width > 0.0 {
-                                        ui.painter().rect_filled(
-                                            egui::Rect::from_min_size(
-                                                egui::pos2(ui.min_rect().min.x + conv_width + enc_width + net_width, y),
-                                                egui::vec2(dec_width, bar_height),
-                                            ),
-                                            0.0,
-                                            egui::Color32::from_rgb(220, 20, 60), // crimson
-                                        );
-                                    }
-                                    // Gap (gray)
-                                    if gap_width > 0.0 {
-                                        ui.painter().rect_filled(
-                                            egui::Rect::from_min_size(
-                                                egui::pos2(ui.min_rect().min.x + conv_width + enc_width + net_width + dec_width, y),
-                                                egui::vec2(gap_width, bar_height),
-                                            ),
-                                            0.0,
-                                            egui::Color32::GRAY,
-                                        );
-                                    }
-
-                                    ui.allocate_space(egui::vec2(available_width, bar_height));
-                                    ui.end_row();
-
-                                    // Legend and totals
-                                    ui.label(format!(
-                                        "avg: conv={:.1}ms enc={:.1}ms net={:.1}ms dec={:.1}ms gap={:.1}ms total={:.1}ms",
-                                        avg_conversion.as_secs_f32() * 1000.0,
-                                        avg_encode.as_secs_f32() * 1000.0,
-                                        avg_network.as_secs_f32() * 1000.0,
-                                        avg_decode.as_secs_f32() * 1000.0,
-                                        avg_gap.as_secs_f32() * 1000.0,
-                                        avg_total.as_secs_f32() * 1000.0,
-                                    ));
-                                    ui.end_row();
-                                }
-
-                                // Individual frame bars
-                                for (i, timeline) in frame_timelines.iter().enumerate().take(10) {
-                                    let total_f = timeline.total.as_secs_f32();
-                                    if total_f > 0.0 {
-                                        let available_width = ui.available_width();
-                                        let bar_height = 10.0;
-
-                                        let conv_w = (timeline.conversion.as_secs_f32() / total_f) * available_width;
-                                        let enc_w = (timeline.encode.as_secs_f32() / total_f) * available_width;
-                                        let net_w = (timeline.network.as_secs_f32() / total_f) * available_width;
-                                        let dec_w = (timeline.decode.as_secs_f32() / total_f) * available_width;
-                                        let gap_w = (timeline.gap.as_secs_f32() / total_f) * available_width;
-
-                                        let cursor = ui.cursor();
-                                        let y = cursor.min.y;
-
-                                        if conv_w > 0.0 {
-                                            ui.painter().rect_filled(
-                                                egui::Rect::from_min_size(egui::pos2(ui.min_rect().min.x, y), egui::vec2(conv_w, bar_height)),
-                                                0.0, egui::Color32::from_rgb(100, 149, 237),
-                                            );
-                                        }
-                                        if enc_w > 0.0 {
-                                            ui.painter().rect_filled(
-                                                egui::Rect::from_min_size(egui::pos2(ui.min_rect().min.x + conv_w, y), egui::vec2(enc_w, bar_height)),
-                                                0.0, egui::Color32::from_rgb(60, 179, 113),
-                                            );
-                                        }
-                                        if net_w > 0.0 {
-                                            ui.painter().rect_filled(
-                                                egui::Rect::from_min_size(egui::pos2(ui.min_rect().min.x + conv_w + enc_w, y), egui::vec2(net_w, bar_height)),
-                                                0.0, egui::Color32::from_rgb(255, 215, 0),
-                                            );
-                                        }
-                                        if dec_w > 0.0 {
-                                            ui.painter().rect_filled(
-                                                egui::Rect::from_min_size(egui::pos2(ui.min_rect().min.x + conv_w + enc_w + net_w, y), egui::vec2(dec_w, bar_height)),
-                                                0.0, egui::Color32::from_rgb(220, 20, 60),
-                                            );
-                                        }
-                                        if gap_w > 0.0 {
-                                            ui.painter().rect_filled(
-                                                egui::Rect::from_min_size(egui::pos2(ui.min_rect().min.x + conv_w + enc_w + net_w + dec_w, y), egui::vec2(gap_w, bar_height)),
-                                                0.0, egui::Color32::GRAY,
-                                            );
-                                        }
-
-                                        ui.allocate_space(egui::vec2(available_width, bar_height));
-                                        ui.end_row();
-                                    }
-                                }
-                            }
+                            Self::draw_frame_timelines(ui, frame_timelines);
 
                             let config = Config::load();
                             let aspect: f32 = config.height as f32 / config.width as f32;
