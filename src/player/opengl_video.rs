@@ -142,14 +142,15 @@ impl OpenGLVideoRenderer {
         }
     }
 
-    pub fn render(&self, viewport: [f32; 4]) {
+    pub fn render(&self, viewport: [f32; 4], screen_height: f32) {
         unsafe {
-            self.gl.viewport(
-                viewport[0] as i32,
-                viewport[1] as i32,
-                viewport[2] as i32,
-                viewport[3] as i32,
-            );
+            // Convert from egui coordinates (top-left origin) to OpenGL coordinates (bottom-left origin)
+            let x = viewport[0] as i32;
+            let y = (screen_height - viewport[1] - viewport[3]) as i32;
+            let w = viewport[2] as i32;
+            let h = viewport[3] as i32;
+
+            self.gl.viewport(x, y, w, h);
             self.gl.use_program(Some(self.program));
             self.gl.bind_vertex_array(Some(self.vao));
             self.gl.draw_arrays(glow::TRIANGLES, 0, 6);

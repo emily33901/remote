@@ -1217,6 +1217,9 @@ impl PeerWindowState {
                             let desired_size = ui.available_width() * egui::vec2(1.0, aspect);
                             let (_id, rect) = ui.allocate_space(desired_size);
 
+                            // Get screen height for coordinate conversion
+                            let screen_height = ctx.available_rect().max.y;
+
                             // Get the latest H264 data from the connected peer
                             let h264_data = connected_peer.latest_h264_data.lock().unwrap().clone();
                             let video_decoder = self.video_decoder.clone();
@@ -1224,38 +1227,55 @@ impl PeerWindowState {
                             
                             ctx.request_repaint();
                             
-                            let callback = egui_glow::CallbackFn::new(move |info, painter| {
+                            // Convert rect to simple values for the closure
+                            let rect_min = rect.min;
+                            let rect_max = rect.max;
+                            
+                            let callback = egui_glow::CallbackFn::new(move |_info, painter| {
                                 let gl = painter.gl();
                                 
                                 // Get H264 data
                                 if let Some(ref h264_data) = h264_data {
+                                    tracing::debug!("Got H264 data: {} bytes", h264_data.len());
+                                    
                                     // Initialize and use decoder
                                     let result = {
                                         let mut guard = video_decoder.lock().unwrap();
                                         if guard.is_none() {
+                                            tracing::debug!("Creating new VideoDecoder");
                                             *guard = Some(VideoDecoder::new().unwrap());
                                         }
                                         guard.as_mut().unwrap().decode(h264_data)
                                     };
                                     
-                                    if let Ok((width, height, y_data, uv_data)) = result {
-                                        // Initialize renderer if needed
-                                        let renderer = stream_renderer.get_or_init(|| {
-                                            OpenGLVideoRenderer::new(gl.clone()).unwrap()
-                                        });
-                                        
-                                        // Upload frame data
-                                        renderer.upload_frame(width, height, &y_data, &uv_data);
-                                        
-                                        // Render
-                                        let vp = info.viewport;
-                                        renderer.render([
-                                            vp.min.x,
-                                            vp.min.y,
-                                            vp.max.x - vp.min.x,
-                                            vp.max.y - vp.min.y,
-                                        ]);
+                                    match result {
+                                        Ok((width, height, y_data, uv_data)) => {
+                                            tracing::debug!("Decoded frame {}x{}, y size: {}, uv size: {}", 
+                                                width, height, y_data.len(), uv_data.len());
+                                            
+                                            // Initialize renderer if needed
+                                            let renderer = stream_renderer.get_or_init(|| {
+                                                OpenGLVideoRenderer::new(gl.clone()).unwrap()
+                                            });
+                                            
+                                            // Upload frame data
+                                            renderer.upload_frame(width, height, &y_data, &uv_data);
+                                            
+                                            // Render at the correct position (the allocated rect)
+                                            // Pass screen height for coordinate conversion
+                                            renderer.render([
+                                                rect_min.x,
+                                                rect_min.y,
+                                                rect_max.x - rect_min.x,
+                                                rect_max.y - rect_min.y,
+                                            ], screen_height);
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!("Decode failed: {:?}", e);
+                                        }
                                     }
+                                } else {
+                                    tracing::debug!("No H264 data available");
                                 }
                             });
                             
@@ -1405,19 +1425,22 @@ impl VideoDecoder {
     fn decode(&mut self, data: &[u8]) -> Result<(u32, u32, Vec<u8>, Vec<u8>)> {
         use openh264::nal_units;
         
-        let nals = nal_units(data);
+        let nals: Vec<_> = nal_units(data).collect();
+        tracing::debug!("Decoding {} NAL units, data len: {}", nals.len(), data.len());
         
         let mut width = 0;
         let mut height = 0;
         let mut y_data = Vec::new();
         let mut uv_data = Vec::new();
         
-        for nal in nals {
+        for (i, nal) in nals.into_iter().enumerate() {
             match self.decoder.decode(nal) {
                 Ok(Some(output)) => {
                     let (w, h) = output.dimensions();
                     width = w as u32;
                     height = h as u32;
+                    
+                    tracing::debug!("Decoded frame {}x{} from NAL {}", width, height, i);
                     
                     y_data = output.y().to_vec();
                     let u = output.u().to_vec();
@@ -1427,22 +1450,27 @@ impl VideoDecoder {
                     let uv_height = height as usize / 2;
                     
                     uv_data = Vec::with_capacity(uv_width * uv_height * 2);
-                    for i in 0..(uv_width * uv_height) {
-                        uv_data.push(u[i]);
-                        uv_data.push(v[i]);
+                    for j in 0..(uv_width * uv_height) {
+                        uv_data.push(u[j]);
+                        uv_data.push(v[j]);
                     }
                     break;
                 }
-                Ok(None) => {}
+                Ok(None) => {
+                    // No frame from this NAL, try next
+                }
                 Err(e) => {
-                    tracing::warn!("Decode error: {:?}", e);
+                    tracing::warn!("Decode error on NAL {}: {:?}", i, e);
                 }
             }
         }
         
         if y_data.is_empty() {
+            tracing::warn!("No frame decoded from {} bytes", data.len());
             return Err(anyhow::anyhow!("No frame decoded"));
         }
+        
+        tracing::debug!("Successfully decoded frame {}x{}", width, height);
         
         Ok((width, height, y_data, uv_data))
     }
