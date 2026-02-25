@@ -852,6 +852,82 @@ impl PeerStreamRequest {
 }
 
 impl PeerWindowState {
+    fn stat(
+        ui: &mut egui::Ui,
+        label: &str,
+        len: usize,
+        time: Duration,
+        time_iter: impl Iterator<Item = Duration>,
+    ) {
+        let config = Config::load();
+
+        let (total_duration, count) = time_iter.fold(
+            (core::time::Duration::from_secs(0), 0_usize),
+            |(duration, count), other_duration| {
+                (duration + other_duration, count + 1)
+            },
+        );
+        let average_millis = total_duration.as_millis() as f32 / count as f32;
+
+        ui.label(format!("{len:8} {label} queued",));
+        ui.end_row();
+        ui.label(format!(
+            "{:8.2}ms {:8.2}ms avg ({:2.2} frames) {label} time",
+            time.as_millis(),
+            average_millis,
+            time.as_secs_f32() / (1.0 / (config.framerate as f32)),
+        ));
+        ui.end_row();
+    }
+
+    fn draw_timeline_bar(
+        ui: &mut egui::Ui,
+        x: f32,
+        y: f32,
+        conv_w: f32,
+        enc_w: f32,
+        net_w: f32,
+        dec_w: f32,
+        gap_w: f32,
+        bar_height: f32,
+    ) {
+        if conv_w > 0.0 {
+            ui.painter().rect_filled(
+                egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(conv_w, bar_height)),
+                0.0,
+                egui::Color32::from_rgb(100, 149, 237),
+            );
+        }
+        if enc_w > 0.0 {
+            ui.painter().rect_filled(
+                egui::Rect::from_min_size(egui::pos2(x + conv_w, y), egui::vec2(enc_w, bar_height)),
+                0.0,
+                egui::Color32::from_rgb(60, 179, 113),
+            );
+        }
+        if net_w > 0.0 {
+            ui.painter().rect_filled(
+                egui::Rect::from_min_size(egui::pos2(x + conv_w + enc_w, y), egui::vec2(net_w, bar_height)),
+                0.0,
+                egui::Color32::from_rgb(255, 215, 0),
+            );
+        }
+        if dec_w > 0.0 {
+            ui.painter().rect_filled(
+                egui::Rect::from_min_size(egui::pos2(x + conv_w + enc_w + net_w, y), egui::vec2(dec_w, bar_height)),
+                0.0,
+                egui::Color32::from_rgb(220, 20, 60),
+            );
+        }
+        if gap_w > 0.0 {
+            ui.painter().rect_filled(
+                egui::Rect::from_min_size(egui::pos2(x + conv_w + enc_w + net_w + dec_w, y), egui::vec2(gap_w, bar_height)),
+                0.0,
+                egui::Color32::GRAY,
+            );
+        }
+    }
+
     pub fn window_ui(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, peer: &UIPeer, gl: &glow::Context) {
         let config = Config::load();
 
@@ -951,34 +1027,6 @@ impl PeerWindowState {
                                 );
                                 ui.end_row();
 
-                                fn stat(
-                                    ui: &mut egui::Ui,
-                                    label: &str,
-                                    len: usize,
-                                    time: Duration,
-                                    time_iter: impl Iterator<Item = Duration>,
-                                ) {
-                                    let config = Config::load();
-
-                                    let (total_duration, count) = time_iter.fold(
-                                        (core::time::Duration::from_secs(0), 0_usize),
-                                        |(duration, count), other_duration| {
-                                            (duration + other_duration, count + 1)
-                                        },
-                                    );
-                                    let average_millis = total_duration.as_millis() as f32 / count as f32;
-
-                                    ui.label(format!("{len:8} {label} queued",));
-                                    ui.end_row();
-                                    ui.label(format!(
-                                        "{:8.2}ms {:8.2}ms avg ({:2.2} frames) {label} time",
-                                        time.as_millis(),
-                                        average_millis,
-                                        time.as_secs_f32() / (1.0 / (config.framerate as f32)),
-                                    ));
-                                    ui.end_row();
-                                }
-
                                 average_statistics.push_back(media.statistics.clone());
                                 if average_statistics.len() > config.framerate as usize {
                                     average_statistics.pop_front();
@@ -988,7 +1036,7 @@ impl PeerWindowState {
                                     let duration_iter = average_statistics
                                         .iter()
                                         .filter_map(|s| s.encode.as_ref().map(|e| e.time));
-                                    stat(
+                                    Self::stat(
                                         ui,
                                         "encoder",
                                         encode.media_queue_len,
@@ -1002,14 +1050,14 @@ impl PeerWindowState {
                                         .iter()
                                         .filter_map(|s| s.decode.as_ref().map(|e| e.time));
 
-                                    stat(ui, "decoder", decode.media_queue_len, decode.time, duration_iter);
+                                    Self::stat(ui, "decoder", decode.media_queue_len, decode.time, duration_iter);
                                 }
 
                                 if let Some(conversion) = &media.statistics.convert {
                                     let duration_iter = average_statistics
                                         .iter()
                                         .filter_map(|s| s.convert.as_ref().map(|e| e.time));
-                                    stat(
+                                    Self::stat(
                                         ui,
                                         "conversion",
                                         conversion.media_queue_len,

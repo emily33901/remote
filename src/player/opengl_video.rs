@@ -91,12 +91,16 @@ impl OpenGLVideoRenderer {
 
     pub fn upload_frame(&self, width: u32, height: u32, y_data: &[u8], uv_data: &[u8]) {
         unsafe {
+            // Calculate stride (the decoder may add padding)
+            let y_stride = y_data.len() as u32 / height;
+            let uv_stride = uv_data.len() as u32 / (height / 2);
+
             self.gl.bind_texture(glow::TEXTURE_2D, Some(self.y_texture));
             self.gl.tex_image_2d(
                 glow::TEXTURE_2D,
                 0,
                 glow::R8 as i32,
-                width as i32,
+                y_stride as i32,
                 height as i32,
                 0,
                 glow::RED,
@@ -113,8 +117,17 @@ impl OpenGLVideoRenderer {
                 glow::TEXTURE_MAG_FILTER,
                 glow::LINEAR as i32,
             );
+            self.gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_S,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            self.gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_T,
+                glow::CLAMP_TO_EDGE as i32,
+            );
 
-            let uv_width = width / 2;
             let uv_height = height / 2;
             self.gl
                 .bind_texture(glow::TEXTURE_2D, Some(self.uv_texture));
@@ -122,7 +135,7 @@ impl OpenGLVideoRenderer {
                 glow::TEXTURE_2D,
                 0,
                 glow::RG8 as i32,
-                uv_width as i32,
+                uv_stride as i32,
                 uv_height as i32,
                 0,
                 glow::RG,
@@ -139,6 +152,16 @@ impl OpenGLVideoRenderer {
                 glow::TEXTURE_MAG_FILTER,
                 glow::LINEAR as i32,
             );
+            self.gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_S,
+                glow::CLAMP_TO_EDGE as i32,
+            );
+            self.gl.tex_parameter_i32(
+                glow::TEXTURE_2D,
+                glow::TEXTURE_WRAP_T,
+                glow::CLAMP_TO_EDGE as i32,
+            );
         }
     }
 
@@ -152,6 +175,22 @@ impl OpenGLVideoRenderer {
 
             self.gl.viewport(x, y, w, h);
             self.gl.use_program(Some(self.program));
+
+            // Bind textures
+            self.gl.active_texture(glow::TEXTURE0);
+            self.gl.bind_texture(glow::TEXTURE_2D, Some(self.y_texture));
+            self.gl.active_texture(glow::TEXTURE1);
+            self.gl
+                .bind_texture(glow::TEXTURE_2D, Some(self.uv_texture));
+
+            // Set texture uniforms
+            let y_loc = self.gl.get_uniform_location(self.program, "y_texture");
+            let uv_loc = self.gl.get_uniform_location(self.program, "uv_texture");
+            self.gl
+                .program_uniform_1_i32(self.program, y_loc.as_ref(), 0);
+            self.gl
+                .program_uniform_1_i32(self.program, uv_loc.as_ref(), 1);
+
             self.gl.bind_vertex_array(Some(self.vao));
             self.gl.draw_arrays(glow::TRIANGLES, 0, 6);
             self.gl.bind_vertex_array(None);
@@ -191,8 +230,23 @@ const FRAGMENT_SHADER: &str = r#"
 #version 330 core
 in vec2 v_uv;
 out vec4 FragColor;
+
+uniform sampler2D y_texture;
+uniform sampler2D uv_texture;
+
 void main() {
-    // Test pattern: green
-    FragColor = vec4(0.0, 1.0, 0.0, 1.0);
+    // Sample Y and UV textures
+    float y = texture(y_texture, v_uv).r;
+    vec2 uv = texture(uv_texture, v_uv).rg;
+    
+    // YUV to RGB conversion (BT.601)
+    float u = uv.r - 0.5;
+    float v = uv.g - 0.5;
+    
+    float r = y + 1.402 * v;
+    float g = y - 0.344136 * u - 0.714136 * v;
+    float b = y + 1.772 * u;
+    
+    FragColor = vec4(r, g, b, 1.0);
 }
 "#;
