@@ -1297,9 +1297,9 @@ impl PeerWindowState {
                                     };
                                     
                                     match result {
-                                        Ok((width, height, y_data, uv_data)) => {
-                                            tracing::debug!("Decoded frame {}x{}, y size: {}, uv size: {}", 
-                                                width, height, y_data.len(), uv_data.len());
+                                        Ok((width, height, y_data, u_data, v_data)) => {
+                                            tracing::debug!("Decoded frame {}x{}, y size: {}, u size: {}, v size: {}", 
+                                                width, height, y_data.len(), u_data.len(), v_data.len());
                                             
                                             // Initialize renderer if needed
                                             let renderer = stream_renderer.get_or_init(|| {
@@ -1307,7 +1307,7 @@ impl PeerWindowState {
                                             });
                                             
                                             // Upload frame data
-                                            renderer.upload_frame(width, height, &y_data, &uv_data);
+                                            renderer.upload_frame(width, height, &y_data, &u_data, &v_data);
                                             
                                             // Render at the correct position (the allocated rect)
                                             // Pass screen height for coordinate conversion
@@ -1319,7 +1319,7 @@ impl PeerWindowState {
                                             ], screen_height);
                                         }
                                         Err(e) => {
-                                            tracing::warn!("Decode failed: {:?}", e);
+                                            tracing::warn!("Decode failed: {}", e);
                                         }
                                     }
                                 } else {
@@ -1470,18 +1470,47 @@ impl VideoDecoder {
         Ok(Self { decoder, width: 0, height: 0 })
     }
     
-    fn decode(&mut self, data: &[u8]) -> Result<(u32, u32, Vec<u8>, Vec<u8>)> {
+    fn decode(&mut self, data: &[u8]) -> Result<(u32, u32, Vec<u8>, Vec<u8>, Vec<u8>)> {
         use openh264::nal_units;
         
         let nals: Vec<_> = nal_units(data).collect();
         tracing::debug!("Decoding {} NAL units, data len: {}", nals.len(), data.len());
         
+        fn nal_type(nal: &[u8]) -> Option<u8> {
+            nal.first().map(|b| b & 0x1F)
+        }
+        
         let mut width = 0;
         let mut height = 0;
         let mut y_data = Vec::new();
-        let mut uv_data = Vec::new();
+        let mut u_data = Vec::new();
+        let mut v_data = Vec::new();
         
+        // First pass: decode SPS (7) and PPS (8) NALs to configure decoder
+        for nal in &nals {
+            let nal_type_byte = nal.first().copied();
+            if let Some(nal_type) = nal_type_byte {
+                let nal_unit_type = nal_type & 0x1F;
+                if nal_unit_type == 7 || nal_unit_type == 8 {
+                    match self.decoder.decode(nal) {
+                        Ok(None) => {}, // Expected - SPS/PPS don't produce frames
+                        Ok(Some(_)) => {}, // Also fine
+                        Err(e) => {
+                            tracing::warn!("Decode error on SPS/PPS NAL type {}: {}", nal_unit_type, e);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Second pass: decode actual frame NALs (non-SPS/PPS)
         for (i, nal) in nals.into_iter().enumerate() {
+            let nal_type_byte = nal.first().copied();
+            let should_skip = nal_type_byte.map(|b| (b & 0x1F) == 7 || (b & 0x1F) == 8).unwrap_or(false);
+            if should_skip {
+                continue;
+            }
+            
             match self.decoder.decode(nal) {
                 Ok(Some(output)) => {
                     let (w, h) = output.dimensions();
@@ -1491,24 +1520,15 @@ impl VideoDecoder {
                     tracing::debug!("Decoded frame {}x{} from NAL {}", width, height, i);
                     
                     y_data = output.y().to_vec();
-                    let u = output.u().to_vec();
-                    let v = output.v().to_vec();
-                    
-                    let uv_width = width as usize / 2;
-                    let uv_height = height as usize / 2;
-                    
-                    uv_data = Vec::with_capacity(uv_width * uv_height * 2);
-                    for j in 0..(uv_width * uv_height) {
-                        uv_data.push(u[j]);
-                        uv_data.push(v[j]);
-                    }
+                    u_data = output.u().to_vec();
+                    v_data = output.v().to_vec();
                     break;
                 }
                 Ok(None) => {
                     // No frame from this NAL, try next
                 }
                 Err(e) => {
-                    tracing::warn!("Decode error on NAL {}: {:?}", i, e);
+                    tracing::warn!("Decode error on NAL {}: {}", i, e);
                 }
             }
         }
@@ -1520,6 +1540,6 @@ impl VideoDecoder {
         
         tracing::debug!("Successfully decoded frame {}x{}", width, height);
         
-        Ok((width, height, y_data, uv_data))
+        Ok((width, height, y_data, u_data, v_data))
     }
 }
