@@ -6,15 +6,13 @@ use std::{
 
 use anyhow::Result;
 use derive_more::{Deref, DerefMut};
-use egui_glow::CallbackFn;
-use glow::Context;
 use tokio::sync::{mpsc, oneshot, Mutex, MutexGuard};
 
 use crate::config::Config;
 use crate::logic::{Mode, PeerStreamRequest, PeerStreamRequestResponse};
 use crate::peer::{PeerControl, PeerError, PeerEvent};
 use crate::player::opengl_video::OpenGLVideoRenderer;
-use openh264::{decoder::Decoder, decoder::DecoderConfig, formats::YUVSource, nal_units, OpenH264API};
+use openh264::{decoder::Decoder, decoder::DecoderConfig, formats::YUVSource, OpenH264API};
 
 use media::{
     Encoding, EncodingOptions, H264EncodingOptions, Statistics, Texture, Timestamp, VideoBuffer,
@@ -109,7 +107,8 @@ impl RemotePeer {
                         &our_peer_id,
                         &their_peer_id,
                         request,
-                    ).await;
+                    )
+                    .await;
                     if let Err(e) = result {
                         tracing::warn!("Failed to handle stream request: {}", e);
                     }
@@ -121,7 +120,8 @@ impl RemotePeer {
                         &our_peer_id,
                         &their_peer_id,
                         response,
-                    ).await;
+                    )
+                    .await;
                     if let Some(control) = result? {
                         decoder_control = Some(control);
                     }
@@ -133,7 +133,8 @@ impl RemotePeer {
                         &our_peer_id,
                         &their_peer_id,
                         video,
-                    ).await?;
+                    )
+                    .await?;
                 }
                 PeerEvent::Error(PeerError::Closed) => {
                     tracing::info!(%our_peer_id, %their_peer_id, "peer closed");
@@ -255,7 +256,7 @@ impl RemotePeer {
         media_control: &Weak<Mutex<Option<mpsc::Sender<media::produce::MediaControl>>>>,
     ) -> tokio::sync::oneshot::Sender<(PeerStreamRequestResponse, Option<media::encoder::Encoder>)>
     {
-        let (response_tx, mut response_rx) =
+        let (response_tx, response_rx) =
             oneshot::channel::<(PeerStreamRequestResponse, Option<media::encoder::Encoder>)>();
 
         let peer_control = peer_control.clone();
@@ -495,16 +496,40 @@ impl UIPeer {
                     Self::handle_connection_request(&mut locked_peer, peer_id, connection_id).await;
                 }
                 SignallingEvent::Offer(peer_id, offer) => {
-                    Self::handle_peer_message(&mut locked_peer, &peer_id, PeerControl::Offer(offer), "offer").await;
+                    Self::handle_peer_message(
+                        &mut locked_peer,
+                        &peer_id,
+                        PeerControl::Offer(offer),
+                        "offer",
+                    )
+                    .await;
                 }
                 SignallingEvent::Answer(peer_id, answer) => {
-                    Self::handle_peer_message(&mut locked_peer, &peer_id, PeerControl::Answer(answer), "answer").await;
+                    Self::handle_peer_message(
+                        &mut locked_peer,
+                        &peer_id,
+                        PeerControl::Answer(answer),
+                        "answer",
+                    )
+                    .await;
                 }
                 SignallingEvent::IceCandidate(peer_id, ice_candidate) => {
-                    Self::handle_peer_message(&mut locked_peer, &peer_id, PeerControl::IceCandidate(ice_candidate), "ice candidate").await;
+                    Self::handle_peer_message(
+                        &mut locked_peer,
+                        &peer_id,
+                        PeerControl::IceCandidate(ice_candidate),
+                        "ice candidate",
+                    )
+                    .await;
                 }
                 SignallingEvent::ConnectionAccepted(peer_id, connection_id) => {
-                    Self::handle_connection_accepted(&mut locked_peer, &signal_tx, &strong_zelf, peer_id, connection_id);
+                    Self::handle_connection_accepted(
+                        &mut locked_peer,
+                        &signal_tx,
+                        &strong_zelf,
+                        peer_id,
+                        connection_id,
+                    );
                 }
                 SignallingEvent::Error(error) => {
                     tracing::info!("signalling error {error:?}");
@@ -517,10 +542,15 @@ impl UIPeer {
         Ok(())
     }
 
-    async fn handle_connection_request(zelf: &mut _Peer, peer_id: PeerId, connection_id: ConnectionId) {
+    async fn handle_connection_request(
+        zelf: &mut _Peer,
+        peer_id: PeerId,
+        connection_id: ConnectionId,
+    ) {
         tracing::info!(%peer_id, ?connection_id, "connection request");
         zelf.last_connection_request = Some(connection_id.to_string());
-        zelf.connection_peer_id.insert(connection_id.clone(), peer_id.clone());
+        zelf.connection_peer_id
+            .insert(connection_id.clone(), peer_id.clone());
 
         let _ = zelf
             .app_event_tx
@@ -581,7 +611,9 @@ impl UIPeer {
                 .await?;
 
                 let control = remote_peer.control.clone();
-                locked.remote_peers.insert(their_peer_id.clone(), remote_peer);
+                locked
+                    .remote_peers
+                    .insert(their_peer_id.clone(), remote_peer);
 
                 let _ = locked
                     .app_event_tx
@@ -918,9 +950,7 @@ impl PeerWindowState {
 
         let (total_duration, count) = time_iter.fold(
             (core::time::Duration::from_secs(0), 0_usize),
-            |(duration, count), other_duration| {
-                (duration + other_duration, count + 1)
-            },
+            |(duration, count), other_duration| (duration + other_duration, count + 1),
         );
         let average_millis = total_duration.as_millis() as f32 / count as f32;
 
@@ -946,21 +976,39 @@ impl PeerWindowState {
             let duration_iter = average_statistics
                 .iter()
                 .filter_map(|s| s.encode.as_ref().map(|e| e.time));
-            Self::stat(ui, "encoder", encode.media_queue_len, encode.time, duration_iter);
+            Self::stat(
+                ui,
+                "encoder",
+                encode.media_queue_len,
+                encode.time,
+                duration_iter,
+            );
         }
 
         if let Some(decode) = &media.statistics.decode {
             let duration_iter = average_statistics
                 .iter()
                 .filter_map(|s| s.decode.as_ref().map(|e| e.time));
-            Self::stat(ui, "decoder", decode.media_queue_len, decode.time, duration_iter);
+            Self::stat(
+                ui,
+                "decoder",
+                decode.media_queue_len,
+                decode.time,
+                duration_iter,
+            );
         }
 
         if let Some(conversion) = &media.statistics.convert {
             let duration_iter = average_statistics
                 .iter()
                 .filter_map(|s| s.convert.as_ref().map(|e| e.time));
-            Self::stat(ui, "conversion", conversion.media_queue_len, conversion.time, duration_iter);
+            Self::stat(
+                ui,
+                "conversion",
+                conversion.media_queue_len,
+                conversion.time,
+                duration_iter,
+            );
         }
     }
 
@@ -991,28 +1039,40 @@ impl PeerWindowState {
         }
         if net_w > 0.0 {
             ui.painter().rect_filled(
-                egui::Rect::from_min_size(egui::pos2(x + conv_w + enc_w, y), egui::vec2(net_w, bar_height)),
+                egui::Rect::from_min_size(
+                    egui::pos2(x + conv_w + enc_w, y),
+                    egui::vec2(net_w, bar_height),
+                ),
                 0.0,
                 egui::Color32::from_rgb(255, 215, 0),
             );
         }
         if dec_w > 0.0 {
             ui.painter().rect_filled(
-                egui::Rect::from_min_size(egui::pos2(x + conv_w + enc_w + net_w, y), egui::vec2(dec_w, bar_height)),
+                egui::Rect::from_min_size(
+                    egui::pos2(x + conv_w + enc_w + net_w, y),
+                    egui::vec2(dec_w, bar_height),
+                ),
                 0.0,
                 egui::Color32::from_rgb(220, 20, 60),
             );
         }
         if gap_w > 0.0 {
             ui.painter().rect_filled(
-                egui::Rect::from_min_size(egui::pos2(x + conv_w + enc_w + net_w + dec_w, y), egui::vec2(gap_w, bar_height)),
+                egui::Rect::from_min_size(
+                    egui::pos2(x + conv_w + enc_w + net_w + dec_w, y),
+                    egui::vec2(gap_w, bar_height),
+                ),
                 0.0,
                 egui::Color32::GRAY,
             );
         }
     }
 
-    fn draw_frame_timelines(ui: &mut egui::Ui, frame_timelines: &std::collections::VecDeque<FrameTimeline>) {
+    fn draw_frame_timelines(
+        ui: &mut egui::Ui,
+        frame_timelines: &std::collections::VecDeque<FrameTimeline>,
+    ) {
         if frame_timelines.is_empty() {
             return;
         }
@@ -1020,12 +1080,21 @@ impl PeerWindowState {
         ui.label("Frame Timeline");
         ui.end_row();
 
-        let avg_conversion: Duration = frame_timelines.iter().map(|t| t.conversion).sum::<Duration>() / frame_timelines.len() as u32;
-        let avg_encode: Duration = frame_timelines.iter().map(|t| t.encode).sum::<Duration>() / frame_timelines.len() as u32;
-        let avg_network: Duration = frame_timelines.iter().map(|t| t.network).sum::<Duration>() / frame_timelines.len() as u32;
-        let avg_decode: Duration = frame_timelines.iter().map(|t| t.decode).sum::<Duration>() / frame_timelines.len() as u32;
-        let avg_gap: Duration = frame_timelines.iter().map(|t| t.gap).sum::<Duration>() / frame_timelines.len() as u32;
-        let avg_total: Duration = frame_timelines.iter().map(|t| t.total).sum::<Duration>() / frame_timelines.len() as u32;
+        let avg_conversion: Duration = frame_timelines
+            .iter()
+            .map(|t| t.conversion)
+            .sum::<Duration>()
+            / frame_timelines.len() as u32;
+        let avg_encode: Duration = frame_timelines.iter().map(|t| t.encode).sum::<Duration>()
+            / frame_timelines.len() as u32;
+        let avg_network: Duration = frame_timelines.iter().map(|t| t.network).sum::<Duration>()
+            / frame_timelines.len() as u32;
+        let avg_decode: Duration = frame_timelines.iter().map(|t| t.decode).sum::<Duration>()
+            / frame_timelines.len() as u32;
+        let avg_gap: Duration =
+            frame_timelines.iter().map(|t| t.gap).sum::<Duration>() / frame_timelines.len() as u32;
+        let avg_total: Duration = frame_timelines.iter().map(|t| t.total).sum::<Duration>()
+            / frame_timelines.len() as u32;
 
         let total_f = avg_total.as_secs_f32();
         if total_f > 0.0 {
@@ -1042,7 +1111,9 @@ impl PeerWindowState {
             let y = cursor.min.y;
 
             let x = ui.min_rect().min.x;
-            Self::draw_timeline_bar(ui, x, y, conv_width, enc_width, net_width, dec_width, gap_width, bar_height);
+            Self::draw_timeline_bar(
+                ui, x, y, conv_width, enc_width, net_width, dec_width, gap_width, bar_height,
+            );
 
             ui.allocate_space(egui::vec2(available_width, bar_height));
             ui.end_row();
@@ -1083,7 +1154,13 @@ impl PeerWindowState {
         }
     }
 
-    pub fn window_ui(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, peer: &UIPeer, _gl: &glow::Context) {
+    pub fn window_ui(
+        &mut self,
+        ctx: &egui::Context,
+        ui: &mut egui::Ui,
+        peer: &UIPeer,
+        _gl: &glow::Context,
+    ) {
         let config = Config::load();
 
         ui.text_edit_singleline(&mut self.connect_peer_id);
@@ -1101,11 +1178,15 @@ impl PeerWindowState {
         ui.heading("Connected Peers");
         ui.end_row();
 
+        let stream_request = &mut self.stream_request;
+        let video_decoder = self.video_decoder.clone();
+        let stream_texture_renderer = self.stream_texture_renderer.clone();
+
         for (their_peer_id, connected_peer) in &mut self.connected_peers {
             ui.group(|ui| {
                 ui.heading(format!("{}", their_peer_id));
 
-                self.stream_request.ui(ui, peer, their_peer_id);
+                stream_request.ui(ui, peer, their_peer_id);
 
                 ui.end_row();
 
@@ -1113,7 +1194,10 @@ impl PeerWindowState {
                     return;
                 };
 
-                let media = Self::poll_decoder_events(decoder_receiver, &mut connected_peer.peer_media_state);
+                let media = Self::poll_decoder_events(
+                    decoder_receiver,
+                    &mut connected_peer.peer_media_state,
+                );
 
                 match media {
                     MediaResult::Done => {
@@ -1133,7 +1217,14 @@ impl PeerWindowState {
 
                         Self::draw_frame_timelines(ui, &connected_peer.frame_timelines);
 
-                        self.render_video_texture(ctx, ui, connected_peer, &config);
+                        Self::render_video_texture(
+                            ctx,
+                            ui,
+                            connected_peer,
+                            &config,
+                            &video_decoder,
+                            &stream_texture_renderer,
+                        );
                     }
                 }
             });
@@ -1161,7 +1252,7 @@ impl PeerWindowState {
         ui.heading("Stream Requests");
         ui.end_row();
 
-        Self::handle_stream_requests(ui, peer, &mut self.connected_peers);
+        Self::handle_stream_requests(ui, &mut self.connected_peers);
     }
 
     fn poll_decoder_events(
@@ -1229,13 +1320,7 @@ impl PeerWindowState {
 
         Self::show_media_stats(ui, media, average_statistics);
 
-        Self::update_frame_timeline(
-            ui,
-            config,
-            &media,
-            time_diff,
-            frame_timelines,
-        );
+        Self::update_frame_timeline(ui, config, &media, time_diff, frame_timelines);
     }
 
     fn update_frame_timeline(
@@ -1249,9 +1334,9 @@ impl PeerWindowState {
         let decode_stats = media.statistics.decode.as_ref();
         let convert_stats = media.statistics.convert.as_ref();
 
-        let Some(network_time) = decode_stats.and_then(|d| {
-            encode_stats.and_then(|e| d.start_time.duration_since(e.end_time).ok())
-        }) else {
+        let Some(network_time) = decode_stats
+            .and_then(|d| encode_stats.and_then(|e| d.start_time.duration_since(e.end_time).ok()))
+        else {
             return;
         };
 
@@ -1284,11 +1369,12 @@ impl PeerWindowState {
     }
 
     fn render_video_texture(
-        &self,
         ctx: &egui::Context,
         ui: &mut egui::Ui,
         connected_peer: &ConnectedPeer,
         config: &Config,
+        video_decoder: &Arc<std::sync::Mutex<Option<VideoDecoder>>>,
+        stream_texture_renderer: &Arc<std::sync::OnceLock<OpenGLVideoRenderer>>,
     ) {
         let aspect: f32 = config.height as f32 / config.width as f32;
         let desired_size = ui.available_width() * egui::vec2(1.0, aspect);
@@ -1296,8 +1382,8 @@ impl PeerWindowState {
 
         let pixels_per_point = ctx.pixels_per_point();
         let h264_data = connected_peer.latest_h264_data.lock().unwrap().clone();
-        let video_decoder = self.video_decoder.clone();
-        let stream_renderer = self.stream_texture_renderer.clone();
+        let video_decoder = video_decoder.clone();
+        let stream_renderer = stream_texture_renderer.clone();
 
         ctx.request_repaint();
 
@@ -1319,9 +1405,8 @@ impl PeerWindowState {
 
             match result {
                 Ok((width, height, y_data, u_data, v_data)) => {
-                    let renderer = stream_renderer.get_or_init(|| {
-                        OpenGLVideoRenderer::new(gl.clone()).unwrap()
-                    });
+                    let renderer = stream_renderer
+                        .get_or_init(|| OpenGLVideoRenderer::new(gl.clone()).unwrap());
 
                     renderer.upload_frame(width, height, &y_data, &u_data, &v_data);
 
@@ -1331,7 +1416,10 @@ impl PeerWindowState {
                     let w = (vp.max.x - vp.min.x) * pixels_per_point;
                     let h = (vp.max.y - vp.min.y) * pixels_per_point;
 
-                    renderer.render([x, y, w, h], info.screen_size_px[1] as f32 * pixels_per_point);
+                    renderer.render(
+                        [x, y, w, h],
+                        info.screen_size_px[1] as f32 * pixels_per_point,
+                    );
                 }
                 Err(e) => {
                     tracing::warn!("Decode failed: {}", e);
@@ -1348,10 +1436,15 @@ impl PeerWindowState {
 
     fn handle_stream_requests(
         ui: &mut egui::Ui,
-        peer: &UIPeer,
         connected_peers: &mut HashMap<PeerId, ConnectedPeer>,
     ) {
-        for (peer_id, ConnectedPeer { stream_requests, .. }) in connected_peers {
+        for (
+            peer_id,
+            ConnectedPeer {
+                stream_requests, ..
+            },
+        ) in connected_peers
+        {
             let mut stream_request_clicked = None;
 
             for (i, (request, _response)) in stream_requests.iter().enumerate() {
@@ -1359,12 +1452,12 @@ impl PeerWindowState {
 
                 if ui.button("accept").clicked() {
                     let config = Config::load();
-                    stream_request_clicked = Some(Self::create_accept_response(request, &config));
+                    stream_request_clicked = Some((i, Self::create_accept_response(request, &config)));
                 }
                 ui.end_row();
             }
 
-            if let Some((i, response, encoder)) = stream_request_clicked {
+            if let Some((i, (response, encoder))) = stream_request_clicked {
                 let (_request, response_channel) = stream_requests.remove(i);
                 response_channel.send((response, Some(encoder))).unwrap();
             }
@@ -1374,15 +1467,10 @@ impl PeerWindowState {
     fn create_accept_response(
         request: &PeerStreamRequest,
         config: &Config,
-    ) -> (
-        usize,
-        PeerStreamRequestResponse,
-        media::encoder::Encoder,
-    ) {
+    ) -> (PeerStreamRequestResponse, media::encoder::Encoder) {
         use crate::logic::Mode;
 
         (
-            0,
             PeerStreamRequestResponse::Accept {
                 mode: request
                     .preferred_mode
@@ -1408,7 +1496,13 @@ impl PeerWindowState {
         )
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, peer: &UIPeer, gl: &glow::Context) -> ShouldRemove {
+    pub fn ui(
+        &mut self,
+        ctx: &egui::Context,
+        ui: &mut egui::Ui,
+        peer: &UIPeer,
+        gl: &glow::Context,
+    ) -> ShouldRemove {
         let _config = Config::load();
 
         let mut result = ShouldRemove::No;
@@ -1463,27 +1557,31 @@ impl VideoDecoder {
         let config = DecoderConfig::new();
         let api = OpenH264API::from_source();
         let decoder = Decoder::with_api_config(api, config)?;
-        Ok(Self { decoder, width: 0, height: 0 })
+        Ok(Self {
+            decoder,
+            width: 0,
+            height: 0,
+        })
     }
-    
+
     fn decode(&mut self, data: &[u8]) -> Result<(u32, u32, Vec<u8>, Vec<u8>, Vec<u8>)> {
         use openh264::nal_units;
-        
+
         let nals: Vec<_> = nal_units(data).collect();
-        
+
         let mut width = 0;
         let mut height = 0;
         let mut y_data = Vec::new();
         let mut u_data = Vec::new();
         let mut v_data = Vec::new();
-        
+
         for (i, nal) in nals.into_iter().enumerate() {
             match self.decoder.decode(nal) {
                 Ok(Some(output)) => {
                     let (w, h) = output.dimensions();
                     width = w as u32;
                     height = h as u32;
-                    
+
                     y_data = output.y().to_vec();
                     u_data = output.u().to_vec();
                     v_data = output.v().to_vec();
@@ -1498,14 +1596,14 @@ impl VideoDecoder {
                 }
             }
         }
-        
+
         if y_data.is_empty() {
             // No frame decoded - this is normal for SPS/PPS only packets
             return Err(anyhow::anyhow!("No frame decoded"));
         }
-        
+
         tracing::debug!("Successfully decoded frame {}x{}", width, height);
-        
+
         Ok((width, height, y_data, u_data, v_data))
     }
 }
