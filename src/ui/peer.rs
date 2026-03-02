@@ -97,80 +97,43 @@ impl RemotePeer {
         their_peer_id: PeerId,
     ) -> Result<()> {
         let config = Config::load();
-
         let mut decoder_control: Option<mpsc::Sender<media::decoder::DecoderControl>> = None;
 
         while let Some(event) = event.recv().await {
             match event {
                 PeerEvent::StreamRequest(request) => {
-                    if let Some(media_control) = media_control.upgrade() {
-                        if media_control.lock().await.is_some() {
-                            tracing::warn!(
-                            "ignoring request to stream as we already have media control associated with this peer"
-                        );
-                            continue;
-                        }
+                    let result = Self::handle_stream_request(
+                        &media_control,
+                        &peer_control,
+                        &app_event_tx,
+                        &our_peer_id,
+                        &their_peer_id,
+                        request,
+                    ).await;
+                    if let Err(e) = result {
+                        tracing::warn!("Failed to handle stream request: {}", e);
                     }
-
-                    let response_tx = Self::stream_request(&peer_control, &media_control);
-
-                    app_event_tx
-                        .send(AppEvent::RemotePeerStreamRequest(
-                            our_peer_id.clone(),
-                            (their_peer_id.clone(), request, response_tx),
-                        ))
-                        .await?;
                 }
-
-                PeerEvent::RequestStreamResponse(response) => match response {
-                    PeerStreamRequestResponse::Accept {
-                        mode,
-                        encoding,
-                        encoding_options,
-                    } => {
-                        tracing::info!(?mode, ?encoding, ?encoding_options, "stream accepted");
-
-                        let (control, event) = config
-                            .decoder_api
-                            .run(mode.width, mode.height, mode.refresh_rate)
-                            .await?;
-
+                PeerEvent::RequestStreamResponse(response) => {
+                    let result = Self::handle_stream_response(
+                        &config,
+                        &app_event_tx,
+                        &our_peer_id,
+                        &their_peer_id,
+                        response,
+                    ).await;
+                    if let Some(control) = result? {
                         decoder_control = Some(control);
-
-                        app_event_tx
-                            .send(AppEvent::DecoderEvent(
-                                our_peer_id.clone(),
-                                (their_peer_id.clone(), event),
-                            ))
-                            .await?;
                     }
-                    _ => {
-                        tracing::warn!(
-                            ?response,
-                            %our_peer_id,
-                            %their_peer_id,
-                            "ignoring peer stream request response Reject or Negotiate"
-                        );
-                    }
-                },
+                }
                 PeerEvent::Video(video) => {
-                    // Store H264 data for our own decoder
-                    app_event_tx
-                        .send(AppEvent::VideoData(
-                            our_peer_id.clone(),
-                            their_peer_id.clone(),
-                            video.data.clone(),
-                        ))
-                        .await?;
-                    
-                    // Also send to media decoder (for DX11 path, kept for now)
-                    if let Some(decoder_control) = &decoder_control {
-                        decoder_control
-                            .send(media::decoder::DecoderControl::Data(video))
-                            .await?;
-                    } else {
-                        tracing::warn!(%our_peer_id, %their_peer_id, "video without decoder control");
-                    }
+                    Self::handle_video(
+                        &decoder_control,
+                        &app_event_tx,
+                        &our_peer_id,
+                        &their_peer_id,
+                        video,
+                    ).await?;
                 }
                 PeerEvent::Error(PeerError::Closed) => {
                     tracing::info!(%our_peer_id, %their_peer_id, "peer closed");
@@ -186,6 +149,103 @@ impl RemotePeer {
                 }
             }
         }
+
+        Ok(())
+    }
+
+    async fn handle_stream_request(
+        media_control: &Weak<Mutex<Option<mpsc::Sender<media::produce::MediaControl>>>>,
+        peer_control: &mpsc::WeakSender<PeerControl>,
+        app_event_tx: &mpsc::Sender<AppEvent>,
+        our_peer_id: &PeerId,
+        their_peer_id: &PeerId,
+        request: PeerStreamRequest,
+    ) -> Result<()> {
+        if let Some(media_control) = media_control.upgrade() {
+            if media_control.lock().await.is_some() {
+                tracing::warn!(
+                    "ignoring request to stream as we already have media control associated with this peer"
+                );
+                return Ok(());
+            }
+        }
+
+        let response_tx = Self::stream_request(peer_control, media_control);
+
+        app_event_tx
+            .send(AppEvent::RemotePeerStreamRequest(
+                our_peer_id.clone(),
+                (their_peer_id.clone(), request, response_tx),
+            ))
+            .await?;
+
+        Ok(())
+    }
+
+    async fn handle_stream_response(
+        config: &Config,
+        app_event_tx: &mpsc::Sender<AppEvent>,
+        our_peer_id: &PeerId,
+        their_peer_id: &PeerId,
+        response: PeerStreamRequestResponse,
+    ) -> Result<Option<mpsc::Sender<media::decoder::DecoderControl>>> {
+        match response {
+            PeerStreamRequestResponse::Accept {
+                mode,
+                encoding,
+                encoding_options,
+            } => {
+                tracing::info!(?mode, ?encoding, ?encoding_options, "stream accepted");
+
+                let (control, event) = config
+                    .decoder_api
+                    .run(mode.width, mode.height, mode.refresh_rate)
+                    .await?;
+
+                app_event_tx
+                    .send(AppEvent::DecoderEvent(
+                        our_peer_id.clone(),
+                        (their_peer_id.clone(), event),
+                    ))
+                    .await?;
+
+                Ok(Some(control))
+            }
+            _ => {
+                tracing::warn!(
+                    ?response,
+                    %our_peer_id,
+                    %their_peer_id,
+                    "ignoring peer stream request response Reject or Negotiate"
+                );
+                Ok(None)
+            }
+        }
+    }
+
+    async fn handle_video(
+        decoder_control: &Option<mpsc::Sender<media::decoder::DecoderControl>>,
+        app_event_tx: &mpsc::Sender<AppEvent>,
+        our_peer_id: &PeerId,
+        their_peer_id: &PeerId,
+        video: media::VideoBuffer,
+    ) -> Result<()> {
+        app_event_tx
+            .send(AppEvent::VideoData(
+                our_peer_id.clone(),
+                their_peer_id.clone(),
+                video.data.clone(),
+            ))
+            .await?;
+
+        let Some(decoder_control) = decoder_control else {
+            tracing::warn!(%our_peer_id, %their_peer_id, "video without decoder control");
+            return Ok(());
+        };
+
+        decoder_control
+            .send(media::decoder::DecoderControl::Data(video))
+            .await?;
 
         Ok(())
     }
@@ -422,9 +482,9 @@ impl UIPeer {
     ) -> Result<()> {
         while let Some(event) = signal_rx.recv().await {
             let strong_zelf = zelf.upgrade().ok_or(anyhow::anyhow!("no peer"))?;
-            let mut zelf = strong_zelf.lock().await;
+            let mut locked_peer = strong_zelf.lock().await;
 
-            let span = tracing::debug_span!("SignallingEvent", %zelf.our_peer_id);
+            let span = tracing::debug_span!("SignallingEvent", %locked_peer.our_peer_id);
             let _guard = span.enter();
 
             match event {
@@ -432,109 +492,19 @@ impl UIPeer {
                     unreachable!("We should only ever get our peer_id once");
                 }
                 SignallingEvent::ConectionRequest(peer_id, connection_id) => {
-                    tracing::info!(%peer_id, ?connection_id, "connection request");
-                    zelf.last_connection_request = Some(connection_id.to_string());
-                    zelf.connection_peer_id
-                        .insert(connection_id.clone(), peer_id.clone());
-
-                    let _ = zelf
-                        .app_event_tx
-                        .send(AppEvent::ConnectionRequest(
-                            zelf.our_peer_id.clone(),
-                            (connection_id, peer_id),
-                        ))
-                        .await;
+                    Self::handle_connection_request(&mut locked_peer, peer_id, connection_id).await;
                 }
                 SignallingEvent::Offer(peer_id, offer) => {
-                    tracing::info!(%peer_id, offer, "offer");
-
-                    let remote_peers = &mut zelf.remote_peers;
-                    if let Some(peer_data) = remote_peers.get(&peer_id) {
-                        peer_data
-                            .control
-                            .send(PeerControl::Offer(offer))
-                            .await
-                            .unwrap();
-                    } else {
-                        tracing::debug!(%peer_id, ?remote_peers, "got offer for unknown peer");
-                    }
+                    Self::handle_peer_message(&mut locked_peer, &peer_id, PeerControl::Offer(offer), "offer").await;
                 }
                 SignallingEvent::Answer(peer_id, answer) => {
-                    tracing::info!(%peer_id, answer, "answer");
-
-                    let remote_peers = &mut zelf.remote_peers;
-                    if let Some(remote_peer) = remote_peers.get(&peer_id) {
-                        remote_peer
-                            .control
-                            .send(PeerControl::Answer(answer))
-                            .await
-                            .unwrap();
-                    } else {
-                        tracing::debug!(
-                            %peer_id,
-                            ?remote_peers,
-                            "got answer for unknown peer {peer_id}"
-                        );
-                    }
+                    Self::handle_peer_message(&mut locked_peer, &peer_id, PeerControl::Answer(answer), "answer").await;
                 }
                 SignallingEvent::IceCandidate(peer_id, ice_candidate) => {
-                    tracing::info!(%peer_id, ?ice_candidate, "ice candidate");
-
-                    let remote_peers = &mut zelf.remote_peers;
-                    if let Some(remote_peer) = remote_peers.get(&peer_id) {
-                        remote_peer
-                            .control
-                            .send(PeerControl::IceCandidate(ice_candidate))
-                            .await
-                            .unwrap();
-                    } else {
-                        tracing::debug!(
-                            %peer_id,
-                            ?remote_peers,
-                            "got ice candidate for unknown peer"
-                        );
-                    }
+                    Self::handle_peer_message(&mut locked_peer, &peer_id, PeerControl::IceCandidate(ice_candidate), "ice candidate").await;
                 }
                 SignallingEvent::ConnectionAccepted(peer_id, connection_id) => {
-                    let our_peer_id = zelf.our_peer_id.clone();
-                    assert!(peer_id != our_peer_id);
-
-                    tracing::info!(%peer_id, ?connection_id, "connection accepted");
-
-                    zelf.peer_tasks.spawn({
-                        let our_peer_id = our_peer_id;
-                        let their_peer_id = peer_id.clone();
-                        let tx = signal_tx.clone();
-                        let zelf = Arc::downgrade(&strong_zelf);
-
-                        async move {
-                            if let Some(zelf) = zelf.upgrade() {
-                                let mut zelf = zelf.lock().await;
-
-                                let remote_peer = RemotePeer::connected(
-                                    true,
-                                    tx,
-                                    zelf.app_event_tx.clone(),
-                                    our_peer_id,
-                                    their_peer_id.clone(),
-                                )
-                                .await?;
-
-                                let control = remote_peer.control.clone();
-
-                                zelf.remote_peers.insert(their_peer_id.clone(), remote_peer);
-
-                                zelf.app_event_tx
-                                    .send(AppEvent::RemotePeerConnected(
-                                        zelf.our_peer_id.clone(),
-                                        (their_peer_id, control),
-                                    ))
-                                    .await
-                                    .unwrap();
-                            }
-                            anyhow::Ok(())
-                        }
-                    });
+                    Self::handle_connection_accepted(&mut locked_peer, &signal_tx, &strong_zelf, peer_id, connection_id);
                 }
                 SignallingEvent::Error(error) => {
                     tracing::info!("signalling error {error:?}");
@@ -545,6 +515,85 @@ impl UIPeer {
         tracing::info!("client going down");
 
         Ok(())
+    }
+
+    async fn handle_connection_request(zelf: &mut _Peer, peer_id: PeerId, connection_id: ConnectionId) {
+        tracing::info!(%peer_id, ?connection_id, "connection request");
+        zelf.last_connection_request = Some(connection_id.to_string());
+        zelf.connection_peer_id.insert(connection_id.clone(), peer_id.clone());
+
+        let _ = zelf
+            .app_event_tx
+            .send(AppEvent::ConnectionRequest(
+                zelf.our_peer_id.clone(),
+                (connection_id, peer_id),
+            ))
+            .await;
+    }
+
+    async fn handle_peer_message(
+        zelf: &mut _Peer,
+        peer_id: &PeerId,
+        control: PeerControl,
+        message_type: &str,
+    ) {
+        tracing::info!(%peer_id, "{}", message_type);
+
+        let Some(remote_peer) = zelf.remote_peers.get(peer_id) else {
+            tracing::debug!(%peer_id, ?zelf.remote_peers, "got {} for unknown peer", message_type);
+            return;
+        };
+
+        let _ = remote_peer.control.send(control).await;
+    }
+
+    fn handle_connection_accepted(
+        zelf: &mut _Peer,
+        signal_tx: &mpsc::Sender<SignallingControl>,
+        strong_zelf: &Arc<Mutex<_Peer>>,
+        peer_id: PeerId,
+        _connection_id: ConnectionId,
+    ) {
+        let our_peer_id = zelf.our_peer_id.clone();
+        assert!(peer_id != our_peer_id);
+
+        tracing::info!(%peer_id, "connection accepted");
+
+        zelf.peer_tasks.spawn({
+            let our_peer_id = our_peer_id;
+            let their_peer_id = peer_id;
+            let tx = signal_tx.clone();
+            let zelf = Arc::downgrade(strong_zelf);
+
+            async move {
+                let Some(zelf) = zelf.upgrade() else {
+                    return anyhow::Ok(());
+                };
+                let mut locked = zelf.lock().await;
+
+                let remote_peer = RemotePeer::connected(
+                    true,
+                    tx,
+                    locked.app_event_tx.clone(),
+                    our_peer_id,
+                    their_peer_id.clone(),
+                )
+                .await?;
+
+                let control = remote_peer.control.clone();
+                locked.remote_peers.insert(their_peer_id.clone(), remote_peer);
+
+                let _ = locked
+                    .app_event_tx
+                    .send(AppEvent::RemotePeerConnected(
+                        locked.our_peer_id.clone(),
+                        (their_peer_id, control),
+                    ))
+                    .await;
+
+                anyhow::Ok(())
+            }
+        });
     }
 
     async fn connection_requests(&self) -> Result<HashMap<ConnectionId, PeerId>> {
@@ -723,6 +772,12 @@ pub struct PeerWindowState {
 pub enum ShouldRemove {
     Yes,
     No,
+}
+
+enum MediaResult {
+    Done,
+    Empty(Option<PeerMediaState>),
+    Texture(PeerMediaState),
 }
 
 impl PeerStreamRequest {
@@ -1054,205 +1109,31 @@ impl PeerWindowState {
 
                 ui.end_row();
 
-                enum MediaResult {
-                    Done,
-                    Empty(Option<PeerMediaState>),
-                    Texture(PeerMediaState),
-                }
+                let Some(decoder_receiver) = &mut connected_peer.decoder_receiver else {
+                    return;
+                };
 
-                if let Some((last_media, decoder_event, average_statistics, frame_timelines)) =
-                    connected_peer.decoder_receiver.as_mut().map(|r| {
-                        (
-                            &mut connected_peer.peer_media_state,
-                            r,
+                let media = Self::poll_decoder_events(decoder_receiver, &mut connected_peer.peer_media_state);
+
+                match media {
+                    MediaResult::Done => {
+                        connected_peer.peer_media_state = None;
+                        connected_peer.statistics_average.clear();
+                    }
+                    MediaResult::Empty(None) => {}
+                    MediaResult::Empty(Some(media)) | MediaResult::Texture(media) => {
+                        connected_peer.peer_media_state = Some(media.clone());
+                        Self::display_media_info(
+                            ui,
+                            &config,
+                            &media,
                             &mut connected_peer.statistics_average,
                             &mut connected_peer.frame_timelines,
-                        )
-                    })
-                {
-                    let mut media = MediaResult::Empty(last_media.clone());
+                        );
 
-                    loop {
-                        match decoder_event.try_recv() {
-                            Ok(media::decoder::DecoderEvent::Frame(
-                                new_texture,
-                                time,
-                                statistics,
-                            )) => {
-                                media = MediaResult::Texture(PeerMediaState {
-                                    start_time: Instant::now(),
-                                    start_timestamp: time.clone(),
-                                    time: time,
-                                    texture: Arc::new(new_texture),
-                                    statistics,
-                                })
-                            }
-                            Err(err) => {
-                                if let mpsc::error::TryRecvError::Disconnected = err {
-                                    media = MediaResult::Done;
-                                }
-                                break;
-                            }
-                        }
-                    }
+                        Self::draw_frame_timelines(ui, &connected_peer.frame_timelines);
 
-                    match media {
-                        MediaResult::Done => {
-                            *last_media = None;
-                            average_statistics.clear();
-                        }
-                        MediaResult::Empty(None) => {}
-                        MediaResult::Empty(Some(media)) | MediaResult::Texture(media) => {
-                            *last_media = Some(media.clone());
-
-                            {
-                                ui.style_mut().override_text_style =
-                                    Some(egui::TextStyle::Monospace);
-
-                                let start_ts = media.start_timestamp.clone();
-                                let media_time = media.time.sub(start_ts);
-                                let time_diff = (media.start_time.elapsed().saturating_sub(media_time))
-                                    .max(media_time.saturating_sub(media.start_time.elapsed()));
-
-                                ui.colored_label(
-                                    color::interpolate_color(
-                                        egui::Color32::GREEN,
-                                        egui::Color32::RED,
-                                        ((time_diff.as_secs_f32() * 1000.0) / 50.0).clamp(0.0, 1.0),
-                                    ),
-                                    format!(
-                                        "{:8}ms total (from frame capture to display) ({:8}ms)",
-                                        time_diff.as_millis(),
-                                        media.time.duration().as_millis(),
-                                    ),
-                                );
-                                ui.end_row();
-
-                                let stats = media.statistics.clone();
-                                average_statistics.push_back(stats);
-                                if average_statistics.len() > config.framerate as usize {
-                                    average_statistics.pop_front();
-                                }
-
-                                Self::show_media_stats(ui, &media, average_statistics);
-
-                                let encode_stats = media.statistics.encode.as_ref();
-                                let decode_stats = media.statistics.decode.as_ref();
-                                let convert_stats = media.statistics.convert.as_ref();
-
-                                let network_time = decode_stats.and_then(|d| {
-                                    encode_stats.and_then(|e| d.start_time.duration_since(e.end_time).ok())
-                                });
-
-                                if let Some(network_time) = network_time {
-                                    ui.label(format!(
-                                        "{:8}ms ({:2.2} frames) network time (decode start - encode end)",
-                                        network_time.as_millis(),
-                                        network_time.as_secs_f32()
-                                            / (1.0 / (config.framerate as f32)),
-                                    ));
-                                    ui.end_row();
-
-                                    let conversion_time = convert_stats.map(|c| c.time).unwrap_or_default();
-                                    let encode_time = encode_stats.map(|e| e.time).unwrap_or_default();
-                                    let decode_time = decode_stats.map(|d| d.time).unwrap_or_default();
-                                    let known_sum = conversion_time + encode_time + network_time + decode_time;
-                                    let gap = time_diff.saturating_sub(known_sum);
-
-                                    let timeline = FrameTimeline {
-                                        conversion: conversion_time,
-                                        encode: encode_time,
-                                        network: network_time,
-                                        decode: decode_time,
-                                        total: time_diff,
-                                        gap,
-                                    };
-
-                                    frame_timelines.push_front(timeline);
-                                    if frame_timelines.len() > 10 {
-                                        frame_timelines.pop_back();
-                                    }
-                                }
-                            }
-
-                            Self::draw_frame_timelines(ui, frame_timelines);
-
-                            let config = Config::load();
-                            let aspect: f32 = config.height as f32 / config.width as f32;
-
-                            let desired_size = ui.available_width() * egui::vec2(1.0, aspect);
-                            let (_id, rect) = ui.allocate_space(desired_size);
-
-                            // Get pixels per point for coordinate conversion
-                            let pixels_per_point = ctx.pixels_per_point();
-
-                            // Get the latest H264 data from the connected peer
-                            let h264_data = connected_peer.latest_h264_data.lock().unwrap().clone();
-                            let video_decoder = self.video_decoder.clone();
-                            let stream_renderer = self.stream_texture_renderer.clone();
-                            
-                            ctx.request_repaint();
-                            
-                            // Convert rect to simple values for the closure
-                            let rect_min = rect.min;
-                            let rect_max = rect.max;
-                            
-                            let callback = egui_glow::CallbackFn::new(move |info, painter| {
-                                let gl = painter.gl();
-                                
-                                // Get H264 data
-                                if let Some(ref h264_data) = h264_data {
-                                    tracing::debug!("Got H264 data: {} bytes", h264_data.len());
-                                    
-                                    // Initialize and use decoder
-                                    let result = {
-                                        let mut guard = video_decoder.lock().unwrap();
-                                        if guard.is_none() {
-                                            tracing::debug!("Creating new VideoDecoder");
-                                            *guard = Some(VideoDecoder::new().unwrap());
-                                        }
-                                        guard.as_mut().unwrap().decode(h264_data)
-                                    };
-                                    
-                                    match result {
-                                        Ok((width, height, y_data, u_data, v_data)) => {
-                                            tracing::debug!("Decoded frame {}x{}, y size: {}, u size: {}, v size: {}", 
-                                                width, height, y_data.len(), u_data.len(), v_data.len());
-                                            
-                                            // Initialize renderer if needed
-                                            let renderer = stream_renderer.get_or_init(|| {
-                                                OpenGLVideoRenderer::new(gl.clone()).unwrap()
-                                            });
-                                            
-                                            // Upload frame data
-                                            renderer.upload_frame(width, height, &y_data, &u_data, &v_data);
-                                            
-                                            // Convert viewport from egui coordinates (points) to pixels
-                                            // The callback viewport is already in pixels if we use info.viewport
-                                            let vp = info.viewport;
-                                            let x = vp.min.x * pixels_per_point;
-                                            let y = vp.min.y * pixels_per_point;
-                                            let w = (vp.max.x - vp.min.x) * pixels_per_point;
-                                            let h = (vp.max.y - vp.min.y) * pixels_per_point;
-                                            
-                                            // Render at the correct position
-                                            renderer.render([x, y, w, h], info.screen_size_px[1] as f32 * pixels_per_point);
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!("Decode failed: {}", e);
-                                        }
-                                    }
-                                } else {
-                                    tracing::debug!("No H264 data available");
-                                }
-                            });
-                            
-                            let cb = egui::PaintCallback {
-                                rect,
-                                callback: std::sync::Arc::new(callback),
-                            };
-                            ui.painter().add(cb);
-                        }
+                        self.render_video_texture(ctx, ui, connected_peer, &config);
                     }
                 }
             });
@@ -1280,13 +1161,197 @@ impl PeerWindowState {
         ui.heading("Stream Requests");
         ui.end_row();
 
-        for (
-            peer_id,
-            ConnectedPeer {
-                stream_requests, ..
-            },
-        ) in &mut self.connected_peers
-        {
+        Self::handle_stream_requests(ui, peer, &mut self.connected_peers);
+    }
+
+    fn poll_decoder_events(
+        decoder_receiver: &mut mpsc::Receiver<media::decoder::DecoderEvent>,
+        last_media: &mut Option<PeerMediaState>,
+    ) -> MediaResult {
+        let mut media = MediaResult::Empty(last_media.clone());
+
+        loop {
+            match decoder_receiver.try_recv() {
+                Ok(media::decoder::DecoderEvent::Frame(new_texture, time, statistics)) => {
+                    media = MediaResult::Texture(PeerMediaState {
+                        start_time: Instant::now(),
+                        start_timestamp: time.clone(),
+                        time,
+                        texture: Arc::new(new_texture),
+                        statistics,
+                    });
+                }
+                Err(err) => {
+                    if let mpsc::error::TryRecvError::Disconnected = err {
+                        media = MediaResult::Done;
+                    }
+                    break;
+                }
+            }
+        }
+
+        media
+    }
+
+    fn display_media_info(
+        ui: &mut egui::Ui,
+        config: &Config,
+        media: &PeerMediaState,
+        average_statistics: &mut VecDeque<Statistics>,
+        frame_timelines: &mut VecDeque<FrameTimeline>,
+    ) {
+        ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
+
+        let start_ts = media.start_timestamp.clone();
+        let media_time = media.time.sub(start_ts);
+        let time_diff = (media.start_time.elapsed().saturating_sub(media_time))
+            .max(media_time.saturating_sub(media.start_time.elapsed()));
+
+        ui.colored_label(
+            color::interpolate_color(
+                egui::Color32::GREEN,
+                egui::Color32::RED,
+                ((time_diff.as_secs_f32() * 1000.0) / 50.0).clamp(0.0, 1.0),
+            ),
+            format!(
+                "{:8}ms total (from frame capture to display) ({:8}ms)",
+                time_diff.as_millis(),
+                media.time.duration().as_millis(),
+            ),
+        );
+        ui.end_row();
+
+        let stats = media.statistics.clone();
+        average_statistics.push_back(stats);
+        if average_statistics.len() > config.framerate as usize {
+            average_statistics.pop_front();
+        }
+
+        Self::show_media_stats(ui, media, average_statistics);
+
+        Self::update_frame_timeline(
+            ui,
+            config,
+            &media,
+            time_diff,
+            frame_timelines,
+        );
+    }
+
+    fn update_frame_timeline(
+        ui: &mut egui::Ui,
+        config: &Config,
+        media: &PeerMediaState,
+        time_diff: Duration,
+        frame_timelines: &mut VecDeque<FrameTimeline>,
+    ) {
+        let encode_stats = media.statistics.encode.as_ref();
+        let decode_stats = media.statistics.decode.as_ref();
+        let convert_stats = media.statistics.convert.as_ref();
+
+        let Some(network_time) = decode_stats.and_then(|d| {
+            encode_stats.and_then(|e| d.start_time.duration_since(e.end_time).ok())
+        }) else {
+            return;
+        };
+
+        ui.label(format!(
+            "{:8}ms ({:2.2} frames) network time (decode start - encode end)",
+            network_time.as_millis(),
+            network_time.as_secs_f32() / (1.0 / (config.framerate as f32)),
+        ));
+        ui.end_row();
+
+        let conversion_time = convert_stats.map(|c| c.time).unwrap_or_default();
+        let encode_time = encode_stats.map(|e| e.time).unwrap_or_default();
+        let decode_time = decode_stats.map(|d| d.time).unwrap_or_default();
+        let known_sum = conversion_time + encode_time + network_time + decode_time;
+        let gap = time_diff.saturating_sub(known_sum);
+
+        let timeline = FrameTimeline {
+            conversion: conversion_time,
+            encode: encode_time,
+            network: network_time,
+            decode: decode_time,
+            total: time_diff,
+            gap,
+        };
+
+        frame_timelines.push_front(timeline);
+        if frame_timelines.len() > 10 {
+            frame_timelines.pop_back();
+        }
+    }
+
+    fn render_video_texture(
+        &self,
+        ctx: &egui::Context,
+        ui: &mut egui::Ui,
+        connected_peer: &ConnectedPeer,
+        config: &Config,
+    ) {
+        let aspect: f32 = config.height as f32 / config.width as f32;
+        let desired_size = ui.available_width() * egui::vec2(1.0, aspect);
+        let (_id, rect) = ui.allocate_space(desired_size);
+
+        let pixels_per_point = ctx.pixels_per_point();
+        let h264_data = connected_peer.latest_h264_data.lock().unwrap().clone();
+        let video_decoder = self.video_decoder.clone();
+        let stream_renderer = self.stream_texture_renderer.clone();
+
+        ctx.request_repaint();
+
+        let callback = egui_glow::CallbackFn::new(move |info, painter| {
+            let gl = painter.gl();
+            let Some(ref h264_data) = h264_data else {
+                tracing::debug!("No H264 data available");
+                return;
+            };
+
+            let result = {
+                let mut guard = video_decoder.lock().unwrap();
+                if guard.is_none() {
+                    tracing::debug!("Creating new VideoDecoder");
+                    *guard = Some(VideoDecoder::new().unwrap());
+                }
+                guard.as_mut().unwrap().decode(h264_data)
+            };
+
+            match result {
+                Ok((width, height, y_data, u_data, v_data)) => {
+                    let renderer = stream_renderer.get_or_init(|| {
+                        OpenGLVideoRenderer::new(gl.clone()).unwrap()
+                    });
+
+                    renderer.upload_frame(width, height, &y_data, &u_data, &v_data);
+
+                    let vp = info.viewport;
+                    let x = vp.min.x * pixels_per_point;
+                    let y = vp.min.y * pixels_per_point;
+                    let w = (vp.max.x - vp.min.x) * pixels_per_point;
+                    let h = (vp.max.y - vp.min.y) * pixels_per_point;
+
+                    renderer.render([x, y, w, h], info.screen_size_px[1] as f32 * pixels_per_point);
+                }
+                Err(e) => {
+                    tracing::warn!("Decode failed: {}", e);
+                }
+            }
+        });
+
+        let cb = egui::PaintCallback {
+            rect,
+            callback: std::sync::Arc::new(callback),
+        };
+        ui.painter().add(cb);
+    }
+
+    fn handle_stream_requests(
+        ui: &mut egui::Ui,
+        peer: &UIPeer,
+        connected_peers: &mut HashMap<PeerId, ConnectedPeer>,
+    ) {
+        for (peer_id, ConnectedPeer { stream_requests, .. }) in connected_peers {
             let mut stream_request_clicked = None;
 
             for (i, (request, _response)) in stream_requests.iter().enumerate() {
@@ -1294,42 +1359,53 @@ impl PeerWindowState {
 
                 if ui.button("accept").clicked() {
                     let config = Config::load();
-
-                    stream_request_clicked = Some((
-                        i,
-                        PeerStreamRequestResponse::Accept {
-                            mode: request
-                                .preferred_mode
-                                .as_ref()
-                                .map(|m| Mode {
-                                    width: m.width,
-                                    height: m.height,
-                                    refresh_rate: m.refresh_rate,
-                                })
-                                .unwrap_or(Mode {
-                                    width: config.width,
-                                    height: config.height,
-                                    refresh_rate: config.framerate,
-                                }),
-                            encoding: request.preferred_encoding.clone().unwrap_or(Encoding::H264),
-                            encoding_options: request.preferred_encoding_options.clone().unwrap_or(
-                                EncodingOptions::H264(H264EncodingOptions {
-                                    rate_control: media::RateControlMode::Quality(70),
-                                }),
-                            ),
-                        },
-                        media::encoder::Encoder::MediaFoundation,
-                    ));
+                    stream_request_clicked = Some(Self::create_accept_response(request, &config));
                 }
                 ui.end_row();
             }
 
             if let Some((i, response, encoder)) = stream_request_clicked {
                 let (_request, response_channel) = stream_requests.remove(i);
-
                 response_channel.send((response, Some(encoder))).unwrap();
             }
         }
+    }
+
+    fn create_accept_response(
+        request: &PeerStreamRequest,
+        config: &Config,
+    ) -> (
+        usize,
+        PeerStreamRequestResponse,
+        media::encoder::Encoder,
+    ) {
+        use crate::logic::Mode;
+
+        (
+            0,
+            PeerStreamRequestResponse::Accept {
+                mode: request
+                    .preferred_mode
+                    .as_ref()
+                    .map(|m| Mode {
+                        width: m.width,
+                        height: m.height,
+                        refresh_rate: m.refresh_rate,
+                    })
+                    .unwrap_or(Mode {
+                        width: config.width,
+                        height: config.height,
+                        refresh_rate: config.framerate,
+                    }),
+                encoding: request.preferred_encoding.clone().unwrap_or(Encoding::H264),
+                encoding_options: request.preferred_encoding_options.clone().unwrap_or(
+                    EncodingOptions::H264(H264EncodingOptions {
+                        rate_control: media::RateControlMode::Quality(70),
+                    }),
+                ),
+            },
+            media::encoder::Encoder::MediaFoundation,
+        )
     }
 
     pub fn ui(&mut self, ctx: &egui::Context, ui: &mut egui::Ui, peer: &UIPeer, gl: &glow::Context) -> ShouldRemove {
@@ -1394,7 +1470,6 @@ impl VideoDecoder {
         use openh264::nal_units;
         
         let nals: Vec<_> = nal_units(data).collect();
-        tracing::debug!("Decoding {} NAL units, data len: {}", nals.len(), data.len());
         
         let mut width = 0;
         let mut height = 0;
@@ -1408,8 +1483,6 @@ impl VideoDecoder {
                     let (w, h) = output.dimensions();
                     width = w as u32;
                     height = h as u32;
-                    
-                    tracing::debug!("Decoded frame {}x{} from NAL {}", width, height, i);
                     
                     y_data = output.y().to_vec();
                     u_data = output.u().to_vec();
