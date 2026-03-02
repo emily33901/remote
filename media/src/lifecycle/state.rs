@@ -35,6 +35,10 @@ impl LifecycleState {
         )
     }
 
+    pub fn can_reset(&self) -> bool {
+        matches!(self, Self::Failed)
+    }
+
     pub fn is_terminal(&self) -> bool {
         matches!(self, Self::Stopped | Self::Failed)
     }
@@ -79,6 +83,9 @@ pub enum LifecycleError {
 
     #[error("Pipeline is in terminal state")]
     TerminalState,
+
+    #[error("Stage '{stage}' exhausted retry attempts after {attempts} tries")]
+    RetryExhausted { stage: String, attempts: u32 },
 }
 
 pub struct AtomicLifecycleState {
@@ -152,12 +159,13 @@ impl AtomicLifecycleState {
         let valid = match (&current, &to) {
             (Created, Starting) => true,
             (Starting, Running) | (Starting, Failed) | (Starting, Stopping) => true,
-            (Running, Pausing) | (Running, Stopping) => true,
-            (Pausing, Paused) | (Pausing, Stopping) => true,
-            (Paused, Resuming) | (Paused, Stopping) => true,
-            (Resuming, Running) | (Resuming, Stopping) => true,
+            (Running, Pausing) | (Running, Stopping) | (Running, Failed) => true,
+            (Pausing, Paused) | (Pausing, Stopping) | (Pausing, Failed) => true,
+            (Paused, Resuming) | (Paused, Stopping) | (Paused, Failed) => true,
+            (Resuming, Running) | (Resuming, Stopping) | (Resuming, Failed) => true,
             (Stopping, Stopped) | (Stopping, Failed) => true,
             (Stopped, Starting) => true,
+            (Failed, Created) => true,
             _ => false,
         };
 

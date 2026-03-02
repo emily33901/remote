@@ -28,6 +28,7 @@ serde = { workspace = true }
 parking_lot = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
+rand = "0.8"
 wgpu = "0.19"
 openh264 = { version = "0.9", optional = true }
 util = { path = "../util" }

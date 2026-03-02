@@ -5,7 +5,7 @@ use anyhow::Result;
 use tokio::sync::mpsc;
 
 use super::state::{LifecycleState, AtomicLifecycleState, LifecycleError};
-use super::stage::{Stage, StageControl, StageEvent, StageMeta, run_stage};
+use super::stage::{Stage, StageControl, run_stage, RunningStage};
 
 pub type StageId = usize;
 
@@ -13,25 +13,24 @@ pub type StageId = usize;
 pub struct StageRef {
     pub id: StageId,
     pub name: String,
+    pub state: Arc<AtomicLifecycleState>,
+}
+
+impl StageRef {
+    pub fn state(&self) -> LifecycleState {
+        self.state.load()
+    }
 }
 
 pub struct StageHandle<Input, Output> {
-    id: StageId,
-    name: String,
+    pub id: StageId,
+    pub name: String,
     control: mpsc::Sender<StageControl<Input>>,
     state: Arc<AtomicLifecycleState>,
     _output: std::marker::PhantomData<Output>,
 }
 
 impl<Input: Send + Sync + 'static, Output: Send + Sync + 'static> StageHandle<Input, Output> {
-    pub fn id(&self) -> StageId {
-        self.id
-    }
-
-    pub fn name(&self) -> &str {
-        &self.name
-    }
-
     pub fn state(&self) -> LifecycleState {
         self.state.load()
     }
@@ -65,6 +64,11 @@ impl<Input: Send + Sync + 'static, Output: Send + Sync + 'static> StageHandle<In
         self.control.send(StageControl::Flush).await?;
         Ok(())
     }
+
+    pub async fn reset(&self) -> Result<()> {
+        self.control.send(StageControl::Reset).await?;
+        Ok(())
+    }
 }
 
 pub struct PipelineBuilder {
@@ -86,7 +90,7 @@ impl PipelineBuilder {
     pub fn build(self) -> Pipeline {
         Pipeline {
             buffer_size: self.buffer_size,
-            stages: HashMap::new(),
+            stage_states: HashMap::new(),
             connections: Vec::new(),
             state: Arc::new(AtomicLifecycleState::new(LifecycleState::Created)),
             next_id: 0,
@@ -107,7 +111,7 @@ struct Connection {
 
 pub struct Pipeline {
     buffer_size: usize,
-    stages: HashMap<StageId, Box<dyn std::any::Any + Send + Sync>>,
+    stage_states: HashMap<StageId, Arc<AtomicLifecycleState>>,
     connections: Vec<Connection>,
     state: Arc<AtomicLifecycleState>,
     next_id: StageId,
@@ -122,24 +126,44 @@ impl Pipeline {
         self.state.load()
     }
 
-    pub fn add_stage<S: Stage + 'static>(&mut self, stage: S) -> Result<StageRef> {
+    pub async fn add_stage<S: Stage + 'static>(&mut self, stage: S) -> Result<(StageRef, RunningStage<S>)> {
         let id = self.next_id;
         self.next_id += 1;
         
         let name = stage.meta().name.clone();
+        let state = Arc::new(AtomicLifecycleState::default());
         
-        let running = Box::new(run_stage(stage, self.buffer_size));
+        self.stage_states.insert(id, state.clone());
         
-        self.stages.insert(id, running);
+        let running = run_stage(stage, self.buffer_size).await?;
         
-        Ok(StageRef { id, name })
+        Ok((
+            StageRef { id, name, state },
+            running,
+        ))
     }
 
-    pub fn connect(&mut self, from: StageRef, to: StageRef) {
+    pub fn connect(&mut self, from: &StageRef, to: &StageRef) {
         self.connections.push(Connection {
             from: from.id,
             to: to.id,
         });
+    }
+
+    pub fn get_downstream(&self, stage_id: StageId) -> Vec<StageId> {
+        self.connections
+            .iter()
+            .filter(|c| c.from == stage_id)
+            .map(|c| c.to)
+            .collect()
+    }
+
+    pub fn get_upstream(&self, stage_id: StageId) -> Vec<StageId> {
+        self.connections
+            .iter()
+            .filter(|c| c.to == stage_id)
+            .map(|c| c.from)
+            .collect()
     }
 
     pub async fn start(&self) -> Result<(), LifecycleError> {

@@ -44,8 +44,8 @@ impl Stage for PresenterStage {
         &self.meta
     }
 
-    fn atomic_state(&self) -> &AtomicLifecycleState {
-        &self.state
+    fn atomic_state(&self) -> Arc<AtomicLifecycleState> {
+        self.state.clone()
     }
 
     async fn initialize(&mut self) -> Result<()> {
