@@ -13,11 +13,10 @@ use openh264::{
 use anyhow::{anyhow, Result};
 use tokio::sync::mpsc;
 
-use crate::{
-    dx::ID3D11Texture2DExt,
-    statistics::EncodeStatistics,
-    RateControlMode, ARBITRARY_MEDIA_CHANNEL_LIMIT,
-};
+use crate::dx::ID3D11Texture2DExt;
+use crate::statistics::EncodeStatistics;
+use crate::RateControlMode;
+use crate::ARBITRARY_MEDIA_CHANNEL_LIMIT;
 
 use crate::yuv_buffer::YUVBuffer2;
 
@@ -32,10 +31,8 @@ fn nv12_to_i420(
     dest_uv_stride: usize,
     i420_data: &mut [u8],
 ) {
-    // Extract Y and interleaved UV components
     let (y_plane, uv_plane) = nv12_data.split_at(src_row_pitch * height);
 
-    // Copy Y plane with stride
     for row in 0..height {
         let src_offset = row * src_row_pitch;
         let dest_offset = row * dest_y_stride;
@@ -45,11 +42,8 @@ fn nv12_to_i420(
 
     let y_size = dest_y_stride * height;
     let uv_size = dest_uv_stride * height / 2;
-
-    // Separate interleaved UV into U and V planes
     let (u_plane, v_plane) = i420_data[y_size..].split_at_mut(uv_size);
 
-    // Deinterleave UV plane with stride
     for row in 0..height / 2 {
         let src_offset = row * src_row_pitch;
         let dest_offset = row * dest_uv_stride;
@@ -86,9 +80,7 @@ pub async fn h264_encoder(
             RateControlMode::Bitrate(bitrate) => config
                 .rate_control_mode(openh264::encoder::RateControlMode::Bitrate)
                 .bitrate(BitRate::from_bps(bitrate)),
-            // TODO(emily): QpRange is between 0..51
-            // TODO(emily): OpenH264-rs has no way to set quality param
-            RateControlMode::Quality(quality) => {
+            RateControlMode::Quality(_quality) => {
                 config.rate_control_mode(openh264::encoder::RateControlMode::Quality)
             }
         };
@@ -105,18 +97,17 @@ pub async fn h264_encoder(
                 .build()?;
 
         loop {
-            // TODO(emily): Like in the media foundation encoder, is this the right thing to do?
             let control = {
                 let mut control = None;
                 while let Ok(c) = control_rx.try_recv() {
                     control = Some(c);
                 }
 
-                if let None = control {
+                if control.is_none() {
                     control = Some(
                         control_rx
                             .blocking_recv()
-                            .ok_or(anyhow!("control_rx gone down"))?,
+                            .ok_or_else(|| anyhow!("control_rx gone down"))?,
                     );
                 }
 
@@ -131,8 +122,8 @@ pub async fn h264_encoder(
                 crate::dx::copy_texture(&staging_texture, &frame, None)?;
 
                 staging_texture.map(&context, |data, source_row_pitch| {
-                    let mut yuv_buffer = yuv_buffer.borrow_mut();
-                    let (y_stride, u_stride, v_stride) = yuv_buffer.strides();
+                    let mut yuv = yuv_buffer.borrow_mut();
+                    let (y_stride, u_stride, _v_stride) = yuv.strides();
                     nv12_to_i420(
                         width as usize,
                         height as usize,
@@ -140,16 +131,16 @@ pub async fn h264_encoder(
                         source_row_pitch,
                         y_stride,
                         u_stride,
-                        yuv_buffer.buffer_mut(),
+                        yuv.buffer_mut(),
                     );
 
                     Ok(())
                 })?;
 
-                let yuv_buffer = yuv_buffer.borrow();
+                let yuv = yuv_buffer.borrow();
 
                 let bitstream = encoder.encode_at(
-                    &*yuv_buffer,
+                    &*yuv,
                     openh264::Timestamp::from_millis(time.duration().as_millis() as u64),
                 )?;
 
@@ -171,6 +162,7 @@ pub async fn h264_encoder(
             }
         }
 
+        #[allow(unreachable_code)]
         anyhow::Ok(())
     });
 
