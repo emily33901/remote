@@ -453,12 +453,12 @@ pub fn compile_shader(data: &str, entry_point: PCSTR, target: PCSTR) -> Result<I
 }
 
 pub trait ID3D11Texture2DExt {
-    fn map<F: Fn(&[u8], usize) -> Result<()>>(
+    fn map<F: FnMut(&[u8], usize) -> Result<()>>(
         &self,
         context: &ID3D11DeviceContext,
         f: F,
     ) -> Result<()>;
-    fn map_mut<F: Fn(&mut [u8], usize) -> Result<()>>(
+    fn map_mut<F: FnMut(&mut [u8], usize) -> Result<()>>(
         &self,
         context: &ID3D11DeviceContext,
         f: F,
@@ -468,10 +468,10 @@ pub trait ID3D11Texture2DExt {
 }
 
 impl ID3D11Texture2DExt for ID3D11Texture2D {
-    fn map<F: FnOnce(&[u8], usize) -> Result<()>>(
+    fn map<F: FnMut(&[u8], usize) -> Result<()>>(
         &self,
         context: &ID3D11DeviceContext,
-        f: F,
+        mut f: F,
     ) -> Result<()> {
         unsafe {
             let mut desc = D3D11_TEXTURE2D_DESC::default();
@@ -510,10 +510,10 @@ impl ID3D11Texture2DExt for ID3D11Texture2D {
         Ok(())
     }
 
-    fn map_mut<F: Fn(&mut [u8], usize) -> Result<()>>(
+    fn map_mut<F: FnMut(&mut [u8], usize) -> Result<()>>(
         &self,
         context: &ID3D11DeviceContext,
-        f: F,
+        mut f: F,
     ) -> Result<()> {
         unsafe {
             let mut desc = D3D11_TEXTURE2D_DESC::default();
