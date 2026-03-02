@@ -3,6 +3,21 @@ name = "media"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["capture", "openh264-encoder", "openh264-decoder"]
+
+capture = []
+
+openh264-encoder = ["openh264"]
+openh264-decoder = ["openh264"]
+windows-encoder = []
+windows-decoder = []
+
+vaapi-encoder = []
+vaapi-decoder = []
+videotoolbox-encoder = []
+videotoolbox-decoder = []
+
 [dependencies]
 anyhow = { workspace = true }
 tokio = { workspace = true }
@@ -10,17 +25,41 @@ derive_more = { workspace = true }
 tracing = { workspace = true }
 scopeguard = { workspace = true }
 serde = { workspace = true }
-# openh264 = { path = "../openh264-rs/openh264" }
-openh264 = { version = "0.9" }
 parking_lot = { workspace = true }
-windows-core = { workspace = true }
+wgpu = "0.19"
+openh264 = { version = "0.9", optional = true }
 util = { path = "../util" }
 telemetry = { path = "../telemetry" }
 
-[dependencies.windows]
+[target.'cfg(windows)'.dependencies]
+windows-core = { workspace = true }
+
+[target.'cfg(windows)'.dependencies.windows]
 workspace = true
 features = [
+    "Win32_Foundation",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Ole",
     "Win32_System_Variant",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Direct3D_Fxc",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Gdi",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
 ]
+
+[target.'cfg(target_os = "linux")'.dependencies]
+pipewire = "0.8"
+ash = "0.38"
+zbus = "4.0"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5"
+objc2-foundation = "0.2"
+objc2-app-kit = "0.2"
+objc2-core-graphics = "0.3"
+objc2-core-video = "0.3"
+objc2-metal = "0.2"
+block2 = "0.5"
