@@ -7,6 +7,7 @@ pub mod traits;
 pub mod platform;
 pub mod gpu;
 pub mod lifecycle;
+pub mod pipeline;
 
 pub use types::{Timestamp, VideoFrame, PixelFormat, FrameSize, CpuBuffer, EncodedPacket};
 pub use traits::{Capture, VideoEncoder, VideoDecoder};
