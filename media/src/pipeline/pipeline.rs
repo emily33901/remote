@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use crate::{Encoding, RateControlMode};
-use crate::lifecycle::{run_stage, RunningStage};
+use crate::lifecycle::{run_stage, RunningStage, StageEvent};
 
 use super::types::*;
 
@@ -55,32 +55,15 @@ use super::windows::{
     DesktopDuplicationCapture, DesktopDuplicationConfig,
     DxvaConverter, DxvaConverterConfig,
     MediaFoundationEncoder, MediaFoundationEncoderConfig,
-    OpenH264Encoder, OpenH264EncoderConfig,
     MediaFoundationDecoder, MediaFoundationDecoderConfig,
-    OpenH264Decoder, OpenH264DecoderConfig,
     D3D11Presenter, D3D11PresenterConfig,
 };
 
 #[cfg(target_os = "windows")]
-pub type PlatformCapture = DesktopDuplicationCapture;
-
-#[cfg(target_os = "windows")]
-pub type PlatformConverter = DxvaConverter;
-
-#[cfg(target_os = "windows")]
-pub type PlatformEncoder = MediaFoundationEncoder;
-
-#[cfg(target_os = "windows")]
-pub type PlatformDecoder = MediaFoundationDecoder;
-
-#[cfg(target_os = "windows")]
-pub type PlatformPresenter = D3D11Presenter;
-
-#[cfg(target_os = "windows")]
 pub struct SendPipeline {
-    capture: RunningStage<PlatformCapture>,
-    converter: RunningStage<PlatformConverter>,
-    encoder: RunningStage<PlatformEncoder>,
+    capture: RunningStage<DesktopDuplicationCapture>,
+    converter: RunningStage<DxvaConverter>,
+    encoder: RunningStage<MediaFoundationEncoder>,
 }
 
 #[cfg(target_os = "windows")]
@@ -113,9 +96,9 @@ impl SendPipeline {
             rate_control: config.rate_control,
         });
 
-        let capture = run_stage(capture, 1).await?;
-        let converter = run_stage(converter, 1).await?;
-        let encoder = run_stage(encoder, 1).await?;
+        let capture = run_stage(capture, 2).await?;
+        let converter = run_stage(converter, 2).await?;
+        let encoder = run_stage(encoder, 2).await?;
 
         Ok(Self {
             capture,
@@ -138,23 +121,23 @@ impl SendPipeline {
         Ok(())
     }
 
-    pub fn capture(&self) -> &RunningStage<PlatformCapture> {
+    pub fn capture(&self) -> &RunningStage<DesktopDuplicationCapture> {
         &self.capture
     }
 
-    pub fn converter(&self) -> &RunningStage<PlatformConverter> {
+    pub fn converter(&self) -> &RunningStage<DxvaConverter> {
         &self.converter
     }
 
-    pub fn encoder(&self) -> &RunningStage<PlatformEncoder> {
+    pub fn encoder(&self) -> &RunningStage<MediaFoundationEncoder> {
         &self.encoder
     }
 }
 
 #[cfg(target_os = "windows")]
 pub struct RecvPipeline {
-    decoder: RunningStage<PlatformDecoder>,
-    presenter: RunningStage<PlatformPresenter>,
+    decoder: RunningStage<MediaFoundationDecoder>,
+    presenter: RunningStage<D3D11Presenter>,
 }
 
 #[cfg(target_os = "windows")]
@@ -180,8 +163,8 @@ impl RecvPipeline {
             title: config.title,
         });
 
-        let decoder = run_stage(decoder, 1).await?;
-        let presenter = run_stage(presenter, 1).await?;
+        let decoder = run_stage(decoder, 2).await?;
+        let presenter = run_stage(presenter, 2).await?;
 
         Ok(Self {
             decoder,
@@ -201,11 +184,11 @@ impl RecvPipeline {
         Ok(())
     }
 
-    pub fn decoder(&self) -> &RunningStage<PlatformDecoder> {
+    pub fn decoder(&self) -> &RunningStage<MediaFoundationDecoder> {
         &self.decoder
     }
 
-    pub fn presenter(&self) -> &RunningStage<PlatformPresenter> {
+    pub fn presenter(&self) -> &RunningStage<D3D11Presenter> {
         &self.presenter
     }
 }
