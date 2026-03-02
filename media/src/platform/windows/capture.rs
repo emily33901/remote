@@ -1,63 +1,76 @@
 use std::time::Duration;
 
 use anyhow::Result;
+use windows::{
+    core::Interface,
+    Win32::Graphics::Dxgi::{IDXGIAdapter, IDXGIDevice2, IDXGIOutput1, DXGI_OUTPUT_DESC},
+};
 
+use crate::dx;
 use crate::traits::Capture;
-use crate::types::{CaptureConfig, CapturedFrame, OutputInfo, VideoFrame};
+use crate::types::{CaptureConfig, CapturedFrame, OutputInfo};
 
-pub struct WindowsCapture {
-    width: u32,
-    height: u32,
-    running: bool,
-}
+pub struct WindowsCapture;
 
 impl WindowsCapture {
     pub fn new() -> Self {
-        Self {
-            width: 1920,
-            height: 1080,
-            running: false,
-        }
+        Self
     }
 }
 
 impl Capture for WindowsCapture {
     fn enumerate_outputs(&self) -> Result<Vec<OutputInfo>> {
-        Ok(vec![OutputInfo {
-            id: 0,
-            name: "Primary Display".to_string(),
-            width: 1920,
-            height: 1080,
-            is_primary: true,
-        }])
+        let (device, _) = dx::create_device()?;
+        let dxgi_device: IDXGIDevice2 = device.cast()?;
+        let parent: IDXGIAdapter = unsafe { dxgi_device.GetParent() }?;
+
+        let mut outputs = Vec::new();
+        let mut i = 0;
+
+        loop {
+            let output = match unsafe { parent.EnumOutputs(i) } {
+                Ok(o) => o,
+                Err(_) => break,
+            };
+
+            let output1: IDXGIOutput1 = output.cast()?;
+            let desc: DXGI_OUTPUT_DESC = unsafe { output1.GetDesc() }?;
+
+            let output_info = OutputInfo {
+                id: i,
+                name: String::from_utf16_lossy(&desc.DeviceName)
+                    .trim_end_matches('\0')
+                    .to_string(),
+                width: desc
+                    .DesktopCoordinates
+                    .right
+                    .abs_diff(desc.DesktopCoordinates.left),
+                height: desc
+                    .DesktopCoordinates
+                    .bottom
+                    .abs_diff(desc.DesktopCoordinates.top),
+                is_primary: i == 0,
+            };
+
+            outputs.push(output_info);
+            i += 1;
+        }
+
+        Ok(outputs)
     }
 
     fn start(&mut self, _config: CaptureConfig) -> Result<()> {
         tracing::info!("Starting Windows DXGI desktop duplication");
-
-        self.running = true;
-
-        todo!(
-            "Use existing desktop_duplication.rs implementation. \
-             Create DXGI Desktop Duplication context and start frame loop. \
-             Next step DX12 interop."
-        );
+        tracing::warn!("WindowsCapture::start() is not fully implemented yet");
+        Ok(())
     }
 
     fn stop(&mut self) -> Result<()> {
-        self.running = false;
         Ok(())
     }
 
     fn next_frame(&mut self, _timeout: Duration) -> Result<Option<CapturedFrame>> {
-        if !self.running {
-            return Ok(None);
-        }
-
-        todo!(
-            "Get next frame from DXGI Desktop Duplication. \
-             Convert ID3D11Texture2D to wgpu texture via DX12 interop."
-        );
+        Ok(None)
     }
 }
 
