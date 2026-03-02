@@ -1,5 +1,8 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use crate::{Encoding, RateControlMode};
+use crate::lifecycle::{run_stage, RunningStage};
 
 use super::types::*;
 
@@ -47,8 +50,40 @@ impl Default for RecvPipelineConfig {
     }
 }
 
-pub struct SendPipeline;
+#[cfg(target_os = "windows")]
+use super::windows::{
+    DesktopDuplicationCapture, DesktopDuplicationConfig,
+    DxvaConverter, DxvaConverterConfig,
+    MediaFoundationEncoder, MediaFoundationEncoderConfig,
+    OpenH264Encoder, OpenH264EncoderConfig,
+    MediaFoundationDecoder, MediaFoundationDecoderConfig,
+    OpenH264Decoder, OpenH264DecoderConfig,
+    D3D11Presenter, D3D11PresenterConfig,
+};
 
+#[cfg(target_os = "windows")]
+pub type PlatformCapture = DesktopDuplicationCapture;
+
+#[cfg(target_os = "windows")]
+pub type PlatformConverter = DxvaConverter;
+
+#[cfg(target_os = "windows")]
+pub type PlatformEncoder = MediaFoundationEncoder;
+
+#[cfg(target_os = "windows")]
+pub type PlatformDecoder = MediaFoundationDecoder;
+
+#[cfg(target_os = "windows")]
+pub type PlatformPresenter = D3D11Presenter;
+
+#[cfg(target_os = "windows")]
+pub struct SendPipeline {
+    capture: RunningStage<PlatformCapture>,
+    converter: RunningStage<PlatformConverter>,
+    encoder: RunningStage<PlatformEncoder>,
+}
+
+#[cfg(target_os = "windows")]
 impl SendPipeline {
     pub async fn new(config: SendPipelineConfig) -> Result<Self> {
         tracing::info!(
@@ -58,7 +93,130 @@ impl SendPipeline {
             encoding = ?config.encoding,
             "Creating send pipeline"
         );
-        Ok(Self)
+
+        let capture = DesktopDuplicationCapture::new(DesktopDuplicationConfig {
+            output_index: config.output_index,
+        });
+
+        let converter = DxvaConverter::new(DxvaConverterConfig {
+            input_format: PixelFormat::BGRA,
+            output_format: PixelFormat::NV12,
+            output_width: config.width,
+            output_height: config.height,
+        });
+
+        let encoder = MediaFoundationEncoder::new(MediaFoundationEncoderConfig {
+            width: config.width,
+            height: config.height,
+            frame_rate: config.frame_rate,
+            encoding: config.encoding,
+            rate_control: config.rate_control,
+        });
+
+        let capture = run_stage(capture, 1).await?;
+        let converter = run_stage(converter, 1).await?;
+        let encoder = run_stage(encoder, 1).await?;
+
+        Ok(Self {
+            capture,
+            converter,
+            encoder,
+        })
+    }
+
+    pub async fn start(&self) -> Result<()> {
+        self.capture.send_start().await?;
+        self.converter.send_start().await?;
+        self.encoder.send_start().await?;
+        Ok(())
+    }
+
+    pub async fn stop(&self) -> Result<()> {
+        self.encoder.send_stop().await?;
+        self.converter.send_stop().await?;
+        self.capture.send_stop().await?;
+        Ok(())
+    }
+
+    pub fn capture(&self) -> &RunningStage<PlatformCapture> {
+        &self.capture
+    }
+
+    pub fn converter(&self) -> &RunningStage<PlatformConverter> {
+        &self.converter
+    }
+
+    pub fn encoder(&self) -> &RunningStage<PlatformEncoder> {
+        &self.encoder
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub struct RecvPipeline {
+    decoder: RunningStage<PlatformDecoder>,
+    presenter: RunningStage<PlatformPresenter>,
+}
+
+#[cfg(target_os = "windows")]
+impl RecvPipeline {
+    pub async fn new(config: RecvPipelineConfig) -> Result<Self> {
+        tracing::info!(
+            width = config.width,
+            height = config.height,
+            encoding = ?config.encoding,
+            title = %config.title,
+            "Creating receive pipeline"
+        );
+
+        let decoder = MediaFoundationDecoder::new(MediaFoundationDecoderConfig {
+            width: config.width,
+            height: config.height,
+            encoding: config.encoding,
+        });
+
+        let presenter = D3D11Presenter::new(D3D11PresenterConfig {
+            width: config.width,
+            height: config.height,
+            title: config.title,
+        });
+
+        let decoder = run_stage(decoder, 1).await?;
+        let presenter = run_stage(presenter, 1).await?;
+
+        Ok(Self {
+            decoder,
+            presenter,
+        })
+    }
+
+    pub async fn start(&self) -> Result<()> {
+        self.decoder.send_start().await?;
+        self.presenter.send_start().await?;
+        Ok(())
+    }
+
+    pub async fn stop(&self) -> Result<()> {
+        self.presenter.send_stop().await?;
+        self.decoder.send_stop().await?;
+        Ok(())
+    }
+
+    pub fn decoder(&self) -> &RunningStage<PlatformDecoder> {
+        &self.decoder
+    }
+
+    pub fn presenter(&self) -> &RunningStage<PlatformPresenter> {
+        &self.presenter
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+pub struct SendPipeline;
+
+#[cfg(not(target_os = "windows"))]
+impl SendPipeline {
+    pub async fn new(_config: SendPipelineConfig) -> Result<Self> {
+        anyhow::bail!("Send pipeline not implemented for this platform")
     }
 
     pub async fn start(&self) -> Result<()> {
@@ -70,18 +228,13 @@ impl SendPipeline {
     }
 }
 
+#[cfg(not(target_os = "windows"))]
 pub struct RecvPipeline;
 
+#[cfg(not(target_os = "windows"))]
 impl RecvPipeline {
-    pub async fn new(config: RecvPipelineConfig) -> Result<Self> {
-        tracing::info!(
-            width = config.width,
-            height = config.height,
-            encoding = ?config.encoding,
-            title = %config.title,
-            "Creating receive pipeline"
-        );
-        Ok(Self)
+    pub async fn new(_config: RecvPipelineConfig) -> Result<Self> {
+        anyhow::bail!("Receive pipeline not implemented for this platform")
     }
 
     pub async fn start(&self) -> Result<()> {

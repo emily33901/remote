@@ -33,7 +33,7 @@ mod statistics;
 mod texture_pool;
 mod yuv_buffer;
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Encoding {
     H264,
     H265,
@@ -41,7 +41,7 @@ pub enum Encoding {
     VP9,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RateControlMode {
     Bitrate(u32),
     Quality(u32),
