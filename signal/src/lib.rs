@@ -169,32 +169,28 @@ async fn handle_incoming_message_inner(
                         let peers = a_peers;
                         if let Ok(_) = accept_rx.await {
                             let peers = peers.lock().await;
-                            let requester = peers.get(&our_peer_id);
-                            let requestee = peers.get(&peer_id);
+                            let Some(requester) = peers.get(&our_peer_id) else {
+                                tracing::debug!("while accepting connection, requester disappeared {our_peer_id}");
+                                return;
+                            };
+                            let Some(_requestee) = peers.get(&peer_id) else {
+                                tracing::debug!("while accepting connection, requestee disappeared {peer_id}");
+                                return;
+                            };
 
-                            if requester.is_none() || requestee.is_none() {
-                                tracing::debug!("while accepting connection, peer disapeared {our_peer_id} {peer_id}");
-                            } else {
-                                tracing::debug!("accepting connection {connection_id} {peer_id}");
-                                requester
-                                    .unwrap()
-                                    .send(ServerToPeerMessage {
-                                        job_id: 0,
-                                        inner: ServerToPeer::ConnectionAccepted(
-                                            peer_id,
-                                            connection_id,
-                                        ),
-                                    })
-                                    .await
-                                    .unwrap();
-                                // requestee
-                                //     .unwrap()
-                                //     .send(ServerToPeerMessage {
-                                //         job_id: 0,
-                                //         inner: ServerToPeer::ConnectionAccepted(peer_id, connection_id),
-                                //     })
-                                //     .await
-                                //     .unwrap();
+                            tracing::debug!("accepting connection {connection_id} {peer_id}");
+                            if requester
+                                .send(ServerToPeerMessage {
+                                    job_id: 0,
+                                    inner: ServerToPeer::ConnectionAccepted(
+                                        peer_id.clone(),
+                                        connection_id,
+                                    ),
+                                })
+                                .await
+                                .is_err()
+                            {
+                                tracing::debug!("failed to send connection accepted to requester {our_peer_id}");
                             }
                         }
                     }
@@ -245,12 +241,15 @@ async fn handle_incoming_message_inner(
                 return Ok(());
             }
 
-            let connection_request = connection_requests.remove(&connection_id).unwrap();
+            let Some(connection_request) = connection_requests.remove(&connection_id) else {
+                tracing::debug!("connection request already removed");
+                return Ok(());
+            };
 
-            Ok(connection_request
-                .accept
-                .send(())
-                .map_err(|err| SignallingError::InternalError)?)
+            if connection_request.accept.send(()).is_err() {
+                tracing::debug!("failed to accept connection - receiver dropped");
+            }
+            Ok(())
         }
     }
 }
@@ -261,7 +260,13 @@ async fn handle_incoming_text_message(
     peers: PeerMap,
     msg: Utf8Bytes,
 ) -> core::result::Result<(), Option<ServerToPeerMessage>> {
-    let message = serde_json::from_str::<PeerToServerMessage>(msg.as_str()).unwrap();
+    let message = match serde_json::from_str::<PeerToServerMessage>(msg.as_str()) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::debug!("failed to parse message: {e}");
+            return Err(None);
+        }
+    };
     let job_id = message.job_id;
     Ok(
         handle_incoming_message_inner(our_peer_id, connection_requests, peers, message)
@@ -285,15 +290,25 @@ async fn handle_incoming_message(
             handle_incoming_text_message(our_peer_id, connection_requests, peers, text_message)
                 .await
         }
-        Binary(_) | Frame(_) => panic!("No idea what to do with binary"),
+        Binary(_) | Frame(_) => {
+            tracing::warn!("received unexpected binary/frame message");
+            Err(None)
+        }
         Close(_) => {
             println!("{} i close", our_peer_id);
             Err(None)
         }
-        Ping(data) => Ok(outgoing
-            .send(tokio_tungstenite::tungstenite::Message::Pong(data))
-            .await
-            .unwrap()),
+        Ping(data) => {
+            if outgoing
+                .send(tokio_tungstenite::tungstenite::Message::Pong(data))
+                .await
+                .is_err()
+            {
+                tracing::debug!("failed to send pong");
+                return Err(None);
+            }
+            Ok(())
+        }
         Pong(_data) => Ok(()),
     }
 }
@@ -331,12 +346,16 @@ pub async fn server(address: &str) -> Result<()> {
 
             peers.lock().await.insert(peer_id.clone(), tx.clone());
 
-            tx.send(ServerToPeerMessage {
+            if tx.send(ServerToPeerMessage {
                 job_id: 0,
                 inner: ServerToPeer::Id(peer_id.clone()),
             })
             .await
-            .unwrap();
+            .is_err()
+            {
+                tracing::debug!("failed to send peer id");
+                return anyhow::Ok(());
+            }
 
             let mut ticker = tokio::time::interval(std::time::Duration::from_secs(30));
 
@@ -380,7 +399,10 @@ pub async fn server(address: &str) -> Result<()> {
                         }
                     }
                     _ = ticker.tick().fuse() => {
-                        outgoing.send(Ping(Bytes::from_static(b"ping"))).await.unwrap();
+                        if outgoing.send(Ping(Bytes::from_static(b"ping"))).await.is_err() {
+                            tracing::debug!("failed to send ping");
+                            break;
+                        }
                     }
                 }
             }
@@ -512,7 +534,7 @@ pub async fn client(
     tracing::info!("starting signal client");
     let (ws_stream, _) = tokio_tungstenite::connect_async(address)
         .await
-        .expect("Error during the websocket handshake occurred");
+        .map_err(|e| anyhow!("Error during the websocket handshake occurred: {e}"))?;
 
     let (mut write, mut read) = ws_stream.split();
 
