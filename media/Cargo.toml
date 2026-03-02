@@ -26,6 +26,8 @@ tracing = { workspace = true }
 scopeguard = { workspace = true }
 serde = { workspace = true }
 parking_lot = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
 wgpu = "0.19"
 openh264 = { version = "0.9", optional = true }
 util = { path = "../util" }
