@@ -35,7 +35,11 @@ async fn main() {
         .from_env()
         .expect("Failed to create filter")
         .add_directive("webrtc_sctp::association=info".parse().unwrap())
-        .add_directive("webrtc_sctp::association::association_internal=info".parse().unwrap())
+        .add_directive(
+            "webrtc_sctp::association::association_internal=info"
+                .parse()
+                .unwrap(),
+        )
         .add_directive("webrtc_sctp::stream=info".parse().unwrap());
 
     tracing_subscriber::registry()
