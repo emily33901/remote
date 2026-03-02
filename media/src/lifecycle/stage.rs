@@ -363,6 +363,10 @@ impl<S: Stage + 'static> RunningStage<S> {
         self.control_tx.clone()
     }
 
+    pub fn state_arc(&self) -> Arc<AtomicLifecycleState> {
+        self.state.clone()
+    }
+
     pub async fn next_event(&mut self) -> Option<StageEvent<S::Output>> {
         self.event_rx.recv().await
     }
@@ -404,6 +408,73 @@ impl<S: Stage + 'static> RunningStage<S> {
     pub async fn send_reset(&self) -> Result<()> {
         self.control_tx.send(StageControl::Reset).await?;
         Ok(())
+    }
+
+    pub fn split(self) -> (StageControlHandle<S::Input>, StageEventStream<S::Output>, Arc<AtomicLifecycleState>) {
+        (
+            StageControlHandle { control_tx: self.control_tx },
+            StageEventStream { event_rx: self.event_rx },
+            self.state,
+        )
+    }
+}
+
+pub struct StageControlHandle<Input: Send + Sync + 'static> {
+    control_tx: mpsc::Sender<StageControl<Input>>,
+}
+
+impl<Input: Send + Sync + 'static> StageControlHandle<Input> {
+    pub async fn send_input(&self, input: Input) -> Result<()> {
+        self.control_tx.send(StageControl::Input(input)).await?;
+        Ok(())
+    }
+
+    pub async fn send_start(&self) -> Result<()> {
+        self.control_tx.send(StageControl::Start).await?;
+        Ok(())
+    }
+
+    pub async fn send_stop(&self) -> Result<()> {
+        self.control_tx.send(StageControl::Stop).await?;
+        Ok(())
+    }
+
+    pub async fn send_pause(&self) -> Result<()> {
+        self.control_tx.send(StageControl::Pause).await?;
+        Ok(())
+    }
+
+    pub async fn send_resume(&self) -> Result<()> {
+        self.control_tx.send(StageControl::Resume).await?;
+        Ok(())
+    }
+
+    pub async fn send_flush(&self) -> Result<()> {
+        self.control_tx.send(StageControl::Flush).await?;
+        Ok(())
+    }
+
+    pub async fn send_reset(&self) -> Result<()> {
+        self.control_tx.send(StageControl::Reset).await?;
+        Ok(())
+    }
+}
+
+impl<Input: Send + Sync + 'static> Clone for StageControlHandle<Input> {
+    fn clone(&self) -> Self {
+        Self {
+            control_tx: self.control_tx.clone(),
+        }
+    }
+}
+
+pub struct StageEventStream<Output: Send + Sync + 'static> {
+    event_rx: mpsc::Receiver<StageEvent<Output>>,
+}
+
+impl<Output: Send + Sync + 'static> StageEventStream<Output> {
+    pub async fn next(&mut self) -> Option<StageEvent<Output>> {
+        self.event_rx.recv().await
     }
 }
 
