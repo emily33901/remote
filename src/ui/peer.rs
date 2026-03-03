@@ -11,11 +11,9 @@ use tokio::sync::{mpsc, oneshot, Mutex, MutexGuard};
 use crate::config::Config;
 use crate::logic::{Mode, PeerStreamRequest, PeerStreamRequestResponse};
 use crate::peer::{PeerControl, PeerError, PeerEvent};
-use crate::player::opengl_video::OpenGLVideoRenderer;
-use openh264::{decoder::Decoder, decoder::DecoderConfig, formats::YUVSource, OpenH264API};
 
 use media::{
-    Encoding, EncodingOptions, H264EncodingOptions, Statistics, Texture, Timestamp, VideoBuffer,
+    Encoding, EncodingOptions, H264EncodingOptions, Statistics, Timestamp, VideoBuffer,
 };
 
 use signal::{ConnectionId, PeerId, SignallingControl, SignallingEvent};
@@ -747,7 +745,6 @@ pub struct PeerMediaState {
     start_time: Instant,
     start_timestamp: Timestamp,
     time: Timestamp,
-    texture: Arc<Texture>,
     statistics: Statistics,
 }
 
@@ -798,10 +795,6 @@ pub struct PeerWindowState {
     pub connection_requests: HashMap<ConnectionId, PeerId>,
     pub connected_peers: HashMap<PeerId, ConnectedPeer>,
     pub stream_request: PeerStreamRequest,
-    pub stream_texture_renderer: Arc<std::sync::OnceLock<OpenGLVideoRenderer>>,
-    pub video_decoder: Arc<std::sync::Mutex<Option<VideoDecoder>>>,
-    pub sink: std::sync::OnceLock<mpsc::Sender<(Arc<media::Texture>, Timestamp)>>,
-    pub d3d11_sender: Option<mpsc::Sender<VideoBuffer>>,
 }
 
 pub enum ShouldRemove {
@@ -1182,8 +1175,6 @@ impl PeerWindowState {
         ui.end_row();
 
         let stream_request = &mut self.stream_request;
-        let video_decoder = self.video_decoder.clone();
-        let stream_texture_renderer = self.stream_texture_renderer.clone();
 
         for (their_peer_id, connected_peer) in &mut self.connected_peers {
             ui.group(|ui| {
@@ -1205,7 +1196,7 @@ impl PeerWindowState {
                         &format!("Remote - {}", their_peer_id),
                     ) {
                         Ok(sender) => {
-                            self.d3d11_sender = Some(sender);
+                            connected_peer.d3d11_sender = Some(sender);
                             tracing::info!("D3D11 window created");
                         }
                         Err(e) => {
@@ -1236,15 +1227,6 @@ impl PeerWindowState {
                         );
 
                         Self::draw_frame_timelines(ui, &connected_peer.frame_timelines);
-
-                        Self::render_video_texture(
-                            ctx,
-                            ui,
-                            connected_peer,
-                            &config,
-                            &video_decoder,
-                            &stream_texture_renderer,
-                        );
                     }
                 }
             });
@@ -1283,12 +1265,11 @@ impl PeerWindowState {
 
         loop {
             match decoder_receiver.try_recv() {
-                Ok(media::decoder::DecoderEvent::Frame(new_texture, time, statistics)) => {
+                Ok(media::decoder::DecoderEvent::Frame(_new_texture, time, statistics)) => {
                     media = MediaResult::Texture(PeerMediaState {
                         start_time: Instant::now(),
                         start_timestamp: time.clone(),
                         time,
-                        texture: Arc::new(new_texture),
                         statistics,
                     });
                 }
@@ -1388,72 +1369,6 @@ impl PeerWindowState {
         }
     }
 
-    fn render_video_texture(
-        ctx: &egui::Context,
-        ui: &mut egui::Ui,
-        connected_peer: &ConnectedPeer,
-        config: &Config,
-        video_decoder: &Arc<std::sync::Mutex<Option<VideoDecoder>>>,
-        stream_texture_renderer: &Arc<std::sync::OnceLock<OpenGLVideoRenderer>>,
-    ) {
-        let aspect: f32 = config.height as f32 / config.width as f32;
-        let desired_size = ui.available_width() * egui::vec2(1.0, aspect);
-        let (_id, rect) = ui.allocate_space(desired_size);
-
-        let pixels_per_point = ctx.pixels_per_point();
-        let h264_data = connected_peer.latest_h264_data.lock().unwrap().clone();
-        let video_decoder = video_decoder.clone();
-        let stream_renderer = stream_texture_renderer.clone();
-
-        ctx.request_repaint();
-
-        let callback = egui_glow::CallbackFn::new(move |info, painter| {
-            let gl = painter.gl();
-            let Some(ref h264_data) = h264_data else {
-                tracing::debug!("No H264 data available");
-                return;
-            };
-
-            let result = {
-                let mut guard = video_decoder.lock().unwrap();
-                if guard.is_none() {
-                    tracing::debug!("Creating new VideoDecoder");
-                    *guard = Some(VideoDecoder::new().unwrap());
-                }
-                guard.as_mut().unwrap().decode(h264_data)
-            };
-
-            match result {
-                Ok((width, height, y_data, u_data, v_data)) => {
-                    let renderer = stream_renderer
-                        .get_or_init(|| OpenGLVideoRenderer::new(gl.clone()).unwrap());
-
-                    renderer.upload_frame(width, height, &y_data, &u_data, &v_data);
-
-                    let vp = info.viewport;
-                    let x = vp.min.x * pixels_per_point;
-                    let y = vp.min.y * pixels_per_point;
-                    let w = (vp.max.x - vp.min.x) * pixels_per_point;
-                    let h = (vp.max.y - vp.min.y) * pixels_per_point;
-
-                    renderer.render(
-                        [x, y, w, h],
-                        info.screen_size_px[1] as f32 * pixels_per_point,
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!("Decode failed: {}", e);
-                }
-            }
-        });
-
-        let cb = egui::PaintCallback {
-            rect,
-            callback: std::sync::Arc::new(callback),
-        };
-        ui.painter().add(cb);
-    }
-
     fn handle_stream_requests(
         ui: &mut egui::Ui,
         connected_peers: &mut HashMap<PeerId, ConnectedPeer>,
@@ -1472,7 +1387,8 @@ impl PeerWindowState {
 
                 if ui.button("accept").clicked() {
                     let config = Config::load();
-                    stream_request_clicked = Some((i, Self::create_accept_response(request, &config)));
+                    stream_request_clicked =
+                        Some((i, Self::create_accept_response(request, &config)));
                 }
                 ui.end_row();
             }
@@ -1563,67 +1479,5 @@ impl std::fmt::Debug for PeerWindowState {
             .field("connection_requests", &self.connection_requests)
             .field("connected_peers", &self.connected_peers)
             .finish()
-    }
-}
-
-struct VideoDecoder {
-    decoder: Decoder,
-    width: u32,
-    height: u32,
-}
-
-impl VideoDecoder {
-    fn new() -> Result<Self> {
-        let config = DecoderConfig::new();
-        let api = OpenH264API::from_source();
-        let decoder = Decoder::with_api_config(api, config)?;
-        Ok(Self {
-            decoder,
-            width: 0,
-            height: 0,
-        })
-    }
-
-    fn decode(&mut self, data: &[u8]) -> Result<(u32, u32, Vec<u8>, Vec<u8>, Vec<u8>)> {
-        use openh264::nal_units;
-
-        let nals: Vec<_> = nal_units(data).collect();
-
-        let mut width = 0;
-        let mut height = 0;
-        let mut y_data = Vec::new();
-        let mut u_data = Vec::new();
-        let mut v_data = Vec::new();
-
-        for (i, nal) in nals.into_iter().enumerate() {
-            match self.decoder.decode(nal) {
-                Ok(Some(output)) => {
-                    let (w, h) = output.dimensions();
-                    width = w as u32;
-                    height = h as u32;
-
-                    y_data = output.y().to_vec();
-                    u_data = output.u().to_vec();
-                    v_data = output.v().to_vec();
-                    break;
-                }
-                Ok(None) => {
-                    // No frame from this NAL yet, try next
-                }
-                Err(e) => {
-                    // Just skip errors - decoder handles SPS/PPS internally
-                    tracing::debug!("Decode error on NAL {} (ignored): {}", i, e);
-                }
-            }
-        }
-
-        if y_data.is_empty() {
-            // No frame decoded - this is normal for SPS/PPS only packets
-            return Err(anyhow::anyhow!("No frame decoded"));
-        }
-
-        tracing::debug!("Successfully decoded frame {}x{}", width, height);
-
-        Ok((width, height, y_data, u_data, v_data))
     }
 }
