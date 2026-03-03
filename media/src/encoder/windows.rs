@@ -274,7 +274,7 @@ unsafe fn hardware(
 
     // NOTE(emily): In order to appease the encoder, we need to provide it with a constant stream of tetxures
     // whenever it asks for one. So keep the last control around so that we can use it again if needed.
-    let mut last_control: Option<EncoderControl> = None;
+    let _last_control: Option<EncoderControl> = None;
 
     loop {
         let event = event_gen.GetEvent(MEDIA_EVENT_GENERATOR_GET_EVENT_FLAGS(0))?;
@@ -429,7 +429,7 @@ unsafe fn software(
     transform.ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0)?;
 
     loop {
-        let EncoderControl::Frame(frame, time, statistics) = control_rx
+        let EncoderControl::Frame(frame, time, _statistics) = control_rx
             .blocking_recv()
             .ok_or(anyhow::anyhow!("encoder control closed"))?;
 

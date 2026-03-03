@@ -21,7 +21,7 @@ use windows::{
 };
 
 use crate::lifecycle::{Stage, StageMeta, AtomicLifecycleState, LifecycleState};
-use crate::texture_pool::{Texture, TexturePool};
+use crate::texture_pool::TexturePool;
 use crate::Timestamp;
 use crate::dx;
 

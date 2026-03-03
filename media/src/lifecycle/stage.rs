@@ -491,7 +491,7 @@ pub async fn run_stage<S: Stage + 'static>(
     let state = Arc::new(AtomicLifecycleState::new(LifecycleState::Created));
     
     let stage_clone = stage.clone();
-    let state_clone = state.clone();
+    let _state_clone = state.clone();
     let event_tx_clone = event_tx.clone();
     
     tokio::spawn(async move {

@@ -1,9 +1,7 @@
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use anyhow::Result;
-use parking_lot::Mutex;
 
 use crate::lifecycle::stage::{Stage, StageMeta};
 use crate::lifecycle::state::AtomicLifecycleState;

@@ -21,7 +21,7 @@ use windows::{
 };
 
 use crate::lifecycle::{Stage, StageMeta, AtomicLifecycleState, LifecycleState};
-use crate::texture_pool::{Texture, TexturePool};
+use crate::texture_pool::TexturePool;
 use crate::dx::{self, ID3D11Texture2DExt};
 
 use crate::pipeline::traits::Converter;

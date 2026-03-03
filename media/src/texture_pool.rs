@@ -34,7 +34,7 @@ impl _TexturePool {
     fn new<F: Fn() -> ID3D11Texture2D>(make_texture: F, count: usize) -> Self {
         let mut pool = VecDeque::new();
 
-        for i in 0..count {
+        for _i in 0..count {
             pool.push_back(make_texture());
         }
 

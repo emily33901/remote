@@ -1,8 +1,7 @@
-use std::sync::Arc;
 
 use anyhow::Result;
 use crate::{Encoding, RateControlMode};
-use crate::lifecycle::{run_stage, RunningStage, StageEvent};
+use crate::lifecycle::{run_stage, RunningStage};
 
 use super::types::*;
 
@@ -33,19 +32,19 @@ impl Default for SendPipelineConfig {
 
 #[derive(Debug, Clone)]
 pub struct RecvPipelineConfig {
+    pub hwnd: isize,
     pub width: u32,
     pub height: u32,
     pub encoding: Encoding,
-    pub title: String,
 }
 
 impl Default for RecvPipelineConfig {
     fn default() -> Self {
         Self {
+            hwnd: 0,
             width: 1920,
             height: 1080,
             encoding: Encoding::H264,
-            title: "Remote Display".to_string(),
         }
     }
 }
@@ -147,7 +146,6 @@ impl RecvPipeline {
             width = config.width,
             height = config.height,
             encoding = ?config.encoding,
-            title = %config.title,
             "Creating receive pipeline"
         );
 
@@ -158,9 +156,9 @@ impl RecvPipeline {
         });
 
         let presenter = D3D11Presenter::new(D3D11PresenterConfig {
+            hwnd: config.hwnd,
             width: config.width,
             height: config.height,
-            title: config.title,
         });
 
         let decoder = run_stage(decoder, 2).await?;

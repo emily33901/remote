@@ -78,7 +78,7 @@ impl Encoder {
         }
     }
 
-    pub fn supports_encoding_options(&self, options: &EncodingOptions) -> SupportsEncodingOptions {
+    pub fn supports_encoding_options(&self, _options: &EncodingOptions) -> SupportsEncodingOptions {
         SupportsEncodingOptions::Yes
     }
 }

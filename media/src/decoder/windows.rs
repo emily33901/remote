@@ -31,7 +31,7 @@ pub async fn h264_decoder(
     width: u32,
     height: u32,
     target_framerate: u32,
-    target_bitrate: u32,
+    _target_bitrate: u32,
 ) -> Result<(mpsc::Sender<DecoderControl>, mpsc::Receiver<DecoderEvent>)> {
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
     let (control_tx, control_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
@@ -198,7 +198,7 @@ unsafe fn hardware(
         10,
     );
 
-    let mut media_queue = RefCell::new(MediaQueue::new());
+    let media_queue = RefCell::new(MediaQueue::new());
 
     loop {
         let DecoderControl::Data(VideoBuffer {
@@ -247,7 +247,7 @@ unsafe fn hardware(
 
                 let mut status = 0_u32;
                 match transform.ProcessOutput(0, &mut output_buffers, &mut status) {
-                    Ok(ok) => {
+                    Ok(_ok) => {
                         let output_texture = texture_pool.acquire();
 
                         let sample = output_buffers[0].pSample.take().unwrap();

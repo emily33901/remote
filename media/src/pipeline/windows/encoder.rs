@@ -5,8 +5,7 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 
 use crate::lifecycle::{Stage, StageMeta, AtomicLifecycleState, LifecycleState};
-use crate::{Encoding, RateControlMode, encoder, Statistics, Timestamp};
-use crate::texture_pool::Texture;
+use crate::{Encoding, RateControlMode, encoder};
 
 use crate::pipeline::traits::Encoder;
 use crate::pipeline::types::{EncodeFrame, EncodedData};
@@ -255,4 +254,3 @@ impl Encoder for OpenH264Encoder {
     }
 }
 
-use crate::{H264EncodingOptions, EncodingOptions};

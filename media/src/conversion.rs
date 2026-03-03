@@ -81,7 +81,7 @@ pub(crate) async fn converter(
 
     tokio::task::spawn_blocking(move || {
         unsafe {
-            let span_guard = span.enter();
+            let _span_guard = span.enter();
 
             tracing::debug!("starting");
 
@@ -324,7 +324,7 @@ pub(crate) async fn converter(
                                         time: start_time.elapsed(),
                                     },
                                 )) {
-                                    Err(err) => {
+                                    Err(_err) => {
                                         tracing::debug!("Failed to send convert event, done");
                                         break;
                                     }

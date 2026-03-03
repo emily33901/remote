@@ -129,7 +129,7 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
             // https://learn.microsoft.com/en-us/windows/win32/api/dxgi1_2/nf-dxgi1_2-idxgioutput1-duplicateoutput#return-value
             let duplicated = unsafe { primary.DuplicateOutput(&device) }?;
 
-            let mut desc = DXGI_OUTDUPL_DESC::default();
+            let _desc = DXGI_OUTDUPL_DESC::default();
             let desc = unsafe { duplicated.GetDesc() };
 
             tracing::debug!(?desc);
@@ -186,10 +186,10 @@ pub(crate) fn desktop_duplication() -> Result<(mpsc::Sender<DDControl>, mpsc::Re
             };
 
             let DesktopDuplicationContext {
-                device,
+                device: _,
                 duplicated,
-                height,
-                width,
+                height: _,
+                width: _,
                 texture_pool,
             } = context;
 
