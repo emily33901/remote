@@ -6,6 +6,7 @@ mod input;
 mod logic;
 mod peer;
 mod player;
+mod presenter;
 mod ui;
 mod video;
 mod windows;

@@ -763,6 +763,7 @@ pub struct ConnectedPeer {
     pub statistics_average: VecDeque<Statistics>,
     pub frame_timelines: VecDeque<FrameTimeline>,
     pub latest_h264_data: std::sync::Mutex<Option<Vec<u8>>>,
+    pub d3d11_sender: Option<mpsc::Sender<VideoBuffer>>,
 }
 
 #[derive(Clone, Debug)]
@@ -785,6 +786,7 @@ impl ConnectedPeer {
             statistics_average: VecDeque::new(),
             frame_timelines: VecDeque::new(),
             latest_h264_data: std::sync::Mutex::new(None),
+            d3d11_sender: None,
         }
     }
 }
@@ -799,6 +801,7 @@ pub struct PeerWindowState {
     pub stream_texture_renderer: Arc<std::sync::OnceLock<OpenGLVideoRenderer>>,
     pub video_decoder: Arc<std::sync::Mutex<Option<VideoDecoder>>>,
     pub sink: std::sync::OnceLock<mpsc::Sender<(Arc<media::Texture>, Timestamp)>>,
+    pub d3d11_sender: Option<mpsc::Sender<VideoBuffer>>,
 }
 
 pub enum ShouldRemove {
@@ -1193,6 +1196,23 @@ impl PeerWindowState {
                 let Some(decoder_receiver) = &mut connected_peer.decoder_receiver else {
                     return;
                 };
+
+                if ui.button("Open D3D11 Window").clicked() {
+                    let config = Config::load();
+                    match crate::presenter::create_d3d11_window(
+                        config.width,
+                        config.height,
+                        &format!("Remote - {}", their_peer_id),
+                    ) {
+                        Ok(sender) => {
+                            self.d3d11_sender = Some(sender);
+                            tracing::info!("D3D11 window created");
+                        }
+                        Err(e) => {
+                            tracing::error!("Failed to create D3D11 window: {}", e);
+                        }
+                    }
+                }
 
                 let media = Self::poll_decoder_events(
                     decoder_receiver,
