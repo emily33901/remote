@@ -192,23 +192,6 @@ impl App {
                                 if let Ok(mut guard) = connected_peer.latest_h264_data.lock() {
                                     *guard = Some(data.clone());
                                 }
-                                if let Some(sender) = &connected_peer.d3d11_sender {
-                                    let buffer = media::VideoBuffer {
-                                        data,
-                                        sequence_header: None,
-                                        time: media::Timestamp::new_millis(
-                                            std::time::SystemTime::now()
-                                                .duration_since(std::time::UNIX_EPOCH)
-                                                .unwrap()
-                                                .as_millis()
-                                                as u64,
-                                        ),
-                                        duration: std::time::Duration::from_millis(16),
-                                        key_frame: media::encoder::FrameIsKeyframe::No,
-                                        statistics: media::Statistics::default(),
-                                    };
-                                    let _ = sender.try_send(buffer);
-                                }
                             }
                         }
                     }

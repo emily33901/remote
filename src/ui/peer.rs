@@ -22,10 +22,18 @@ use super::app::AppEvent;
 use super::color;
 use tracing::Instrument;
 
+const ARBITRARY_CHANNEL_LIMIT: usize = 10;
+
+enum VideoSinkControl {
+    SetSink(mpsc::Sender<VideoBuffer>),
+    ClearSink,
+}
+
 pub struct RemotePeer {
     peer_id: PeerId,
     control: mpsc::Sender<PeerControl>,
     media_control: Arc<Mutex<Option<mpsc::Sender<media::produce::MediaControl>>>>,
+    video_sink_control: mpsc::Sender<VideoSinkControl>,
 }
 
 impl std::fmt::Debug for RemotePeer {
@@ -59,6 +67,9 @@ impl RemotePeer {
         let media_control: Arc<Mutex<Option<mpsc::Sender<media::produce::MediaControl>>>> =
             Default::default();
 
+        let (video_sink_control_tx, video_sink_control_rx) =
+            mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
+
         tokio::spawn({
             let our_peer_id = our_peer_id.clone();
             let their_peer_id = their_peer_id.clone();
@@ -72,6 +83,7 @@ impl RemotePeer {
                 app_event_tx,
                 our_peer_id,
                 their_peer_id,
+                video_sink_control_rx,
             )
             .in_current_span()
         });
@@ -80,10 +92,11 @@ impl RemotePeer {
             peer_id: their_peer_id.clone(),
             media_control,
             control,
+            video_sink_control: video_sink_control_tx,
         })
     }
 
-    #[tracing::instrument(skip(event, peer_control, media_control, app_event_tx))]
+ #[tracing::instrument(skip(event, peer_control, media_control, app_event_tx, video_sink_control_rx))]
     async fn peer_event(
         mut event: mpsc::Receiver<PeerEvent>,
         peer_control: mpsc::WeakSender<PeerControl>,
@@ -91,6 +104,7 @@ impl RemotePeer {
         app_event_tx: mpsc::Sender<AppEvent>,
         our_peer_id: PeerId,
         their_peer_id: PeerId,
+        mut video_sink_control_rx: mpsc::Receiver<VideoSinkControl>,
     ) -> Result<()> {
         let config = Config::load();
         let mut decoder_control: Option<mpsc::Sender<media::decoder::DecoderControl>> = None;

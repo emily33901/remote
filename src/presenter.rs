@@ -15,29 +15,31 @@ use windows::Win32::{
 use media::pipeline::{RecvPipeline, RecvPipelineConfig, RecvControl, EncodedData};
 use media::{Encoding, VideoBuffer};
 
-const ARBITRARY_CHANNEL_LIMIT: usize = 10;
-
 pub struct D3D11PresenterWindow;
 
 impl D3D11PresenterWindow {
-    pub fn spawn(width: u32, height: u32, title: &str) -> Result<mpsc::Sender<VideoBuffer>> {
-        let (data_tx, data_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
+    pub fn spawn(
+        width: u32,
+        height: u32,
+        title: &str,
+        mut video_rx: mpsc::Receiver<VideoBuffer>,
+    ) -> Result<()> {
         let title = title.to_string();
 
         std::thread::spawn(move || {
-            if let Err(e) = Self::run_window(width, height, &title, data_rx) {
+            if let Err(e) = Self::run_window(width, height, &title, &mut video_rx) {
                 tracing::error!("D3D11 presenter window error: {}", e);
             }
         });
 
-        Ok(data_tx)
+        Ok(())
     }
 
     fn run_window(
         width: u32,
         height: u32,
         title: &str,
-        mut data_rx: mpsc::Receiver<VideoBuffer>,
+        video_rx: &mut mpsc::Receiver<VideoBuffer>,
     ) -> Result<()> {
         let hwnd = Self::create_window(width, height, title)?;
 
@@ -71,7 +73,7 @@ impl D3D11PresenterWindow {
                 }
             }
 
-            match data_rx.try_recv() {
+            match video_rx.try_recv() {
                 Ok(video_buffer) => {
                     let encoded = EncodedData {
                         buffer: video_buffer,
@@ -81,7 +83,7 @@ impl D3D11PresenterWindow {
                     }
                 }
                 Err(mpsc::error::TryRecvError::Disconnected) => {
-                    tracing::info!("Data channel disconnected, closing window");
+                    tracing::info!("Video channel disconnected, closing window");
                     let _ = rt.block_on(pipeline.send(RecvControl::Stop));
                     break;
                 }
