@@ -15,6 +15,8 @@ use windows::Win32::{
 use media::pipeline::{RecvPipeline, RecvPipelineConfig, RecvControl, EncodedData};
 use media::{Encoding, VideoBuffer};
 
+const ARBITRARY_CHANNEL_LIMIT: usize = 10;
+
 pub struct D3D11PresenterWindow;
 
 impl D3D11PresenterWindow {
@@ -160,5 +162,7 @@ pub fn create_d3d11_window(
     height: u32,
     title: &str,
 ) -> Result<mpsc::Sender<VideoBuffer>> {
-    D3D11PresenterWindow::spawn(width, height, title)
+    let (tx, rx) = mpsc::channel(10);
+    D3D11PresenterWindow::spawn(width, height, title, rx)?;
+    Ok(tx)
 }

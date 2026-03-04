@@ -7,20 +7,22 @@ use std::{
 use anyhow::Result;
 use derive_more::{Deref, DerefMut};
 use tokio::sync::{mpsc, oneshot, Mutex, MutexGuard};
-
 use crate::config::Config;
 use crate::logic::{Mode, PeerStreamRequest, PeerStreamRequestResponse};
 use crate::peer::{PeerControl, PeerError, PeerEvent};
-
 use media::{
     Encoding, EncodingOptions, H264EncodingOptions, Statistics, Timestamp, VideoBuffer,
-};
-
-use signal::{ConnectionId, PeerId, SignallingControl, SignallingEvent};
-
+}
+ use signal::{ConnectionId, PeerId, SignallingControl, SignallingEvent};
 use super::app::AppEvent;
 use super::color;
 use tracing::Instrument;
+
+const ARBITRARY_CHANNEL_LIMIT: usize = 10;
+
+enum VideoSinkControl {
+    SetSink(mpsc::Sender<VideoBuffer>),
+}
 
 const ARBITRARY_CHANNEL_LIMIT: usize = 10;
 
