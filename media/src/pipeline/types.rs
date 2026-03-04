@@ -11,6 +11,27 @@ pub enum PixelFormat {
     RGB24,
 }
 
+pub enum SendControl {
+    RequestKeyframe,
+    Stop,
+}
+
+pub enum SendEvent {
+    Output(EncodedData),
+    Error(String),
+    Stopped,
+}
+
+pub enum RecvControl {
+    Data(EncodedData),
+    Stop,
+}
+
+pub enum RecvEvent {
+    Error(String),
+    Stopped,
+}
+
 pub struct CaptureFrame {
     pub texture: Texture,
     pub timestamp: Timestamp,

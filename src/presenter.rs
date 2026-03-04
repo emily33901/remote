@@ -1,3 +1,4 @@
+use std::time::Duration;
 use anyhow::Result;
 use tokio::sync::mpsc;
 use windows::Win32::{
@@ -11,7 +12,7 @@ use windows::Win32::{
     },
 };
 
-use media::pipeline::{RecvPipeline, RecvPipelineConfig, EncodedData};
+use media::pipeline::{RecvPipeline, RecvPipelineConfig, RecvControl, EncodedData};
 use media::{Encoding, VideoBuffer};
 
 const ARBITRARY_CHANNEL_LIMIT: usize = 10;
@@ -51,9 +52,7 @@ impl D3D11PresenterWindow {
                 height,
                 encoding: Encoding::H264,
             };
-            let pipeline = RecvPipeline::new(config).await?;
-            pipeline.start().await?;
-            Ok::<_, anyhow::Error>(pipeline)
+            RecvPipeline::new(config).await
         })?;
 
         tracing::info!("D3D11 presenter window started");
@@ -64,7 +63,7 @@ impl D3D11PresenterWindow {
                 while PeekMessageA(&mut message, None, 0, 0, PM_REMOVE).as_bool() {
                     if message.message == WM_DESTROY {
                         tracing::info!("D3D11 presenter window closing");
-                        rt.block_on(pipeline.stop())?;
+                        let _ = rt.block_on(pipeline.send(RecvControl::Stop));
                         return Ok(());
                     }
                     let _ = TranslateMessage(&message);
@@ -77,19 +76,19 @@ impl D3D11PresenterWindow {
                     let encoded = EncodedData {
                         buffer: video_buffer,
                     };
-                    if let Err(e) = rt.block_on(pipeline.decoder().send_input(encoded)) {
-                        tracing::warn!("Failed to send to decoder: {}", e);
+                    if let Err(e) = rt.block_on(pipeline.send(RecvControl::Data(encoded))) {
+                        tracing::warn!("Failed to send to pipeline: {}", e);
                     }
                 }
                 Err(mpsc::error::TryRecvError::Disconnected) => {
                     tracing::info!("Data channel disconnected, closing window");
-                    rt.block_on(pipeline.stop())?;
+                    let _ = rt.block_on(pipeline.send(RecvControl::Stop));
                     break;
                 }
                 Err(mpsc::error::TryRecvError::Empty) => {}
             }
 
-            std::thread::sleep(std::time::Duration::from_millis(1));
+            std::thread::sleep(Duration::from_millis(1));
         }
 
         Ok(())

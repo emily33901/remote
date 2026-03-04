@@ -417,6 +417,10 @@ impl<S: Stage + 'static> RunningStage<S> {
             self.state,
         )
     }
+
+    pub fn control_handle(&self) -> StageControlHandle<S::Input> {
+        StageControlHandle { control_tx: self.control_tx.clone() }
+    }
 }
 
 pub struct StageControlHandle<Input: Send + Sync + 'static> {
@@ -475,6 +479,10 @@ pub struct StageEventStream<Output: Send + Sync + 'static> {
 impl<Output: Send + Sync + 'static> StageEventStream<Output> {
     pub async fn next(&mut self) -> Option<StageEvent<Output>> {
         self.event_rx.recv().await
+    }
+
+    pub fn try_recv(&mut self) -> Result<StageEvent<Output>, mpsc::error::TryRecvError> {
+        self.event_rx.try_recv()
     }
 }
 

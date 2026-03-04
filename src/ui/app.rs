@@ -16,7 +16,10 @@ pub enum AppEvent {
         (
             PeerId,
             crate::logic::PeerStreamRequest,
-            tokio::sync::oneshot::Sender<(crate::logic::PeerStreamRequestResponse, Option<media::encoder::Encoder>)>,
+            tokio::sync::oneshot::Sender<(
+                crate::logic::PeerStreamRequestResponse,
+                Option<media::encoder::Encoder>,
+            )>,
         ),
     ),
     DecoderEvent(
@@ -37,16 +40,14 @@ pub struct App {
 
 impl std::fmt::Debug for App {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("App")
-            .field("peers", &self.peers)
-            .finish()
+        f.debug_struct("App").field("peers", &self.peers).finish()
     }
 }
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let gl = cc.gl.clone().expect("Failed to get OpenGL context");
-        
+
         let (event_tx, event_rx) = mpsc::channel(10);
 
         Self {
@@ -66,7 +67,7 @@ impl eframe::App for App {
 }
 
 impl App {
-    #[tracing::instrument(skip(ctx))]
+    #[tracing::instrument(skip(self, ctx))]
     pub fn ui(&mut self, ctx: &egui::Context) {
         let wallclock = egui::Window::new("Clock");
 
@@ -185,11 +186,13 @@ impl App {
                     }
                     AppEvent::VideoData(our_id, their_id, data) => {
                         if let Some((peer_window_state, _)) = self.peers.get_mut(&our_id) {
-                            if let Some(connected_peer) = peer_window_state.connected_peers.get_mut(&their_id) {
+                            if let Some(connected_peer) =
+                                peer_window_state.connected_peers.get_mut(&their_id)
+                            {
                                 if let Ok(mut guard) = connected_peer.latest_h264_data.lock() {
                                     *guard = Some(data.clone());
                                 }
-                            if let Some(sender) = &connected_peer.d3d11_sender {
+                                if let Some(sender) = &connected_peer.d3d11_sender {
                                     let buffer = media::VideoBuffer {
                                         data,
                                         sequence_header: None,
@@ -197,7 +200,8 @@ impl App {
                                             std::time::SystemTime::now()
                                                 .duration_since(std::time::UNIX_EPOCH)
                                                 .unwrap()
-                                                .as_millis() as u64
+                                                .as_millis()
+                                                as u64,
                                         ),
                                         duration: std::time::Duration::from_millis(16),
                                         key_frame: media::encoder::FrameIsKeyframe::No,
