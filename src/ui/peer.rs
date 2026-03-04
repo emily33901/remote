@@ -1,28 +1,19 @@
+use super::app::AppEvent;
+use super::color;
+use crate::config::Config;
+use crate::logic::{Mode, PeerStreamRequest, PeerStreamRequestResponse};
+use crate::peer::{PeerControl, PeerError, PeerEvent};
+use anyhow::Result;
+use derive_more::{Deref, DerefMut};
+use media::{Encoding, EncodingOptions, H264EncodingOptions, Statistics, Timestamp, VideoBuffer};
+use signal::{ConnectionId, PeerId, SignallingControl, SignallingEvent};
 use std::{
     collections::{HashMap, VecDeque},
     sync::{Arc, Weak},
     time::{Duration, Instant},
 };
-
-use anyhow::Result;
-use derive_more::{Deref, DerefMut};
 use tokio::sync::{mpsc, oneshot, Mutex, MutexGuard};
-use crate::config::Config;
-use crate::logic::{Mode, PeerStreamRequest, PeerStreamRequestResponse};
-use crate::peer::{PeerControl, PeerError, PeerEvent};
-use media::{
-    Encoding, EncodingOptions, H264EncodingOptions, Statistics, Timestamp, VideoBuffer,
-}
- use signal::{ConnectionId, PeerId, SignallingControl, SignallingEvent};
-use super::app::AppEvent;
-use super::color;
 use tracing::Instrument;
-
-const ARBITRARY_CHANNEL_LIMIT: usize = 10;
-
-enum VideoSinkControl {
-    SetSink(mpsc::Sender<VideoBuffer>),
-}
 
 const ARBITRARY_CHANNEL_LIMIT: usize = 10;
 
@@ -69,8 +60,7 @@ impl RemotePeer {
         let media_control: Arc<Mutex<Option<mpsc::Sender<media::produce::MediaControl>>>> =
             Default::default();
 
-        let (video_sink_control_tx, video_sink_control_rx) =
-            mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
+        let (video_sink_control_tx, video_sink_control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
         tokio::spawn({
             let our_peer_id = our_peer_id.clone();
@@ -98,7 +88,13 @@ impl RemotePeer {
         })
     }
 
- #[tracing::instrument(skip(event, peer_control, media_control, app_event_tx, video_sink_control_rx))]
+    #[tracing::instrument(skip(
+        event,
+        peer_control,
+        media_control,
+        app_event_tx,
+        video_sink_control_rx
+    ))]
     async fn peer_event(
         mut event: mpsc::Receiver<PeerEvent>,
         peer_control: mpsc::WeakSender<PeerControl>,
