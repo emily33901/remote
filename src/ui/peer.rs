@@ -88,6 +88,10 @@ impl RemotePeer {
         })
     }
 
+    pub fn set_video_sink(&self, sender: mpsc::Sender<VideoBuffer>) {
+        let _ = self.video_sink_control.try_send(VideoSinkControl::SetSink(sender));
+    }
+
     #[tracing::instrument(skip(
         event,
         peer_control,
@@ -106,57 +110,79 @@ impl RemotePeer {
     ) -> Result<()> {
         let config = Config::load();
         let mut decoder_control: Option<mpsc::Sender<media::decoder::DecoderControl>> = None;
+        let mut video_sink: Option<mpsc::Sender<VideoBuffer>> = None;
 
-        while let Some(event) = event.recv().await {
-            match event {
-                PeerEvent::StreamRequest(request) => {
-                    let result = Self::handle_stream_request(
-                        &media_control,
-                        &peer_control,
-                        &app_event_tx,
-                        &our_peer_id,
-                        &their_peer_id,
-                        request,
-                    )
-                    .await;
-                    if let Err(e) = result {
-                        tracing::warn!("Failed to handle stream request: {}", e);
+        loop {
+            tokio::select! {
+                Some(control) = video_sink_control_rx.recv() => {
+                    match control {
+                        VideoSinkControl::SetSink(sender) => {
+                            video_sink = Some(sender);
+                        }
+                        VideoSinkControl::ClearSink => {
+                            video_sink = None;
+                        }
                     }
                 }
-                PeerEvent::RequestStreamResponse(response) => {
-                    let result = Self::handle_stream_response(
-                        &config,
-                        &app_event_tx,
-                        &our_peer_id,
-                        &their_peer_id,
-                        response,
-                    )
-                    .await;
-                    if let Some(control) = result? {
-                        decoder_control = Some(control);
+                maybe_event = event.recv() => {
+                    let Some(event) = maybe_event else {
+                        break;
+                    };
+                    match event {
+                        PeerEvent::StreamRequest(request) => {
+                            let result = Self::handle_stream_request(
+                                &media_control,
+                                &peer_control,
+                                &app_event_tx,
+                                &our_peer_id,
+                                &their_peer_id,
+                                request,
+                            )
+                            .await;
+                            if let Err(e) = result {
+                                tracing::warn!("Failed to handle stream request: {}", e);
+                            }
+                        }
+                        PeerEvent::RequestStreamResponse(response) => {
+                            let result = Self::handle_stream_response(
+                                &config,
+                                &app_event_tx,
+                                &our_peer_id,
+                                &their_peer_id,
+                                response,
+                            )
+                            .await;
+                            if let Some(control) = result? {
+                                decoder_control = Some(control);
+                            }
+                        }
+                        PeerEvent::Video(video) => {
+                            Self::handle_video(
+                                &decoder_control,
+                                &app_event_tx,
+                                &our_peer_id,
+                                &their_peer_id,
+                                video.clone(),
+                            )
+                            .await?;
+
+                            if let Some(sink) = &video_sink {
+                                let _ = sink.send(video).await;
+                            }
+                        }
+                        PeerEvent::Error(PeerError::Closed) => {
+                            tracing::info!(%our_peer_id, %their_peer_id, "peer closed");
+                            app_event_tx
+                                .send(AppEvent::PeerClosed(
+                                    our_peer_id.clone(),
+                                    their_peer_id.clone(),
+                                ))
+                                .await?;
+                        }
+                        event => {
+                            tracing::warn!(%our_peer_id, ?event, "ignoring peer event");
+                        }
                     }
-                }
-                PeerEvent::Video(video) => {
-                    Self::handle_video(
-                        &decoder_control,
-                        &app_event_tx,
-                        &our_peer_id,
-                        &their_peer_id,
-                        video,
-                    )
-                    .await?;
-                }
-                PeerEvent::Error(PeerError::Closed) => {
-                    tracing::info!(%our_peer_id, %their_peer_id, "peer closed");
-                    app_event_tx
-                        .send(AppEvent::PeerClosed(
-                            our_peer_id.clone(),
-                            their_peer_id.clone(),
-                        ))
-                        .await?;
-                }
-                event => {
-                    tracing::warn!(%our_peer_id, ?event, "ignoring peer event");
                 }
             }
         }
@@ -743,6 +769,13 @@ impl UIPeer {
 
         Ok(())
     }
+
+    pub async fn set_video_sink(&self, their_peer_id: &PeerId, sender: mpsc::Sender<VideoBuffer>) {
+        let zelf = self.inner().await;
+        if let Some(peer) = zelf.remote_peers.get(their_peer_id) {
+            peer.set_video_sink(sender);
+        }
+    }
 }
 
 #[derive(PartialEq, Default, Debug)]
@@ -772,7 +805,6 @@ pub struct ConnectedPeer {
     pub statistics_average: VecDeque<Statistics>,
     pub frame_timelines: VecDeque<FrameTimeline>,
     pub latest_h264_data: std::sync::Mutex<Option<Vec<u8>>>,
-    pub d3d11_sender: Option<mpsc::Sender<VideoBuffer>>,
 }
 
 #[derive(Clone, Debug)]
@@ -795,7 +827,6 @@ impl ConnectedPeer {
             statistics_average: VecDeque::new(),
             frame_timelines: VecDeque::new(),
             latest_h264_data: std::sync::Mutex::new(None),
-            d3d11_sender: None,
         }
     }
 }
@@ -1208,7 +1239,11 @@ impl PeerWindowState {
                         &format!("Remote - {}", their_peer_id),
                     ) {
                         Ok(sender) => {
-                            connected_peer.d3d11_sender = Some(sender);
+                            let peer = peer.clone();
+                            let their_peer_id = their_peer_id.clone();
+                            tokio::spawn(async move {
+                                peer.set_video_sink(&their_peer_id, sender).await;
+                            });
                             tracing::info!("D3D11 window created");
                         }
                         Err(e) => {
