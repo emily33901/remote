@@ -1,6 +1,8 @@
+use crate::protocol::{StreamRequest, StreamRequestResponse};
 use crate::types::{ConnectionId, PeerId};
+use tokio::sync::oneshot;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum PeerEvent {
     ConnectionRequested {
         peer_id: PeerId,
@@ -19,6 +21,12 @@ pub enum PeerEvent {
     },
     IncomingStream {
         peer_id: PeerId,
+        request: StreamRequest,
+        response_tx: oneshot::Sender<StreamRequestResponse>,
+    },
+    StreamResponse {
+        peer_id: PeerId,
+        response: StreamRequestResponse,
     },
     Error {
         peer_id: Option<PeerId>,

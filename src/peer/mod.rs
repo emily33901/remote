@@ -7,12 +7,12 @@ pub use event::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::connection::{create_peer_connection, PeerConnectionControl};
+use crate::connection::{create_peer_connection, PeerConnectionControl, PeerConnectionEvent};
 use crate::error::{Error, Result};
 use crate::protocol::StreamRequest;
 use crate::types::{ConnectionId, PeerId};
 use signal::{SignallingControl, SignallingEvent};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, mpsc, oneshot};
 use tracing::Instrument;
 
 const CHANNEL_LIMIT: usize = 10;
@@ -24,19 +24,23 @@ pub enum SignalMessage {
     IceCandidate(String),
 }
 
+pub struct RemotePeerHandle {
+    pub peer_id: PeerId,
+    pub control: mpsc::Sender<PeerConnectionControl>,
+}
+
+struct ConnectionHandle {
+    handle: RemotePeerHandle,
+}
+
 pub struct Peer {
     id: PeerId,
     config: PeerConfig,
     signal_control: mpsc::Sender<SignallingControl>,
-    remote_peers: HashMap<PeerId, RemotePeerHandle>,
+    connections: Arc<Mutex<HashMap<PeerId, ConnectionHandle>>>,
     pending_connections: Arc<Mutex<HashMap<ConnectionId, PeerId>>>,
     event_tx: mpsc::Sender<PeerEvent>,
     tasks: tokio::task::JoinSet<anyhow::Result<()>>,
-}
-
-pub struct RemotePeerHandle {
-    pub peer_id: PeerId,
-    pub control: mpsc::Sender<PeerConnectionControl>,
 }
 
 impl Peer {
@@ -65,12 +69,14 @@ impl Peer {
         let config_clone = config.clone();
         let pending_connections = Arc::new(Mutex::new(HashMap::new()));
         let pending_connections_clone = pending_connections.clone();
+        let connections = Arc::new(Mutex::new(HashMap::new()));
+        let connections_clone = connections.clone();
 
         let mut peer = Self {
             id: id.clone(),
             config,
             signal_control: signal_control.clone(),
-            remote_peers: HashMap::new(),
+            connections,
             pending_connections,
             event_tx,
             tasks: tokio::task::JoinSet::new(),
@@ -85,6 +91,7 @@ impl Peer {
                     signal_event,
                     event_tx_clone,
                     pending_connections_clone,
+                    connections_clone,
                 )
                 .await
             }
@@ -99,7 +106,7 @@ impl Peer {
     }
 
     pub async fn connect(&mut self, peer_id: PeerId) -> Result<()> {
-        if self.remote_peers.contains_key(&peer_id) {
+        if self.connections.lock().await.contains_key(&peer_id) {
             return Err(Error::AlreadyConnected);
         }
 
@@ -109,6 +116,67 @@ impl Peer {
             .map_err(|_| Error::ConnectionFailed("Signal channel closed".into()))?;
 
         Ok(())
+    }
+
+    fn spawn_connection_event_handler(
+        &mut self,
+        peer_id: PeerId,
+        control: mpsc::Sender<PeerConnectionControl>,
+        mut events: mpsc::Receiver<PeerConnectionEvent>,
+    ) {
+        let event_tx = self.event_tx.clone();
+
+        self.tasks.spawn(
+            async move {
+                while let Some(event) = events.recv().await {
+                    match event {
+                        PeerConnectionEvent::StreamRequest(request) => {
+                            let (response_tx, response_rx) = oneshot::channel();
+
+                            let control_clone = control.clone();
+                            tokio::spawn(async move {
+                                if let Ok(response) = response_rx.await {
+                                    let _ = control_clone
+                                        .send(PeerConnectionControl::RequestStreamResponse(response))
+                                        .await;
+                                }
+                            });
+
+                            if event_tx
+                                .send(PeerEvent::IncomingStream {
+                                    peer_id: peer_id.clone(),
+                                    request,
+                                    response_tx,
+                                })
+                                .await
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        PeerConnectionEvent::StreamResponse(response) => {
+                            if event_tx
+                                .send(PeerEvent::StreamResponse {
+                                    peer_id: peer_id.clone(),
+                                    response,
+                                })
+                                .await
+                                .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        PeerConnectionEvent::Audio(_) | PeerConnectionEvent::Video(_) => {}
+                        PeerConnectionEvent::Error(_) | PeerConnectionEvent::Closed => {
+                            break;
+                        }
+                    }
+                }
+
+                anyhow::Ok(())
+            }
+            .in_current_span(),
+        );
     }
 
     pub async fn accept_connection(&mut self, connection_id: ConnectionId) -> Result<()> {
@@ -121,7 +189,7 @@ impl Peer {
             .await
             .map_err(|_| Error::ConnectionFailed("Signal channel closed".into()))?;
 
-        let (control, _event) = create_peer_connection(
+        let (control, events) = create_peer_connection(
             self.config.webrtc_api,
             self.id.clone(),
             peer_id.clone(),
@@ -133,9 +201,12 @@ impl Peer {
 
         let handle = RemotePeerHandle {
             peer_id: peer_id.clone(),
-            control,
+            control: control.clone(),
         };
-        self.remote_peers.insert(peer_id.clone(), handle);
+
+        self.spawn_connection_event_handler(peer_id.clone(), control, events);
+
+        self.connections.lock().await.insert(peer_id.clone(), ConnectionHandle { handle });
 
         self.event_tx
             .send(PeerEvent::PeerConnected { peer_id })
@@ -146,8 +217,8 @@ impl Peer {
     }
 
     pub async fn disconnect(&mut self, peer_id: &PeerId) -> Result<()> {
-        if let Some(handle) = self.remote_peers.remove(peer_id) {
-            let _ = handle.control.send(PeerConnectionControl::Disconnect).await;
+        if let Some(conn) = self.connections.lock().await.remove(peer_id) {
+            let _ = conn.handle.control.send(PeerConnectionControl::Disconnect).await;
             self.event_tx
                 .send(PeerEvent::PeerDisconnected {
                     peer_id: peer_id.clone(),
@@ -160,10 +231,11 @@ impl Peer {
     }
 
     pub async fn request_stream(&self, peer_id: &PeerId, request: StreamRequest) -> Result<()> {
-        let Some(handle) = self.remote_peers.get(peer_id) else {
+        let connections = self.connections.lock().await;
+        let Some(conn) = connections.get(peer_id) else {
             return Err(Error::PeerNotFound(peer_id.clone()));
         };
-        handle
+        conn.handle
             .control
             .send(PeerConnectionControl::RequestStream(request))
             .await
@@ -171,8 +243,8 @@ impl Peer {
         Ok(())
     }
 
-    pub fn connected_peers(&self) -> impl Iterator<Item = &PeerId> {
-        self.remote_peers.keys()
+    pub async fn connected_peers(&self) -> Vec<PeerId> {
+        self.connections.lock().await.keys().cloned().collect()
     }
 
     async fn handle_signal_events(
@@ -182,6 +254,7 @@ impl Peer {
         mut signal_event: mpsc::Receiver<SignallingEvent>,
         event_tx: mpsc::Sender<PeerEvent>,
         pending_connections: Arc<Mutex<HashMap<ConnectionId, PeerId>>>,
+        connections: Arc<Mutex<HashMap<PeerId, ConnectionHandle>>>,
     ) -> anyhow::Result<()> {
         while let Some(event) = signal_event.recv().await {
             match event {
@@ -195,7 +268,7 @@ impl Peer {
                         .await;
                 }
                 SignallingEvent::ConnectionAccepted(peer_id, _connection_id) => {
-                    let Ok((_control, _)) = create_peer_connection(
+                    let Ok((control, mut events)) = create_peer_connection(
                         config.webrtc_api,
                         our_id.clone(),
                         peer_id.clone(),
@@ -206,6 +279,66 @@ impl Peer {
                     else {
                         continue;
                     };
+
+                    let handle = RemotePeerHandle {
+                        peer_id: peer_id.clone(),
+                        control: control.clone(),
+                    };
+
+                    let event_tx_clone = event_tx.clone();
+                    let peer_id_clone = peer_id.clone();
+                    tokio::spawn(async move {
+                        while let Some(event) = events.recv().await {
+                            match event {
+                                PeerConnectionEvent::StreamRequest(request) => {
+                                    let (response_tx, response_rx) = oneshot::channel();
+
+                                    let control_clone = control.clone();
+                                    tokio::spawn(async move {
+                                        if let Ok(response) = response_rx.await {
+                                            let _ = control_clone
+                                                .send(PeerConnectionControl::RequestStreamResponse(response))
+                                                .await;
+                                        }
+                                    });
+
+                                    if event_tx_clone
+                                        .send(PeerEvent::IncomingStream {
+                                            peer_id: peer_id_clone.clone(),
+                                            request,
+                                            response_tx,
+                                        })
+                                        .await
+                                        .is_err()
+                                    {
+                                        break;
+                                    }
+                                }
+                                PeerConnectionEvent::StreamResponse(response) => {
+                                    if event_tx_clone
+                                        .send(PeerEvent::StreamResponse {
+                                            peer_id: peer_id_clone.clone(),
+                                            response,
+                                        })
+                                        .await
+                                        .is_err()
+                                    {
+                                        break;
+                                    }
+                                }
+                                PeerConnectionEvent::Audio(_) | PeerConnectionEvent::Video(_) => {}
+                                PeerConnectionEvent::Error(_) | PeerConnectionEvent::Closed => {
+                                    break;
+                                }
+                            }
+                        }
+                        anyhow::Ok(())
+                    });
+
+                    connections.lock().await.insert(
+                        peer_id.clone(),
+                        ConnectionHandle { handle },
+                    );
 
                     let _ = event_tx.send(PeerEvent::PeerConnected { peer_id }).await;
                 }

@@ -10,8 +10,8 @@ use actor::spawn_peer_actor;
 use anyhow::Result;
 use config::Config;
 use event::{AppCommand, AppEvent};
-use remote::{PeerConfig, PeerId};
-use state::{PeerHandle, RemoteUIState};
+use remote::{Mode, PeerConfig, PeerId, StreamRequest, StreamRequestResponse};
+use state::{OutgoingStreamRequestStatus, PeerHandle, RemoteUIState};
 use tokio::sync::mpsc;
 use tracing_subscriber::EnvFilter;
 
@@ -94,9 +94,6 @@ impl RemoteAppUI {
                         self.selected_peer = Some(local_id);
                     }
                 }
-                AppEvent::PeerEvent { local_id, event } => {
-                    self.state.apply_peer_event(&local_id, event);
-                }
                 AppEvent::PeerCreationFailed { error } => {
                     tracing::error!("Peer creation failed: {}", error);
                     self.state.last_error = Some(error);
@@ -108,6 +105,24 @@ impl RemoteAppUI {
                     if self.selected_peer == Some(local_id) {
                         self.selected_peer = self.peer_handles.keys().next().cloned();
                     }
+                }
+                AppEvent::PeerConnected { local_id, peer_id } => {
+                    self.state.apply_peer_connected(&local_id, &peer_id);
+                }
+                AppEvent::PeerDisconnected { local_id, peer_id } => {
+                    self.state.apply_peer_disconnected(&local_id, &peer_id);
+                }
+                AppEvent::ConnectionRequested { local_id, peer_id, connection_id } => {
+                    self.state.apply_connection_requested(&local_id, &peer_id, &connection_id);
+                }
+                AppEvent::StreamRequestReceived { local_id, peer_id, request, request_id } => {
+                    self.state.apply_stream_request_received(&local_id, &peer_id, request_id, request);
+                }
+                AppEvent::StreamResponseReceived { local_id, peer_id, response } => {
+                    self.state.apply_stream_response_received(&local_id, &peer_id, &response);
+                }
+                AppEvent::PeerError { local_id: _, error } => {
+                    self.state.last_error = Some(error);
                 }
             }
         }
@@ -201,15 +216,27 @@ impl RemoteAppUI {
             }
         });
 
-        if let Some(peer_state) = self.state.local_peers.get(local_id) {
+        let peer_state = self.state.local_peers.get(local_id).cloned();
+        if let Some(peer_state) = peer_state {
             if !peer_state.connected_peers.is_empty() {
                 ui.separator();
                 ui.heading("Connected Peers");
+                let local_id_clone = local_id.clone();
                 for peer_id in peer_state.connected_peers.clone() {
                     ui.horizontal(|ui| {
                         ui.label(format!("{}", peer_id));
                         if ui.button("Disconnect").clicked() {
-                            self.send_command(local_id, AppCommand::Disconnect { peer_id });
+                            self.send_command(&local_id_clone, AppCommand::Disconnect { peer_id: peer_id.clone() });
+                        }
+                        if ui.button("Request Stream").clicked() {
+                            self.send_command(
+                                &local_id_clone,
+                                AppCommand::RequestStream {
+                                    peer_id: peer_id.clone(),
+                                    request: remote::StreamRequest::default(),
+                                },
+                            );
+                            self.state.add_outgoing_stream_request(&local_id_clone, peer_id);
                         }
                     });
                 }
@@ -218,15 +245,82 @@ impl RemoteAppUI {
             if !peer_state.pending_connections.is_empty() {
                 ui.separator();
                 ui.heading("Pending Connections");
+                let local_id_clone = local_id.clone();
                 for pending in peer_state.pending_connections.clone() {
                     ui.horizontal(|ui| {
                         ui.label(format!("{} wants to connect", pending.peer_id));
                         if ui.button("Accept").clicked() {
-                            self.send_command(local_id, AppCommand::AcceptConnection {
+                            self.send_command(&local_id_clone, AppCommand::AcceptConnection {
                                 peer_id: pending.peer_id,
                                 connection_id: pending.connection_id,
                             });
                         }
+                    });
+                }
+            }
+
+            if !peer_state.pending_stream_requests.is_empty() {
+                ui.separator();
+                ui.heading("Stream Requests");
+                let local_id_clone = local_id.clone();
+                for req in peer_state.pending_stream_requests.clone() {
+                    ui.push_id(req.request_id, |ui| {
+                        ui.label(format!("From: {}", req.peer_id));
+                        ui.label(format!("Request: {:?}", req.request));
+                        ui.horizontal(|ui| {
+                            if ui.button("Accept").clicked() {
+                                self.send_command(
+                                    &local_id_clone,
+                                    AppCommand::RespondToStreamRequest {
+                                        request_id: req.request_id,
+                                        response: StreamRequestResponse::Accept {
+                                            mode: Mode {
+                                                width: 1920,
+                                                height: 1080,
+                                                refresh_rate: 30,
+                                            },
+                                            encoding: media::Encoding::H264,
+                                            encoding_options: media::EncodingOptions::H264(
+                                                media::H264EncodingOptions {
+                                                    rate_control: media::RateControlMode::Bitrate(8_000_000),
+                                                }
+                                            ),
+                                        },
+                                    },
+                                );
+                                self.state.remove_stream_request(&local_id_clone, req.request_id);
+                            }
+                            if ui.button("Reject").clicked() {
+                                self.send_command(
+                                    &local_id_clone,
+                                    AppCommand::RespondToStreamRequest {
+                                        request_id: req.request_id,
+                                        response: StreamRequestResponse::Reject,
+                                    },
+                                );
+                                self.state.remove_stream_request(&local_id_clone, req.request_id);
+                            }
+                        });
+                        ui.separator();
+                    });
+                }
+            }
+
+            if !peer_state.outgoing_stream_requests.is_empty() {
+                ui.separator();
+                ui.heading("Outgoing Stream Requests");
+                for req in peer_state.outgoing_stream_requests.clone() {
+                    ui.push_id(&req.peer_id, |ui| {
+                        ui.label(format!("To: {}", req.peer_id));
+                        match &req.status {
+                            OutgoingStreamRequestStatus::Pending => {
+                                ui.label("Status: Waiting for response...");
+                            }
+                            OutgoingStreamRequestStatus::Responded(response) => {
+                                ui.label(format!("Response: {:?}", response));
+                            }
+                        }
+                        ui.separator();
                     });
                 }
             }
