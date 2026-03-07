@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
@@ -246,16 +248,32 @@ pub async fn logic_channel(
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
     let (tx, mut rx) = peer_connection.channel("logic", controlling, None).await?;
+    tracing::info!("logic_channel: created (controlling={})", controlling);
+
+    let is_open = Arc::new(AtomicBool::new(false));
+    let open_notify = Arc::new(tokio::sync::Notify::new());
 
     tokio::spawn({
         let weak_control_tx = control_tx.downgrade();
+        let is_open = is_open.clone();
+        let open_notify = open_notify.clone();
         async move {
             while let Some(event) = rx.recv().await {
                 match event {
-                    ChannelEvent::Open => {}
-                    ChannelEvent::Close => {}
+                    ChannelEvent::Open => {
+                        tracing::info!("logic_channel: channel opened");
+                        is_open.store(true, Ordering::SeqCst);
+                        open_notify.notify_waiters();
+                    }
+                    ChannelEvent::Close => {
+                        tracing::info!("logic_channel: channel closed");
+                        is_open.store(false, Ordering::SeqCst);
+                        break;
+                    }
                     ChannelEvent::Message(data) => {
+                        tracing::info!("logic_channel: received {} bytes", data.len());
                         let Ok(message) = bincode::deserialize(&data) else {
+                            tracing::warn!("logic_channel: failed to deserialize message");
                             continue;
                         };
 
@@ -267,6 +285,7 @@ pub async fn logic_channel(
                             }
                             LogicMessage::Pong => {}
                             message => {
+                                tracing::info!("logic_channel: forwarding message {:?}", message);
                                 let _ = event_tx.send(message).await;
                             }
                         }
@@ -281,11 +300,22 @@ pub async fn logic_channel(
 
     tokio::spawn({
         let tx = tx.clone();
+        let is_open = is_open.clone();
+        let open_notify = open_notify.clone();
         async move {
+            tracing::info!("logic_channel: sender waiting for channel to open");
+            if !is_open.load(Ordering::SeqCst) {
+                open_notify.notified().await;
+            }
+            tracing::info!("logic_channel: sender started");
+
             while let Some(control) = control_rx.recv().await {
+                tracing::info!("logic_channel: sending {:?}", control);
                 let Ok(encoded) = bincode::serialize(&control) else {
+                    tracing::warn!("logic_channel: failed to serialize message");
                     continue;
                 };
+                tracing::info!("logic_channel: sending {} bytes", encoded.len());
                 let _ = tx.send(ChannelControl::Send(encoded)).await;
             }
 
