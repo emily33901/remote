@@ -98,6 +98,12 @@ input = { path = "input" }
 console-subscriber = "0.5"
 openh264 = { workspace = true }
 
+[dev-dependencies]
+
+[[test]]
+name = "stream_request"
+path = "tests/stream_request.rs"
+
 [profile.release]
 panic = "abort"
 debug = true
