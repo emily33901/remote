@@ -1,67 +1,70 @@
-use anyhow::Result;
-use remote::{Peer, PeerConfig, PeerEvent};
+use remote::{Peer, PeerConfig, PeerEvent, PeerId};
 use tokio::sync::mpsc;
 
 use crate::event::{AppCommand, AppEvent};
 
 const CHANNEL_SIZE: usize = 128;
 
-pub struct PeerActorHandle {
-    pub command_tx: mpsc::Sender<AppCommand>,
-    pub event_rx: mpsc::Receiver<AppEvent>,
-}
-
-pub fn spawn_peer_actor(runtime: &tokio::runtime::Runtime, config: PeerConfig) -> PeerActorHandle {
-    let (command_tx, command_rx) = mpsc::channel(CHANNEL_SIZE);
-    let (event_tx, event_rx) = mpsc::channel(CHANNEL_SIZE);
-
-    runtime.spawn(run_peer_actor(config, command_rx, event_tx));
-
-    PeerActorHandle { command_tx, event_rx }
+pub fn spawn_peer_actor(
+    runtime: &tokio::runtime::Runtime,
+    config: PeerConfig,
+    event_tx: mpsc::Sender<AppEvent>,
+) {
+    runtime.spawn(async move {
+        match Peer::new(config).await {
+            Ok((peer, mut peer_events)) => {
+                let local_id = peer.id().clone();
+                run_peer_actor(peer, local_id, &mut peer_events, event_tx).await;
+            }
+            Err(e) => {
+                let error = e.to_string();
+                tracing::error!("Failed to create peer: {}", e);
+                let _ = event_tx.send(AppEvent::PeerCreationFailed { error }).await;
+            }
+        }
+    });
 }
 
 async fn run_peer_actor(
-    config: PeerConfig,
-    mut command_rx: mpsc::Receiver<AppCommand>,
+    mut peer: Peer,
+    local_id: PeerId,
+    peer_events: &mut mpsc::Receiver<PeerEvent>,
     event_tx: mpsc::Sender<AppEvent>,
 ) {
-    let mut peer: Option<Peer> = None;
-    let mut peer_events: Option<mpsc::Receiver<PeerEvent>> = None;
-
+    let (command_tx, mut command_rx) = mpsc::channel::<AppCommand>(CHANNEL_SIZE);
+    
+    if let Err(e) = event_tx.send(AppEvent::PeerCreated {
+        local_id: local_id.clone(),
+        command_tx,
+    }).await {
+        tracing::error!("Failed to send PeerCreated event: {}", e);
+        return;
+    }
+    
+    tracing::info!("Peer actor started for {}", local_id);
+    
     loop {
         tokio::select! {
             cmd = command_rx.recv() => {
                 let Some(cmd) = cmd else {
-                    tracing::debug!("Command channel closed, actor exiting");
+                    tracing::debug!("Command channel closed for peer {}", local_id);
                     break;
                 };
 
-                match handle_command(cmd, &mut peer, &config, &event_tx).await {
-                    Ok(new_peer_events) => {
-                        peer_events = new_peer_events.or(peer_events);
-                    }
-                    Err(e) => {
-                        tracing::error!("Command handling error: {}", e);
-                    }
-                }
+                handle_command(cmd, &mut peer, &local_id).await;
             }
 
-            event = async {
-                if let Some(rx) = peer_events.as_mut() {
-                    rx.recv().await
-                } else {
-                    std::future::pending().await
-                }
-            } => {
+            event = peer_events.recv() => {
                 let Some(event) = event else {
-                    tracing::debug!("Peer event channel closed");
-                    peer = None;
-                    peer_events = None;
-                    let _ = event_tx.send(AppEvent::PeerDestroyed).await;
-                    continue;
+                    tracing::debug!("Peer {} event channel closed", local_id);
+                    let _ = event_tx.send(AppEvent::PeerDestroyed { local_id: local_id.clone() }).await;
+                    break;
                 };
 
-                if let Err(e) = event_tx.send(AppEvent::PeerEvent(event)).await {
+                if let Err(e) = event_tx.send(AppEvent::PeerEvent {
+                    local_id: local_id.clone(),
+                    event,
+                }).await {
                     tracing::error!("Failed to forward peer event: {}", e);
                     break;
                 }
@@ -69,80 +72,36 @@ async fn run_peer_actor(
         }
     }
 
-    tracing::info!("Peer actor shut down");
+    tracing::info!("Peer {} actor shut down", local_id);
 }
 
 async fn handle_command(
     cmd: AppCommand,
-    peer: &mut Option<Peer>,
-    config: &PeerConfig,
-    event_tx: &mpsc::Sender<AppEvent>,
-) -> Result<Option<mpsc::Receiver<PeerEvent>>> {
+    peer: &mut Peer,
+    local_id: &PeerId,
+) {
     match cmd {
-        AppCommand::CreatePeer => {
-            if peer.is_some() {
-                tracing::warn!("Peer already exists, ignoring CreatePeer");
-                return Ok(None);
-            }
-
-            match Peer::new(config.clone()).await {
-                Ok((p, events)) => {
-                    let local_id = p.id().clone();
-                    *peer = Some(p);
-                    let _ = event_tx.send(AppEvent::PeerCreated { local_id: local_id.clone() }).await;
-                    tracing::info!("Peer created with id: {}", local_id);
-                    Ok(Some(events))
-                }
-                Err(e) => {
-                    let error = e.to_string();
-                    tracing::error!("Failed to create peer: {}", e);
-                    let _ = event_tx.send(AppEvent::PeerCreationFailed { error }).await;
-                    Ok(None)
-                }
-            }
-        }
-
         AppCommand::ConnectToPeer { peer_id } => {
-            let Some(p) = peer.as_mut() else {
-                tracing::warn!("Cannot connect: no peer exists");
-                return Ok(None);
-            };
-
             let peer_id_str = peer_id.to_string();
-            if let Err(e) = p.connect(peer_id).await {
-                tracing::error!("Failed to connect to {}: {}", peer_id_str, e);
+            if let Err(e) = peer.connect(peer_id).await {
+                tracing::error!("Peer {} failed to connect to {}: {}", local_id, peer_id_str, e);
             }
-            Ok(None)
         }
 
         AppCommand::AcceptConnection { peer_id, connection_id } => {
-            let Some(p) = peer.as_mut() else {
-                tracing::warn!("Cannot accept: no peer exists");
-                return Ok(None);
-            };
-
-            if let Err(e) = p.accept_connection(connection_id).await {
-                tracing::error!("Failed to accept connection from {}: {}", peer_id, e);
+            if let Err(e) = peer.accept_connection(connection_id).await {
+                tracing::error!("Peer {} failed to accept connection from {}: {}", local_id, peer_id, e);
             }
-            Ok(None)
         }
 
         AppCommand::Disconnect { peer_id } => {
-            let Some(p) = peer.as_mut() else {
-                tracing::warn!("Cannot disconnect: no peer exists");
-                return Ok(None);
-            };
-
-            if let Err(e) = p.disconnect(&peer_id).await {
-                tracing::error!("Failed to disconnect from {}: {}", peer_id, e);
+            if let Err(e) = peer.disconnect(&peer_id).await {
+                tracing::error!("Peer {} failed to disconnect from {}: {}", local_id, peer_id, e);
             }
-            Ok(None)
         }
 
         AppCommand::Shutdown => {
-            *peer = None;
-            tracing::info!("Peer shut down via command");
-            Ok(None)
+            tracing::info!("Peer {} shutdown requested", local_id);
         }
     }
 }

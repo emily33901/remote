@@ -3,13 +3,15 @@ mod config;
 mod event;
 mod state;
 
+use std::collections::HashMap;
 use std::time::Instant;
 
 use actor::spawn_peer_actor;
 use anyhow::Result;
+use config::Config;
 use event::{AppCommand, AppEvent};
-use remote::PeerId;
-use state::{RemoteUIState, UIState};
+use remote::{PeerConfig, PeerId};
+use state::{PeerHandle, RemoteUIState};
 use tokio::sync::mpsc;
 use tracing_subscriber::EnvFilter;
 
@@ -46,10 +48,13 @@ fn main() {
 
 pub struct RemoteAppUI {
     state: RemoteUIState,
-    command_tx: mpsc::Sender<AppCommand>,
+    peer_handles: HashMap<PeerId, PeerHandle>,
     event_rx: mpsc::Receiver<AppEvent>,
+    event_tx: mpsc::Sender<AppEvent>,
     runtime: tokio::runtime::Runtime,
+    config: PeerConfig,
     connect_input: String,
+    selected_peer: Option<PeerId>,
     start_time: Instant,
 }
 
@@ -59,15 +64,18 @@ impl RemoteAppUI {
             .enable_all()
             .build()?;
 
-        let config = config::Config::load().peer_config.clone();
-        let handle = spawn_peer_actor(&runtime, config);
+        let (event_tx, event_rx) = mpsc::channel(128);
+        let config = Config::load().peer_config.clone();
 
         Ok(Self {
             state: RemoteUIState::default(),
-            command_tx: handle.command_tx,
-            event_rx: handle.event_rx,
+            peer_handles: HashMap::new(),
+            event_rx,
+            event_tx,
             runtime,
+            config,
             connect_input: String::new(),
+            selected_peer: None,
             start_time: Instant::now(),
         })
     }
@@ -75,29 +83,45 @@ impl RemoteAppUI {
     fn poll_events(&mut self) {
         while let Ok(event) = self.event_rx.try_recv() {
             match event {
-                AppEvent::PeerCreated { local_id } => {
+                AppEvent::PeerCreated { local_id, command_tx } => {
                     tracing::info!("Peer created with id: {}", local_id);
-                    self.state.local_peer_id = Some(local_id);
-                    self.state.state = UIState::Connected;
+                    self.state.add_local_peer(local_id.clone());
+                    self.peer_handles.insert(
+                        local_id.clone(),
+                        PeerHandle { command_tx },
+                    );
+                    if self.selected_peer.is_none() {
+                        self.selected_peer = Some(local_id);
+                    }
                 }
-                AppEvent::PeerEvent(e) => {
-                    self.state.apply_peer_event(e);
+                AppEvent::PeerEvent { local_id, event } => {
+                    self.state.apply_peer_event(&local_id, event);
                 }
                 AppEvent::PeerCreationFailed { error } => {
                     tracing::error!("Peer creation failed: {}", error);
-                    self.state.state = UIState::Error(error);
+                    self.state.last_error = Some(error);
                 }
-                AppEvent::PeerDestroyed => {
-                    tracing::info!("Peer destroyed");
-                    self.state = RemoteUIState::default();
+                AppEvent::PeerDestroyed { local_id } => {
+                    tracing::info!("Peer {} destroyed", local_id);
+                    self.state.remove_local_peer(&local_id);
+                    self.peer_handles.remove(&local_id);
+                    if self.selected_peer == Some(local_id) {
+                        self.selected_peer = self.peer_handles.keys().next().cloned();
+                    }
                 }
             }
         }
     }
 
-    fn send_command(&self, cmd: AppCommand) {
-        if let Err(e) = self.command_tx.blocking_send(cmd) {
-            tracing::error!("Failed to send command: {}", e);
+    fn create_peer(&self) {
+        spawn_peer_actor(&self.runtime, self.config.clone(), self.event_tx.clone());
+    }
+
+    fn send_command(&self, local_id: &PeerId, cmd: AppCommand) {
+        if let Some(handle) = self.peer_handles.get(local_id) {
+            if let Err(e) = handle.command_tx.blocking_send(cmd) {
+                tracing::error!("Failed to send command to peer {}: {}", local_id, e);
+            }
         }
     }
 }
@@ -120,20 +144,22 @@ impl eframe::App for RemoteAppUI {
         });
 
         egui::Window::new("Remote").show(ctx, |ui| {
-            match &self.state.state {
-                UIState::Disconnected | UIState::Error(_) => {
-                    if ui.button("Create Peer").clicked() {
-                        self.send_command(AppCommand::CreatePeer);
-                    }
-                    if let UIState::Error(e) = &self.state.state {
-                        ui.colored_label(egui::Color32::RED, e);
-                    }
+            ui.horizontal(|ui| {
+                if ui.button("Create Peer").clicked() {
+                    self.create_peer();
                 }
-                UIState::Connecting => {
-                    ui.label("Connecting...");
-                }
-                UIState::Connected => {
-                    self.show_peer_ui(ui);
+            });
+
+            if let Some(error) = &self.state.last_error {
+                ui.colored_label(egui::Color32::RED, error);
+            }
+
+            if !self.peer_handles.is_empty() {
+                ui.separator();
+                self.show_peer_selector(ui);
+                
+                if let Some(selected) = self.selected_peer.clone() {
+                    self.show_peer_ui(ui, &selected);
                 }
             }
         });
@@ -141,12 +167,28 @@ impl eframe::App for RemoteAppUI {
 }
 
 impl RemoteAppUI {
-    fn show_peer_ui(&mut self, ui: &mut egui::Ui) {
-        if let Some(id) = &self.state.local_peer_id {
-            ui.horizontal(|ui| {
-                ui.label(format!("Peer ID: {}", id));
-            });
-        }
+    fn show_peer_selector(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label("Local Peers:");
+            let peer_ids: Vec<PeerId> = self.peer_handles.keys().cloned().collect();
+            for peer_id in peer_ids {
+                let is_selected = self.selected_peer.as_ref() == Some(&peer_id);
+                if ui.selectable_label(is_selected, peer_id.to_string()).clicked() {
+                    self.selected_peer = Some(peer_id);
+                }
+            }
+        });
+        ui.separator();
+    }
+
+    fn show_peer_ui(&mut self, ui: &mut egui::Ui, local_id: &PeerId) {
+        ui.horizontal(|ui| {
+            ui.label(format!("Peer ID: {}", local_id));
+            if ui.button("Shutdown").clicked() {
+                self.send_command(local_id, AppCommand::Shutdown);
+            }
+        });
+
         ui.separator();
 
         ui.heading("Connect");
@@ -154,37 +196,39 @@ impl RemoteAppUI {
             ui.text_edit_singleline(&mut self.connect_input);
             if ui.button("Connect").clicked() && !self.connect_input.is_empty() {
                 let peer_id: PeerId = self.connect_input.clone().into();
-                self.send_command(AppCommand::ConnectToPeer { peer_id });
+                self.send_command(local_id, AppCommand::ConnectToPeer { peer_id });
                 self.connect_input.clear();
             }
         });
 
-        if !self.state.connected_peers.is_empty() {
-            ui.separator();
-            ui.heading("Connected Peers");
-            for peer_id in &self.state.connected_peers.clone() {
-                ui.horizontal(|ui| {
-                    ui.label(format!("{}", peer_id));
-                    if ui.button("Disconnect").clicked() {
-                        self.send_command(AppCommand::Disconnect { peer_id: peer_id.clone() });
-                    }
-                });
+        if let Some(peer_state) = self.state.local_peers.get(local_id) {
+            if !peer_state.connected_peers.is_empty() {
+                ui.separator();
+                ui.heading("Connected Peers");
+                for peer_id in peer_state.connected_peers.clone() {
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{}", peer_id));
+                        if ui.button("Disconnect").clicked() {
+                            self.send_command(local_id, AppCommand::Disconnect { peer_id });
+                        }
+                    });
+                }
             }
-        }
 
-        if !self.state.pending_connections.is_empty() {
-            ui.separator();
-            ui.heading("Pending Connections");
-            for pending in &self.state.pending_connections.clone() {
-                ui.horizontal(|ui| {
-                    ui.label(format!("{} wants to connect", pending.peer_id));
-                    if ui.button("Accept").clicked() {
-                        self.send_command(AppCommand::AcceptConnection {
-                            peer_id: pending.peer_id.clone(),
-                            connection_id: pending.connection_id.clone(),
-                        });
-                    }
-                });
+            if !peer_state.pending_connections.is_empty() {
+                ui.separator();
+                ui.heading("Pending Connections");
+                for pending in peer_state.pending_connections.clone() {
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{} wants to connect", pending.peer_id));
+                        if ui.button("Accept").clicked() {
+                            self.send_command(local_id, AppCommand::AcceptConnection {
+                                peer_id: pending.peer_id,
+                                connection_id: pending.connection_id,
+                            });
+                        }
+                    });
+                }
             }
         }
     }
