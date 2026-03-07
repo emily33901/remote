@@ -27,7 +27,6 @@ pub enum AppEvent {
         (PeerId, mpsc::Receiver<media::decoder::DecoderEvent>),
     ),
     PeerClosed(PeerId, PeerId),
-    VideoData(PeerId, PeerId, Vec<u8>),
 }
 
 pub struct App {
@@ -182,17 +181,6 @@ impl App {
                                 .connected_peers
                                 .remove(&their_id)
                                 .expect("Expect remote PeerControl to exist when it goes away");
-                        }
-                    }
-                    AppEvent::VideoData(our_id, their_id, data) => {
-                        if let Some((peer_window_state, _)) = self.peers.get_mut(&our_id) {
-                            if let Some(connected_peer) =
-                                peer_window_state.connected_peers.get_mut(&their_id)
-                            {
-                                if let Ok(mut guard) = connected_peer.latest_h264_data.lock() {
-                                    *guard = Some(data.clone());
-                                }
-                            }
                         }
                     }
                 }

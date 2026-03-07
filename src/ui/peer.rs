@@ -17,16 +17,10 @@ use tracing::Instrument;
 
 const ARBITRARY_CHANNEL_LIMIT: usize = 10;
 
-enum VideoSinkControl {
-    SetSink(mpsc::Sender<VideoBuffer>),
-    ClearSink,
-}
-
 pub struct RemotePeer {
     peer_id: PeerId,
     control: mpsc::Sender<PeerControl>,
     media_control: Arc<Mutex<Option<mpsc::Sender<media::produce::MediaControl>>>>,
-    video_sink_control: mpsc::Sender<VideoSinkControl>,
 }
 
 impl std::fmt::Debug for RemotePeer {
@@ -60,8 +54,6 @@ impl RemotePeer {
         let media_control: Arc<Mutex<Option<mpsc::Sender<media::produce::MediaControl>>>> =
             Default::default();
 
-        let (video_sink_control_tx, video_sink_control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
-
         tokio::spawn({
             let our_peer_id = our_peer_id.clone();
             let their_peer_id = their_peer_id.clone();
@@ -75,7 +67,6 @@ impl RemotePeer {
                 app_event_tx,
                 our_peer_id,
                 their_peer_id,
-                video_sink_control_rx,
             )
             .in_current_span()
         });
@@ -84,21 +75,10 @@ impl RemotePeer {
             peer_id: their_peer_id.clone(),
             media_control,
             control,
-            video_sink_control: video_sink_control_tx,
         })
     }
 
-    pub fn set_video_sink(&self, sender: mpsc::Sender<VideoBuffer>) {
-        let _ = self.video_sink_control.try_send(VideoSinkControl::SetSink(sender));
-    }
-
-    #[tracing::instrument(skip(
-        event,
-        peer_control,
-        media_control,
-        app_event_tx,
-        video_sink_control_rx
-    ))]
+    #[tracing::instrument(skip(event, peer_control, media_control, app_event_tx,))]
     async fn peer_event(
         mut event: mpsc::Receiver<PeerEvent>,
         peer_control: mpsc::WeakSender<PeerControl>,
@@ -106,24 +86,12 @@ impl RemotePeer {
         app_event_tx: mpsc::Sender<AppEvent>,
         our_peer_id: PeerId,
         their_peer_id: PeerId,
-        mut video_sink_control_rx: mpsc::Receiver<VideoSinkControl>,
     ) -> Result<()> {
         let config = Config::load();
         let mut decoder_control: Option<mpsc::Sender<media::decoder::DecoderControl>> = None;
-        let mut video_sink: Option<mpsc::Sender<VideoBuffer>> = None;
 
         loop {
             tokio::select! {
-                Some(control) = video_sink_control_rx.recv() => {
-                    match control {
-                        VideoSinkControl::SetSink(sender) => {
-                            video_sink = Some(sender);
-                        }
-                        VideoSinkControl::ClearSink => {
-                            video_sink = None;
-                        }
-                    }
-                }
                 maybe_event = event.recv() => {
                     let Some(event) = maybe_event else {
                         break;
@@ -159,16 +127,11 @@ impl RemotePeer {
                         PeerEvent::Video(video) => {
                             Self::handle_video(
                                 &decoder_control,
-                                &app_event_tx,
                                 &our_peer_id,
                                 &their_peer_id,
                                 video.clone(),
                             )
                             .await?;
-
-                            if let Some(sink) = &video_sink {
-                                let _ = sink.send(video).await;
-                            }
                         }
                         PeerEvent::Error(PeerError::Closed) => {
                             tracing::info!(%our_peer_id, %their_peer_id, "peer closed");
@@ -262,19 +225,10 @@ impl RemotePeer {
 
     async fn handle_video(
         decoder_control: &Option<mpsc::Sender<media::decoder::DecoderControl>>,
-        app_event_tx: &mpsc::Sender<AppEvent>,
         our_peer_id: &PeerId,
         their_peer_id: &PeerId,
         video: media::VideoBuffer,
     ) -> Result<()> {
-        app_event_tx
-            .send(AppEvent::VideoData(
-                our_peer_id.clone(),
-                their_peer_id.clone(),
-                video.data.clone(),
-            ))
-            .await?;
-
         let Some(decoder_control) = decoder_control else {
             tracing::warn!(%our_peer_id, %their_peer_id, "video without decoder control");
             return Ok(());
@@ -769,13 +723,6 @@ impl UIPeer {
 
         Ok(())
     }
-
-    pub async fn set_video_sink(&self, their_peer_id: &PeerId, sender: mpsc::Sender<VideoBuffer>) {
-        let zelf = self.inner().await;
-        if let Some(peer) = zelf.remote_peers.get(their_peer_id) {
-            peer.set_video_sink(sender);
-        }
-    }
 }
 
 #[derive(PartialEq, Default, Debug)]
@@ -804,7 +751,6 @@ pub struct ConnectedPeer {
     )>,
     pub statistics_average: VecDeque<Statistics>,
     pub frame_timelines: VecDeque<FrameTimeline>,
-    pub latest_h264_data: std::sync::Mutex<Option<Vec<u8>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -826,7 +772,6 @@ impl ConnectedPeer {
             stream_requests: vec![],
             statistics_average: VecDeque::new(),
             frame_timelines: VecDeque::new(),
-            latest_h264_data: std::sync::Mutex::new(None),
         }
     }
 }

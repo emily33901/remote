@@ -1,13 +1,5 @@
 [workspace]
-members = [
-    "media",
-    "signal",
-    "telemetry",
-    "telemetry/dash",
-    "rtc",
-    "input",
-    "util",
-]
+members = ["media", "signal", "rtc", "input", "util", "remote-ui"]
 resolver = "2"
 
 [workspace.dependencies]
@@ -66,7 +58,7 @@ log = "0.4"
 [package]
 name = "remote"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 anyhow = { workspace = true }
@@ -97,7 +89,6 @@ glow = { workspace = true }
 egui_glow = { workspace = true }
 
 # Workspace members
-telemetry = { path = "telemetry" }
 rtc = { path = "rtc" }
 signal = { path = "signal" }
 media = { path = "media" }
