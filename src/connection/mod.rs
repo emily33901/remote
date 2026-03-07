@@ -53,9 +53,11 @@ pub async fn create_peer_connection(
                         let _ = video_tx.send(channels::VideoControl::Video(video)).await;
                     }
                     PeerConnectionControl::RequestStream(request) => {
+                        tracing::info!("Sending StreamRequest over logic channel: {:?}", request);
                         let _ = logic_tx.send(LogicMessage::StreamRequest(request)).await;
                     }
                     PeerConnectionControl::RequestStreamResponse(response) => {
+                        tracing::info!("Sending StreamRequestResponse over logic channel: {:?}", response);
                         let _ = logic_tx.send(LogicMessage::StreamRequestResponse(response)).await;
                     }
                     PeerConnectionControl::Disconnect => {
@@ -101,9 +103,11 @@ pub async fn create_peer_connection(
             while let Some(message) = logic_rx.recv().await {
                 match message {
                     LogicMessage::StreamRequest(request) => {
+                        tracing::info!("Received StreamRequest from logic channel: {:?}", request);
                         let _ = event_tx.send(PeerConnectionEvent::StreamRequest(request)).await;
                     }
                     LogicMessage::StreamRequestResponse(response) => {
+                        tracing::info!("Received StreamRequestResponse from logic channel: {:?}", response);
                         let _ = event_tx.send(PeerConnectionEvent::StreamResponse(response)).await;
                     }
                     LogicMessage::StreamKeyframeRequest => {

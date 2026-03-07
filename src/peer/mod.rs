@@ -128,9 +128,11 @@ impl Peer {
 
         self.tasks.spawn(
             async move {
+                tracing::info!("Connection event handler started for peer {}", peer_id);
                 while let Some(event) = events.recv().await {
                     match event {
                         PeerConnectionEvent::StreamRequest(request) => {
+                            tracing::info!("StreamRequest received for peer {}", peer_id);
                             let (response_tx, response_rx) = oneshot::channel();
 
                             let control_clone = control.clone();
@@ -155,6 +157,7 @@ impl Peer {
                             }
                         }
                         PeerConnectionEvent::StreamResponse(response) => {
+                            tracing::info!("StreamResponse received for peer {}", peer_id);
                             if event_tx
                                 .send(PeerEvent::StreamResponse {
                                     peer_id: peer_id.clone(),
@@ -235,6 +238,7 @@ impl Peer {
         let Some(conn) = connections.get(peer_id) else {
             return Err(Error::PeerNotFound(peer_id.clone()));
         };
+        tracing::info!("Requesting stream from peer {}", peer_id);
         conn.handle
             .control
             .send(PeerConnectionControl::RequestStream(request))
@@ -288,9 +292,11 @@ impl Peer {
                     let event_tx_clone = event_tx.clone();
                     let peer_id_clone = peer_id.clone();
                     tokio::spawn(async move {
+                        tracing::info!("Signalling connection event handler started for peer {}", peer_id_clone);
                         while let Some(event) = events.recv().await {
                             match event {
                                 PeerConnectionEvent::StreamRequest(request) => {
+                                    tracing::info!("StreamRequest received for peer {} (from signalling)", peer_id_clone);
                                     let (response_tx, response_rx) = oneshot::channel();
 
                                     let control_clone = control.clone();
@@ -315,6 +321,7 @@ impl Peer {
                                     }
                                 }
                                 PeerConnectionEvent::StreamResponse(response) => {
+                                    tracing::info!("StreamResponse received for peer {} (from signalling)", peer_id_clone);
                                     if event_tx_clone
                                         .send(PeerEvent::StreamResponse {
                                             peer_id: peer_id_clone.clone(),
