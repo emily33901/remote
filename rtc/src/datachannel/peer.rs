@@ -5,9 +5,9 @@ use std::{
 
 use tokio::sync::{mpsc, oneshot, Mutex};
 
+use anyhow::Result;
 use async_datachannel::{PeerConnection, RtcConfig};
 use datachannel::{DataChannelHandler, RtcPeerConnection};
-use anyhow::Result;
 
 use crate::{
     RtcPeerState, ARBITRARY_CHANNEL_LIMIT,
@@ -26,8 +26,6 @@ pub(crate) struct DCH {
     pub(crate) runtime: tokio::runtime::Handle,
     pub(crate) more_can_be_sent: Arc<Mutex<Option<mpsc::Receiver<()>>>>,
     pub(crate) more_can_be_sent_tx: mpsc::Sender<()>,
-
-    pub(crate) recv_counter: telemetry::client::Counter,
 }
 
 impl DataChannelHandler for DCH {
@@ -66,21 +64,6 @@ impl DataChannelHandler for DCH {
                     .await
                     .take()
                     .expect("expected more_can_be_sent");
-
-                let sent_counter = telemetry::client::Counter::default();
-                telemetry::client::watch_counter(
-                    &sent_counter,
-                    telemetry::Unit::Bytes,
-                    &format!("channel-{our_label}-sent"),
-                )
-                .await;
-
-                telemetry::client::watch_counter(
-                    &recv_counter,
-                    telemetry::Unit::Bytes,
-                    &format!("channel-{our_label}-recv"),
-                )
-                .await;
 
                 while let Some(control) = control_rx.recv().await {
                     match control {
@@ -326,9 +309,6 @@ pub(crate) async fn rtc_peer(
 )> {
     let (control_tx, mut control_rx) = mpsc::channel::<RtcPeerControl>(ARBITRARY_CHANNEL_LIMIT);
     let (event_tx, event_rx) = mpsc::channel::<RtcPeerEvent>(ARBITRARY_CHANNEL_LIMIT);
-
-    telemetry::client::watch_channel(&control_tx, "dc-peer-control").await;
-    telemetry::client::watch_channel(&event_tx, "dc-peer-event").await;
 
     let ice_servers = vec!["stun:stun.l.google.com:19302"];
     let config = RtcConfig::new(&ice_servers);

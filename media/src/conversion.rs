@@ -74,9 +74,6 @@ pub(crate) async fn converter(
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
     let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_MEDIA_CHANNEL_LIMIT);
 
-    telemetry::client::watch_channel(&control_tx, "color-converter-control").await;
-    telemetry::client::watch_channel(&event_tx, "color-converter-event").await;
-
     let span = tracing::Span::current();
 
     tokio::task::spawn_blocking(move || {

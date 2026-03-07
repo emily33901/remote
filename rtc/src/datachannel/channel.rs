@@ -22,9 +22,6 @@ pub(crate) async fn channel(
     let (control_tx, control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
-    telemetry::client::watch_channel(&control_tx, &format!("channel-{our_label}-control")).await;
-    telemetry::client::watch_channel(&event_tx, &format!("channel-{our_label}-event")).await;
-
     let control_rx = Arc::new(Mutex::new(Some(control_rx)));
 
     let (channel_tx, channel_rx) = oneshot::channel();

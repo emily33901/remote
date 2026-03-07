@@ -32,9 +32,6 @@ pub(crate) async fn rtc_peer(
     let (control_tx, mut control_rx) = mpsc::channel::<RtcPeerControl>(ARBITRARY_RTC_CHANNEL_LIMIT);
     let (event_tx, event_rx) = mpsc::channel::<RtcPeerEvent>(ARBITRARY_RTC_CHANNEL_LIMIT);
 
-    telemetry::client::watch_channel(&control_tx, "webrtc-rs-peer-control").await;
-    telemetry::client::watch_channel(&event_tx, "webrtc-rs-peer-event").await;
-
     // Create a MediaEngine object to configure the supported codec
     let mut m = MediaEngine::default();
 

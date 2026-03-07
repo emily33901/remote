@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 use tokio::sync::{mpsc, Mutex};
 use webrtc::{
@@ -96,14 +93,6 @@ async fn on_datachannel(
                             .expect("expected channel control");
                         tracing::debug!("took channel {our_label} control");
 
-                        let sent_counter = telemetry::client::Counter::default();
-                        telemetry::client::watch_counter(
-                            &sent_counter,
-                            telemetry::Unit::Bytes,
-                            &format!("channel-{our_label}-sent"),
-                        )
-                        .await;
-
                         while let Some(control) = control_rx.recv().await {
                             if let Some(channel) = channel.upgrade() {
                                 match control {
@@ -114,9 +103,7 @@ async fn on_datachannel(
                                         let len = data.len();
 
                                         match channel.send(&bytes::Bytes::from(data)).await {
-                                            Ok(_) => {
-                                                sent_counter.update(len);
-                                            }
+                                            Ok(_) => {}
                                             Err(err) => {
                                                 tracing::warn!(
                                                     "channel {our_label} unable to send {err}"
@@ -158,19 +145,9 @@ async fn on_datachannel(
         let event_tx = event_tx.clone();
         let our_label = our_label.clone();
 
-        let recv_counter = telemetry::client::Counter::default();
-        telemetry::client::watch_counter(
-            &recv_counter,
-            telemetry::Unit::Bytes,
-            &format!("channel-{our_label}-recv"),
-        )
-        .await;
-
         Box::new(move |msg: DataChannelMessage| {
             let event_tx = event_tx.clone();
             let our_label = our_label.clone();
-
-            recv_counter.update(msg.data.len());
 
             Box::pin(async move {
                 if let Err(_) = event_tx

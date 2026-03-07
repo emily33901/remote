@@ -32,7 +32,6 @@ rand = "0.8"
 wgpu = "0.19"
 openh264 = { version = "0.9", optional = true }
 util = { path = "../util" }
-telemetry = { path = "../telemetry" }
 
 [target.'cfg(windows)'.dependencies]
 windows-core = { workspace = true }
