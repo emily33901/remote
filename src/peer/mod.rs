@@ -5,13 +5,14 @@ pub use config::*;
 pub use event::*;
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::connection::{create_peer_connection, PeerConnectionControl};
 use crate::error::{Error, Result};
 use crate::protocol::StreamRequest;
 use crate::types::{ConnectionId, PeerId};
 use signal::{SignallingControl, SignallingEvent};
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, mpsc};
 use tracing::Instrument;
 
 const CHANNEL_LIMIT: usize = 10;
@@ -28,7 +29,7 @@ pub struct Peer {
     config: PeerConfig,
     signal_control: mpsc::Sender<SignallingControl>,
     remote_peers: HashMap<PeerId, RemotePeerHandle>,
-    pending_connections: HashMap<ConnectionId, PeerId>,
+    pending_connections: Arc<Mutex<HashMap<ConnectionId, PeerId>>>,
     event_tx: mpsc::Sender<PeerEvent>,
     tasks: tokio::task::JoinSet<anyhow::Result<()>>,
 }
@@ -62,13 +63,15 @@ impl Peer {
         let signal_control_clone = signal_control.clone();
         let event_tx_clone = event_tx.clone();
         let config_clone = config.clone();
+        let pending_connections = Arc::new(Mutex::new(HashMap::new()));
+        let pending_connections_clone = pending_connections.clone();
 
         let mut peer = Self {
             id: id.clone(),
             config,
             signal_control: signal_control.clone(),
             remote_peers: HashMap::new(),
-            pending_connections: HashMap::new(),
+            pending_connections,
             event_tx,
             tasks: tokio::task::JoinSet::new(),
         };
@@ -81,6 +84,7 @@ impl Peer {
                     signal_control_clone,
                     signal_event,
                     event_tx_clone,
+                    pending_connections_clone,
                 )
                 .await
             }
@@ -108,7 +112,7 @@ impl Peer {
     }
 
     pub async fn accept_connection(&mut self, connection_id: ConnectionId) -> Result<()> {
-        let Some(peer_id) = self.pending_connections.remove(&connection_id) else {
+        let Some(peer_id) = self.pending_connections.lock().await.remove(&connection_id) else {
             return Err(Error::ConnectionFailed("No pending connection".into()));
         };
 
@@ -177,6 +181,7 @@ impl Peer {
         signal_control: mpsc::Sender<SignallingControl>,
         mut signal_event: mpsc::Receiver<SignallingEvent>,
         event_tx: mpsc::Sender<PeerEvent>,
+        pending_connections: Arc<Mutex<HashMap<ConnectionId, PeerId>>>,
     ) -> anyhow::Result<()> {
         while let Some(event) = signal_event.recv().await {
             match event {
@@ -184,6 +189,7 @@ impl Peer {
                     tracing::warn!("received duplicate peer id");
                 }
                 SignallingEvent::ConectionRequest(peer_id, connection_id) => {
+                    pending_connections.lock().await.insert(connection_id.clone(), peer_id.clone());
                     let _ = event_tx
                         .send(PeerEvent::ConnectionRequested { peer_id, connection_id })
                         .await;
