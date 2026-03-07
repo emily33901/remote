@@ -127,6 +127,7 @@ async fn handle_peer_event(
             response_tx,
         } => {
             let request_id = NEXT_REQUEST_ID.fetch_add(1, Ordering::SeqCst);
+            tracing::info!("IncomingStream from {} with request_id={}", peer_id, request_id);
             pending_responses.lock().await.insert(
                 request_id,
                 StreamResponseHandle { response_tx },

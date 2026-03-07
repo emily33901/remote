@@ -116,6 +116,7 @@ impl RemoteAppUI {
                     self.state.apply_connection_requested(&local_id, &peer_id, &connection_id);
                 }
                 AppEvent::StreamRequestReceived { local_id, peer_id, request, request_id } => {
+                    tracing::info!("StreamRequestReceived: local_id={}, peer_id={}, request_id={}", local_id, peer_id, request_id);
                     self.state.apply_stream_request_received(&local_id, &peer_id, request_id, request);
                 }
                 AppEvent::StreamResponseReceived { local_id, peer_id, response } => {

@@ -96,12 +96,21 @@ impl RemoteUIState {
         request_id: u64,
         request: StreamRequest,
     ) {
+        tracing::info!(
+            "apply_stream_request_received: local_id={}, peer_id={}, request_id={}",
+            local_id,
+            peer_id,
+            request_id
+        );
         if let Some(state) = self.local_peers.get_mut(local_id) {
+            tracing::info!("Found state for local_id, adding stream request");
             state.pending_stream_requests.push(PendingStreamRequest {
                 request_id,
                 peer_id: peer_id.clone(),
                 request,
             });
+        } else {
+            tracing::warn!("No state found for local_id={}", local_id);
         }
     }
 
