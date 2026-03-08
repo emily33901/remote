@@ -69,8 +69,9 @@ async fn logic_channel_forwards_incoming_messages() {
         LogicMessage::StreamRequestResponse(StreamRequestResponse::Accept { mode, .. }) => {
             assert_eq!(mode.width, 1920);
             assert_eq!(mode.height, 1080);
+            assert_eq!(mode.refresh_rate, 60);
         }
-        _ => panic!("Expected Accept response"),
+        _ => panic!("Expected StreamRequestResponse::Accept"),
     }
 }
 
@@ -191,4 +192,86 @@ async fn ping_pong() {
 
     let response: LogicMessage = bincode::deserialize(&pong_data).unwrap();
     assert!(matches!(response, LogicMessage::Pong));
+}
+
+#[tokio::test]
+async fn stream_request_response_flow() {
+    let peer_a = Arc::new(MockPeerConnection::new());
+    let peer_b = Arc::new(MockPeerConnection::new());
+
+    let (logic_tx_a, mut logic_rx_a) = logic_channel(peer_a.as_ref(), true).await.unwrap();
+    let (logic_tx_b, mut logic_rx_b) = logic_channel(peer_b.as_ref(), false).await.unwrap();
+
+    peer_a.open_channel("logic").await;
+    peer_b.open_channel("logic").await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    let request = StreamRequest {
+        preferred_mode: Some(Mode {
+            width: 1920,
+            height: 1080,
+            refresh_rate: 60,
+        }),
+        preferred_encoding: Some(Encoding::H264),
+        preferred_encoding_options: None,
+    };
+    logic_tx_a
+        .send(LogicMessage::StreamRequest(request))
+        .await
+        .unwrap();
+
+    let outgoing = peer_a.recv_outgoing_skip_ping("logic").await;
+    let data = match outgoing {
+        Some(ChannelControl::Send(data)) => data,
+        _ => panic!("Expected Send"),
+    };
+
+    peer_b.send_to_channel("logic", data).await;
+
+    let received = recv_logic_message_skip_pong(&mut logic_rx_b)
+        .await
+        .expect("no request");
+
+    let received_request = match received {
+        LogicMessage::StreamRequest(req) => req,
+        _ => panic!("Expected StreamRequest"),
+    };
+    assert_eq!(received_request.preferred_mode.unwrap().width, 1920);
+
+    let response = StreamRequestResponse::Accept {
+        mode: Mode {
+            width: 1920,
+            height: 1080,
+            refresh_rate: 60,
+        },
+        encoding: Encoding::H264,
+        encoding_options: EncodingOptions::H264(H264EncodingOptions {
+            rate_control: RateControlMode::Bitrate(8_000_000),
+        }),
+    };
+    logic_tx_b
+        .send(LogicMessage::StreamRequestResponse(response))
+        .await
+        .unwrap();
+
+    let outgoing = peer_b.recv_outgoing_skip_ping("logic").await;
+    let data = match outgoing {
+        Some(ChannelControl::Send(data)) => data,
+        _ => panic!("Expected Send"),
+    };
+
+    peer_a.send_to_channel("logic", data).await;
+
+    let received = recv_logic_message_skip_pong(&mut logic_rx_a)
+        .await
+        .expect("no response");
+
+    match received {
+        LogicMessage::StreamRequestResponse(StreamRequestResponse::Accept { mode, .. }) => {
+            assert_eq!(mode.width, 1920);
+            assert_eq!(mode.height, 1080);
+            assert_eq!(mode.refresh_rate, 60);
+        }
+        _ => panic!("Expected StreamRequestResponse::Accept"),
+    }
 }
