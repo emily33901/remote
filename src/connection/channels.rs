@@ -338,7 +338,6 @@ pub async fn logic_channel(
         let weak_control_tx = control_tx.downgrade();
         async move {
             let mut ticker = tokio::time::interval(std::time::Duration::from_secs(10));
-            ticker.tick().await;
             loop {
                 ticker.tick().await;
                 if let Some(tx) = weak_control_tx.upgrade() {

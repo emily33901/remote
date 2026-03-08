@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use anyhow::Result;
 use async_trait::async_trait;
 use rtc::{ChannelControl, ChannelEvent, ChannelOptions, PeerConnection};
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{mpsc, Mutex};
+
+use crate::protocol::LogicMessage;
 
 pub struct MockPeerConnection {
     channels: Mutex<HashMap<String, MockChannel>>,
@@ -23,7 +25,7 @@ impl MockPeerConnection {
 
     pub async fn send_to_channel(&self, label: &str, data: Vec<u8>) {
         let channels = self.channels.lock().await;
-        let ch = channels.get(label).expect("channel {label} does not exist");
+        let ch = channels.get(label).unwrap_or_else(|| panic!("channel {label} does not exist"));
         ch.incoming_tx
             .send(ChannelEvent::Message(data))
             .await
@@ -51,6 +53,30 @@ impl MockPeerConnection {
         } else {
             None
         }
+    }
+
+    pub async fn recv_outgoing_skip_ping(&self, label: &str) -> Option<ChannelControl> {
+        loop {
+            let outgoing = self.recv_outgoing(label).await?;
+            if let ChannelControl::Send(data) = &outgoing {
+                if let Ok(LogicMessage::Ping) = bincode::deserialize(data) {
+                    continue;
+                }
+            }
+            return Some(outgoing);
+        }
+    }
+}
+
+pub async fn recv_logic_message_skip_pong(
+    rx: &mut mpsc::Receiver<LogicMessage>,
+) -> Option<LogicMessage> {
+    loop {
+        let msg = rx.recv().await?;
+        if matches!(msg, LogicMessage::Pong) {
+            continue;
+        }
+        return Some(msg);
     }
 }
 

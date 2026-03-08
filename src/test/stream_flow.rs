@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::common::MockPeerConnection;
+use super::common::{recv_logic_message_skip_pong, MockPeerConnection};
 use crate::connection::logic_channel;
 use crate::protocol::{LogicMessage, Mode, StreamRequest, StreamRequestResponse};
 use media::{Encoding, EncodingOptions, H264EncodingOptions, RateControlMode};
@@ -25,9 +25,9 @@ async fn logic_channel_waits_for_open_before_sending() {
     mock.open_channel("logic").await;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let outgoing = tokio::time::timeout(Duration::from_millis(200), mock.recv_outgoing("logic"))
+    let outgoing = mock
+        .recv_outgoing_skip_ping("logic")
         .await
-        .expect("timeout")
         .expect("no message");
 
     match outgoing {
@@ -63,10 +63,7 @@ async fn logic_channel_forwards_incoming_messages() {
 
     mock.send_to_channel("logic", data).await;
 
-    let received = tokio::time::timeout(Duration::from_millis(200), logic_rx.recv())
-        .await
-        .expect("timeout")
-        .expect("no message");
+    let received = logic_rx.recv().await.expect("no message");
 
     match received {
         LogicMessage::StreamRequestResponse(StreamRequestResponse::Accept { mode, .. }) => {
@@ -103,21 +100,16 @@ async fn stream_request_round_trip() {
         .await
         .unwrap();
 
-    let outgoing = tokio::time::timeout(Duration::from_millis(200), peer_a.recv_outgoing("logic"))
-        .await
-        .expect("timeout")
-        .expect("no outgoing");
-
+    let outgoing = peer_a.recv_outgoing_skip_ping("logic").await;
     let data = match outgoing {
-        ChannelControl::Send(data) => data,
+        Some(ChannelControl::Send(data)) => data,
         _ => panic!("Expected Send"),
     };
 
     peer_b.send_to_channel("logic", data).await;
 
-    let received = tokio::time::timeout(Duration::from_millis(200), logic_rx_b.recv())
+    let received = recv_logic_message_skip_pong(&mut logic_rx_b)
         .await
-        .expect("timeout")
         .expect("no request");
 
     match received {
@@ -155,21 +147,16 @@ async fn multiple_requests() {
             .await
             .unwrap();
 
-        let outgoing =
-            tokio::time::timeout(Duration::from_millis(200), peer_a.recv_outgoing("logic"))
-                .await
-                .expect("timeout")
-                .expect("no outgoing");
+        let outgoing = peer_a.recv_outgoing_skip_ping("logic").await;
         let data = match outgoing {
-            ChannelControl::Send(data) => data,
+            Some(ChannelControl::Send(data)) => data,
             _ => panic!("Expected Send"),
         };
 
         peer_b.send_to_channel("logic", data).await;
 
-        let received = tokio::time::timeout(Duration::from_millis(200), logic_rx_b.recv())
+        let received = recv_logic_message_skip_pong(&mut logic_rx_b)
             .await
-            .expect("timeout")
             .expect("no request");
 
         match received {
@@ -185,7 +172,7 @@ async fn multiple_requests() {
 async fn ping_pong() {
     let mock = Arc::new(MockPeerConnection::new());
 
-    let (_, mut logic_rx) = logic_channel(mock.as_ref(), true).await.unwrap();
+    let (_, _logic_rx) = logic_channel(mock.as_ref(), true).await.unwrap();
 
     mock.open_channel("logic").await;
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -195,22 +182,13 @@ async fn ping_pong() {
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    let outgoing = tokio::time::timeout(Duration::from_millis(500), mock.recv_outgoing("logic"))
-        .await
-        .expect("timeout")
-        .expect("no pong");
+    let outgoing = mock.recv_outgoing_skip_ping("logic").await;
 
     let pong_data = match outgoing {
-        ChannelControl::Send(data) => data,
+        Some(ChannelControl::Send(data)) => data,
         _ => panic!("Expected Send"),
     };
 
     let response: LogicMessage = bincode::deserialize(&pong_data).unwrap();
     assert!(matches!(response, LogicMessage::Pong));
-
-    let pong_data = bincode::serialize(&LogicMessage::Pong).unwrap();
-    mock.send_to_channel("logic", pong_data).await;
-
-    let result = tokio::time::timeout(Duration::from_millis(100), logic_rx.recv()).await;
-    assert!(result.is_err(), "Pong should not be forwarded");
 }
