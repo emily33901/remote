@@ -1,6 +1,6 @@
 mod channels;
 
-pub use channels::*;
+pub use channels::{audio_channel, logic_channel, video_channel};
 
 use crate::protocol::LogicMessage;
 use crate::types::PeerId;

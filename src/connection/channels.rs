@@ -304,7 +304,10 @@ pub async fn logic_channel(
         let open_notify = open_notify.clone();
         async move {
             tracing::info!("logic_channel: sender waiting for channel to open");
-            if !is_open.load(Ordering::SeqCst) {
+            loop {
+                if is_open.load(Ordering::SeqCst) {
+                    break;
+                }
                 open_notify.notified().await;
             }
             tracing::info!("logic_channel: sender started");
