@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tracing::Instrument;
 
-use crate::protocol::LogicMessage;
 use crate::ARBITRARY_CHANNEL_LIMIT;
+use crate::protocol::LogicMessage;
 
 const DEFAULT_VIDEO_CHUNK_SIZE: usize = 16 * 1024;
 const VIDEO_FRAME_TTL: Duration = Duration::from_millis(100);
@@ -103,7 +103,11 @@ async fn chunk<T: Serialize + Send + 'static>(
                         };
 
                         let total = ((encoded.len()) / chunk_size)
-                            + if encoded.len() % chunk_size == 0 { 0 } else { 1 };
+                            + if encoded.len() % chunk_size == 0 {
+                                0
+                            } else {
+                                1
+                            };
 
                         if total == 0 {
                             continue;
@@ -142,8 +146,10 @@ async fn chunk<T: Serialize + Send + 'static>(
     Ok((control_tx, event_rx))
 }
 
-async fn assembly<T: for<'de> Deserialize<'de> + Send + 'static>(
-) -> Result<(mpsc::Sender<AssemblyControl>, mpsc::Receiver<AssemblyEvent<T>>)> {
+async fn assembly<T: for<'de> Deserialize<'de> + Send + 'static>() -> Result<(
+    mpsc::Sender<AssemblyControl>,
+    mpsc::Receiver<AssemblyEvent<T>>,
+)> {
     let (control_tx, mut control_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
     let (event_tx, event_rx) = mpsc::channel(ARBITRARY_CHANNEL_LIMIT);
 
@@ -254,9 +260,9 @@ pub async fn logic_channel(
     let open_notify = Arc::new(tokio::sync::Notify::new());
 
     tokio::spawn({
-        let weak_control_tx = control_tx.downgrade();
         let is_open = is_open.clone();
         let open_notify = open_notify.clone();
+        let tx = tx.clone();
         async move {
             while let Some(event) = rx.recv().await {
                 match event {
@@ -279,8 +285,9 @@ pub async fn logic_channel(
 
                         match message {
                             LogicMessage::Ping => {
-                                if let Some(tx) = weak_control_tx.upgrade() {
-                                    let _ = tx.send(LogicMessage::Pong).await;
+                                let pong = LogicMessage::Pong;
+                                if let Ok(encoded) = bincode::serialize(&pong) {
+                                    let _ = tx.send(ChannelControl::Send(encoded)).await;
                                 }
                             }
                             LogicMessage::Pong => {}
@@ -331,6 +338,7 @@ pub async fn logic_channel(
         let weak_control_tx = control_tx.downgrade();
         async move {
             let mut ticker = tokio::time::interval(std::time::Duration::from_secs(10));
+            ticker.tick().await;
             loop {
                 ticker.tick().await;
                 if let Some(tx) = weak_control_tx.upgrade() {
@@ -430,13 +438,11 @@ pub async fn video_channel(
         async move {
             while let Some(event) = assembly_rx.recv().await {
                 match event {
-                    AssemblyEvent::Whole(message) => {
-                        match message {
-                            VideoMessage::Video(video) => {
-                                let _ = event_tx.send(VideoEvent::Video(video)).await;
-                            }
+                    AssemblyEvent::Whole(message) => match message {
+                        VideoMessage::Video(video) => {
+                            let _ = event_tx.send(VideoEvent::Video(video)).await;
                         }
-                    }
+                    },
                 }
             }
 

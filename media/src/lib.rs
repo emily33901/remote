@@ -2,15 +2,15 @@ use encoder::FrameIsKeyframe;
 use serde::{Deserialize, Serialize};
 pub use statistics::Statistics;
 
-pub mod types;
-pub mod traits;
-pub mod platform;
 pub mod gpu;
 pub mod lifecycle;
 pub mod pipeline;
+pub mod platform;
+pub mod traits;
+pub mod types;
 
-pub use types::{Timestamp, VideoFrame, PixelFormat, FrameSize, CpuBuffer, EncodedPacket};
-pub use traits::{Capture, VideoEncoder, VideoDecoder};
+pub use traits::{Capture, VideoDecoder, VideoEncoder};
+pub use types::{CpuBuffer, EncodedPacket, FrameSize, PixelFormat, Timestamp, VideoFrame};
 
 #[cfg(target_os = "windows")]
 pub mod dx;

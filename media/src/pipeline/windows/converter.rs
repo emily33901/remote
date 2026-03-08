@@ -1,28 +1,28 @@
-use std::sync::Arc;
 use std::mem::ManuallyDrop;
+use std::sync::Arc;
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use windows::{
     core::Interface,
     Win32::{
         Foundation::RECT,
         Graphics::Direct3D11::{
-            ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
-            ID3D11VideoContext, ID3D11VideoDevice, ID3D11VideoProcessor,
-            ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView,
-            D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CAPS,
-            D3D11_VIDEO_PROCESSOR_CONTENT_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC,
-            D3D11_VIDEO_PROCESSOR_OUTPUT_RATE_NORMAL, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC,
-            D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VIDEO_USAGE_PLAYBACK_NORMAL,
-            D3D11_VPIV_DIMENSION_TEXTURE2D, D3D11_VPOV_DIMENSION_TEXTURE2D,
+            ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, ID3D11VideoContext,
+            ID3D11VideoDevice, ID3D11VideoProcessor, ID3D11VideoProcessorInputView,
+            ID3D11VideoProcessorOutputView, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
+            D3D11_VIDEO_PROCESSOR_CAPS, D3D11_VIDEO_PROCESSOR_CONTENT_DESC,
+            D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_OUTPUT_RATE_NORMAL,
+            D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_STREAM,
+            D3D11_VIDEO_USAGE_PLAYBACK_NORMAL, D3D11_VPIV_DIMENSION_TEXTURE2D,
+            D3D11_VPOV_DIMENSION_TEXTURE2D,
         },
     },
 };
 
-use crate::lifecycle::{Stage, StageMeta, AtomicLifecycleState, LifecycleState};
-use crate::texture_pool::TexturePool;
 use crate::dx::{self, ID3D11Texture2DExt};
+use crate::lifecycle::{AtomicLifecycleState, LifecycleState, Stage, StageMeta};
+use crate::texture_pool::TexturePool;
 
 use crate::pipeline::traits::Converter;
 use crate::pipeline::types::{ConvertFrame, PixelFormat};
@@ -127,13 +127,15 @@ impl VideoProcessor {
         );
 
         let input_rect = RECT {
-            left: 0, top: 0,
+            left: 0,
+            top: 0,
             right: input_width as i32,
             bottom: input_height as i32,
         };
 
         let output_rect = RECT {
-            left: 0, top: 0,
+            left: 0,
+            top: 0,
             right: output_width as i32,
             bottom: output_height as i32,
         };
@@ -142,9 +144,9 @@ impl VideoProcessor {
         video_context.VideoProcessorSetStreamDestRect(&processor, 0, true, Some(&output_rect));
         video_context.VideoProcessorSetOutputTargetRect(&processor, true, Some(&output_rect));
 
-        let input_texture = dx::TextureBuilder::new(
-            device, input_width, input_height, input_format.into(),
-        ).build()?;
+        let input_texture =
+            dx::TextureBuilder::new(device, input_width, input_height, input_format.into())
+                .build()?;
 
         let mut input_view_desc = D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC::default();
         input_view_desc.FourCC = 0;
@@ -152,19 +154,26 @@ impl VideoProcessor {
 
         let mut input_view: Option<ID3D11VideoProcessorInputView> = None;
         video_device.CreateVideoProcessorInputView(
-            &input_texture, &enumerator, &input_view_desc, Some(&mut input_view),
+            &input_texture,
+            &enumerator,
+            &input_view_desc,
+            Some(&mut input_view),
         )?;
 
-        let output_texture = dx::TextureBuilder::new(
-            device, output_width, output_height, output_format.into(),
-        ).bind_render_target().build()?;
+        let output_texture =
+            dx::TextureBuilder::new(device, output_width, output_height, output_format.into())
+                .bind_render_target()
+                .build()?;
 
         let mut output_view_desc = D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC::default();
         output_view_desc.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
 
         let mut output_view: Option<ID3D11VideoProcessorOutputView> = None;
         video_device.CreateVideoProcessorOutputView(
-            &output_texture, &enumerator, &output_view_desc, Some(&mut output_view),
+            &output_texture,
+            &enumerator,
+            &output_view_desc,
+            Some(&mut output_view),
         )?;
 
         Ok(Self {
@@ -227,28 +236,38 @@ impl DxvaConverter {
     }
 
     fn maybe_rebuild_processor(&mut self, input_width: u32, input_height: u32) -> Result<()> {
-        let needs_rebuild = self.processor.as_ref()
+        let needs_rebuild = self
+            .processor
+            .as_ref()
             .map(|p| p.input_width != input_width || p.input_height != input_height)
             .unwrap_or(true);
 
         if needs_rebuild {
-            let device = self.device.as_ref()
+            let device = self
+                .device
+                .as_ref()
                 .ok_or_else(|| anyhow!("Device not initialized"))?;
-            let context = self.context.as_ref()
+            let context = self
+                .context
+                .as_ref()
                 .ok_or_else(|| anyhow!("Context not initialized"))?;
 
             self.processor = Some(unsafe {
                 VideoProcessor::create(
-                    device, context,
-                    input_width, input_height,
-                    self.config.output_width, self.config.output_height,
+                    device,
+                    context,
+                    input_width,
+                    input_height,
+                    self.config.output_width,
+                    self.config.output_height,
                     self.config.input_format.into(),
                     self.config.output_format.into(),
                 )?
             });
 
             tracing::debug!(
-                input_width, input_height,
+                input_width,
+                input_height,
                 output_width = self.config.output_width,
                 output_height = self.config.output_height,
                 "Rebuilt video processor"
@@ -326,9 +345,13 @@ impl Stage for DxvaConverter {
         let desc = input.texture.desc();
         self.maybe_rebuild_processor(desc.Width, desc.Height)?;
 
-        let processor = self.processor.as_ref()
+        let processor = self
+            .processor
+            .as_ref()
             .ok_or_else(|| anyhow!("Video processor not initialized"))?;
-        let texture_pool = self.texture_pool.as_ref()
+        let texture_pool = self
+            .texture_pool
+            .as_ref()
             .ok_or_else(|| anyhow!("Texture pool not initialized"))?;
 
         let output = texture_pool.acquire();

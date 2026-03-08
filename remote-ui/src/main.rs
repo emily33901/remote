@@ -83,13 +83,14 @@ impl RemoteAppUI {
     fn poll_events(&mut self) {
         while let Ok(event) = self.event_rx.try_recv() {
             match event {
-                AppEvent::PeerCreated { local_id, command_tx } => {
+                AppEvent::PeerCreated {
+                    local_id,
+                    command_tx,
+                } => {
                     tracing::info!("Peer created with id: {}", local_id);
                     self.state.add_local_peer(local_id.clone());
-                    self.peer_handles.insert(
-                        local_id.clone(),
-                        PeerHandle { command_tx },
-                    );
+                    self.peer_handles
+                        .insert(local_id.clone(), PeerHandle { command_tx });
                     if self.selected_peer.is_none() {
                         self.selected_peer = Some(local_id);
                     }
@@ -112,15 +113,36 @@ impl RemoteAppUI {
                 AppEvent::PeerDisconnected { local_id, peer_id } => {
                     self.state.apply_peer_disconnected(&local_id, &peer_id);
                 }
-                AppEvent::ConnectionRequested { local_id, peer_id, connection_id } => {
-                    self.state.apply_connection_requested(&local_id, &peer_id, &connection_id);
+                AppEvent::ConnectionRequested {
+                    local_id,
+                    peer_id,
+                    connection_id,
+                } => {
+                    self.state
+                        .apply_connection_requested(&local_id, &peer_id, &connection_id);
                 }
-                AppEvent::StreamRequestReceived { local_id, peer_id, request, request_id } => {
-                    tracing::info!("StreamRequestReceived: local_id={}, peer_id={}, request_id={}", local_id, peer_id, request_id);
-                    self.state.apply_stream_request_received(&local_id, &peer_id, request_id, request);
+                AppEvent::StreamRequestReceived {
+                    local_id,
+                    peer_id,
+                    request,
+                    request_id,
+                } => {
+                    tracing::info!(
+                        "StreamRequestReceived: local_id={}, peer_id={}, request_id={}",
+                        local_id,
+                        peer_id,
+                        request_id
+                    );
+                    self.state
+                        .apply_stream_request_received(&local_id, &peer_id, request_id, request);
                 }
-                AppEvent::StreamResponseReceived { local_id, peer_id, response } => {
-                    self.state.apply_stream_response_received(&local_id, &peer_id, &response);
+                AppEvent::StreamResponseReceived {
+                    local_id,
+                    peer_id,
+                    response,
+                } => {
+                    self.state
+                        .apply_stream_response_received(&local_id, &peer_id, &response);
                 }
                 AppEvent::PeerError { local_id: _, error } => {
                     self.state.last_error = Some(error);
@@ -173,7 +195,7 @@ impl eframe::App for RemoteAppUI {
             if !self.peer_handles.is_empty() {
                 ui.separator();
                 self.show_peer_selector(ui);
-                
+
                 if let Some(selected) = self.selected_peer.clone() {
                     self.show_peer_ui(ui, &selected);
                 }
@@ -189,7 +211,10 @@ impl RemoteAppUI {
             let peer_ids: Vec<PeerId> = self.peer_handles.keys().cloned().collect();
             for peer_id in peer_ids {
                 let is_selected = self.selected_peer.as_ref() == Some(&peer_id);
-                if ui.selectable_label(is_selected, peer_id.to_string()).clicked() {
+                if ui
+                    .selectable_label(is_selected, peer_id.to_string())
+                    .clicked()
+                {
                     self.selected_peer = Some(peer_id);
                 }
             }
@@ -227,7 +252,12 @@ impl RemoteAppUI {
                     ui.horizontal(|ui| {
                         ui.label(format!("{}", peer_id));
                         if ui.button("Disconnect").clicked() {
-                            self.send_command(&local_id_clone, AppCommand::Disconnect { peer_id: peer_id.clone() });
+                            self.send_command(
+                                &local_id_clone,
+                                AppCommand::Disconnect {
+                                    peer_id: peer_id.clone(),
+                                },
+                            );
                         }
                         if ui.button("Request Stream").clicked() {
                             self.send_command(
@@ -237,7 +267,8 @@ impl RemoteAppUI {
                                     request: remote::StreamRequest::default(),
                                 },
                             );
-                            self.state.add_outgoing_stream_request(&local_id_clone, peer_id);
+                            self.state
+                                .add_outgoing_stream_request(&local_id_clone, peer_id);
                         }
                     });
                 }
@@ -251,10 +282,13 @@ impl RemoteAppUI {
                     ui.horizontal(|ui| {
                         ui.label(format!("{} wants to connect", pending.peer_id));
                         if ui.button("Accept").clicked() {
-                            self.send_command(&local_id_clone, AppCommand::AcceptConnection {
-                                peer_id: pending.peer_id,
-                                connection_id: pending.connection_id,
-                            });
+                            self.send_command(
+                                &local_id_clone,
+                                AppCommand::AcceptConnection {
+                                    peer_id: pending.peer_id,
+                                    connection_id: pending.connection_id,
+                                },
+                            );
                         }
                     });
                 }
@@ -283,13 +317,16 @@ impl RemoteAppUI {
                                             encoding: media::Encoding::H264,
                                             encoding_options: media::EncodingOptions::H264(
                                                 media::H264EncodingOptions {
-                                                    rate_control: media::RateControlMode::Bitrate(8_000_000),
-                                                }
+                                                    rate_control: media::RateControlMode::Bitrate(
+                                                        8_000_000,
+                                                    ),
+                                                },
                                             ),
                                         },
                                     },
                                 );
-                                self.state.remove_stream_request(&local_id_clone, req.request_id);
+                                self.state
+                                    .remove_stream_request(&local_id_clone, req.request_id);
                             }
                             if ui.button("Reject").clicked() {
                                 self.send_command(
@@ -299,7 +336,8 @@ impl RemoteAppUI {
                                         response: StreamRequestResponse::Reject,
                                     },
                                 );
-                                self.state.remove_stream_request(&local_id_clone, req.request_id);
+                                self.state
+                                    .remove_stream_request(&local_id_clone, req.request_id);
                             }
                         });
                         ui.separator();

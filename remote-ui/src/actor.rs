@@ -1,11 +1,9 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use remote::{
-    Peer, PeerConfig, PeerEvent, PeerId, StreamRequest, StreamRequestResponse,
-};
-use tokio::sync::{mpsc, oneshot, Mutex};
+use remote::{Peer, PeerConfig, PeerEvent, PeerId, StreamRequest, StreamRequestResponse};
+use tokio::sync::{Mutex, mpsc, oneshot};
 
 use crate::event::{AppCommand, AppEvent};
 
@@ -95,7 +93,10 @@ async fn handle_peer_event(
     pending_responses: Arc<Mutex<HashMap<u64, StreamResponseHandle>>>,
 ) -> Result<(), mpsc::error::SendError<AppEvent>> {
     match event {
-        PeerEvent::ConnectionRequested { peer_id, connection_id } => {
+        PeerEvent::ConnectionRequested {
+            peer_id,
+            connection_id,
+        } => {
             event_tx
                 .send(AppEvent::ConnectionRequested {
                     local_id: local_id.clone(),
@@ -127,11 +128,15 @@ async fn handle_peer_event(
             response_tx,
         } => {
             let request_id = NEXT_REQUEST_ID.fetch_add(1, Ordering::SeqCst);
-            tracing::info!("IncomingStream from {} with request_id={}", peer_id, request_id);
-            pending_responses.lock().await.insert(
-                request_id,
-                StreamResponseHandle { response_tx },
+            tracing::info!(
+                "IncomingStream from {} with request_id={}",
+                peer_id,
+                request_id
             );
+            pending_responses
+                .lock()
+                .await
+                .insert(request_id, StreamResponseHandle { response_tx });
             event_tx
                 .send(AppEvent::StreamRequestReceived {
                     local_id: local_id.clone(),
@@ -171,32 +176,55 @@ async fn handle_command(
         AppCommand::ConnectToPeer { peer_id } => {
             let peer_id_str = peer_id.to_string();
             if let Err(e) = peer.connect(peer_id).await {
-                tracing::error!("Peer {} failed to connect to {}: {}", local_id, peer_id_str, e);
+                tracing::error!(
+                    "Peer {} failed to connect to {}: {}",
+                    local_id,
+                    peer_id_str,
+                    e
+                );
             }
         }
 
-        AppCommand::AcceptConnection { peer_id, connection_id } => {
+        AppCommand::AcceptConnection {
+            peer_id,
+            connection_id,
+        } => {
             if let Err(e) = peer.accept_connection(connection_id).await {
                 tracing::error!(
                     "Peer {} failed to accept connection from {}: {}",
-                    local_id, peer_id, e
+                    local_id,
+                    peer_id,
+                    e
                 );
             }
         }
 
         AppCommand::Disconnect { peer_id } => {
             if let Err(e) = peer.disconnect(&peer_id).await {
-                tracing::error!("Peer {} failed to disconnect from {}: {}", local_id, peer_id, e);
+                tracing::error!(
+                    "Peer {} failed to disconnect from {}: {}",
+                    local_id,
+                    peer_id,
+                    e
+                );
             }
         }
 
         AppCommand::RequestStream { peer_id, request } => {
             if let Err(e) = peer.request_stream(&peer_id, request).await {
-                tracing::error!("Peer {} failed to request stream from {}: {}", local_id, peer_id, e);
+                tracing::error!(
+                    "Peer {} failed to request stream from {}: {}",
+                    local_id,
+                    peer_id,
+                    e
+                );
             }
         }
 
-        AppCommand::RespondToStreamRequest { request_id, response } => {
+        AppCommand::RespondToStreamRequest {
+            request_id,
+            response,
+        } => {
             let Some(handle) = pending_responses.lock().await.remove(&request_id) else {
                 tracing::warn!("No pending stream request with id {}", request_id);
                 return;

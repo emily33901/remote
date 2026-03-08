@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
-use crate::lifecycle::{Stage, StageMeta, AtomicLifecycleState, LifecycleState};
-use crate::{Encoding, decoder};
+use crate::lifecycle::{AtomicLifecycleState, LifecycleState, Stage, StageMeta};
+use crate::{decoder, Encoding};
 
 use crate::pipeline::traits::Decoder;
 use crate::pipeline::types::{DecodeFrame, EncodedData};
@@ -60,11 +60,7 @@ impl Stage for MediaFoundationDecoder {
         }
 
         let dec = decoder::Decoder::MediaFoundation;
-        let (control_tx, event_rx) = dec.run(
-            self.config.width,
-            self.config.height,
-            60,
-        ).await?;
+        let (control_tx, event_rx) = dec.run(self.config.width, self.config.height, 60).await?;
 
         self.control_tx = Some(control_tx);
         self.event_rx = Some(event_rx);
@@ -92,12 +88,18 @@ impl Stage for MediaFoundationDecoder {
     }
 
     async fn process(&mut self, input: Self::Input) -> Result<Option<Self::Output>> {
-        let control_tx = self.control_tx.as_ref()
+        let control_tx = self
+            .control_tx
+            .as_ref()
             .ok_or_else(|| anyhow!("Decoder not initialized"))?;
 
-        control_tx.send(decoder::DecoderControl::Data(input.buffer)).await?;
+        control_tx
+            .send(decoder::DecoderControl::Data(input.buffer))
+            .await?;
 
-        let event_rx = self.event_rx.as_mut()
+        let event_rx = self
+            .event_rx
+            .as_mut()
             .ok_or_else(|| anyhow!("Decoder not initialized"))?;
 
         match event_rx.try_recv() {
@@ -167,11 +169,7 @@ impl Stage for OpenH264Decoder {
 
     async fn on_start(&mut self) -> Result<()> {
         let dec = decoder::Decoder::OpenH264;
-        let (control_tx, event_rx) = dec.run(
-            self.config.width,
-            self.config.height,
-            60,
-        ).await?;
+        let (control_tx, event_rx) = dec.run(self.config.width, self.config.height, 60).await?;
 
         self.control_tx = Some(control_tx);
         self.event_rx = Some(event_rx);
@@ -197,12 +195,18 @@ impl Stage for OpenH264Decoder {
     }
 
     async fn process(&mut self, input: Self::Input) -> Result<Option<Self::Output>> {
-        let control_tx = self.control_tx.as_ref()
+        let control_tx = self
+            .control_tx
+            .as_ref()
             .ok_or_else(|| anyhow!("Decoder not initialized"))?;
 
-        control_tx.send(decoder::DecoderControl::Data(input.buffer)).await?;
+        control_tx
+            .send(decoder::DecoderControl::Data(input.buffer))
+            .await?;
 
-        let event_rx = self.event_rx.as_mut()
+        let event_rx = self
+            .event_rx
+            .as_mut()
             .ok_or_else(|| anyhow!("Decoder not initialized"))?;
 
         match event_rx.try_recv() {

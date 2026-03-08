@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 
-use crate::lifecycle::{Stage, StageMeta, AtomicLifecycleState, LifecycleState};
-use crate::{Encoding, RateControlMode, encoder};
+use crate::lifecycle::{AtomicLifecycleState, LifecycleState, Stage, StageMeta};
+use crate::{encoder, Encoding, RateControlMode};
 
 use crate::pipeline::traits::Encoder;
 use crate::pipeline::types::{EncodeFrame, EncodedData};
@@ -62,15 +62,17 @@ impl Stage for MediaFoundationEncoder {
         }
 
         let enc = encoder::Encoder::MediaFoundation;
-        let (control_tx, event_rx) = enc.run(
-            self.config.width,
-            self.config.height,
-            self.config.frame_rate,
-            crate::Encoding::H264,
-            crate::EncodingOptions::H264(crate::H264EncodingOptions {
-                rate_control: self.config.rate_control,
-            }),
-        ).await?;
+        let (control_tx, event_rx) = enc
+            .run(
+                self.config.width,
+                self.config.height,
+                self.config.frame_rate,
+                crate::Encoding::H264,
+                crate::EncodingOptions::H264(crate::H264EncodingOptions {
+                    rate_control: self.config.rate_control,
+                }),
+            )
+            .await?;
 
         self.control_tx = Some(control_tx);
         self.event_rx = Some(event_rx);
@@ -99,22 +101,26 @@ impl Stage for MediaFoundationEncoder {
     }
 
     async fn process(&mut self, input: Self::Input) -> Result<Option<Self::Output>> {
-        let control_tx = self.control_tx.as_ref()
+        let control_tx = self
+            .control_tx
+            .as_ref()
             .ok_or_else(|| anyhow!("Encoder not initialized"))?;
 
-        control_tx.send(encoder::EncoderControl::Frame(
-            input.texture,
-            input.timestamp,
-            input.statistics,
-        )).await?;
+        control_tx
+            .send(encoder::EncoderControl::Frame(
+                input.texture,
+                input.timestamp,
+                input.statistics,
+            ))
+            .await?;
 
-        let event_rx = self.event_rx.as_mut()
+        let event_rx = self
+            .event_rx
+            .as_mut()
             .ok_or_else(|| anyhow!("Encoder not initialized"))?;
 
         match event_rx.try_recv() {
-            Ok(encoder::EncoderEvent::Data(buffer)) => {
-                Ok(Some(EncodedData { buffer }))
-            }
+            Ok(encoder::EncoderEvent::Data(buffer)) => Ok(Some(EncodedData { buffer })),
             Err(mpsc::error::TryRecvError::Empty) => Ok(None),
             Err(mpsc::error::TryRecvError::Disconnected) => {
                 Err(anyhow!("Encoder channel disconnected"))
@@ -128,11 +134,9 @@ impl Encoder for MediaFoundationEncoder {
         self.config.encoding
     }
 
-    fn set_bitrate(&mut self, _bitrate: u32) {
-    }
+    fn set_bitrate(&mut self, _bitrate: u32) {}
 
-    fn request_keyframe(&mut self) {
-    }
+    fn request_keyframe(&mut self) {}
 }
 
 #[derive(Debug, Clone)]
@@ -182,15 +186,17 @@ impl Stage for OpenH264Encoder {
 
     async fn on_start(&mut self) -> Result<()> {
         let enc = encoder::Encoder::OpenH264;
-        let (control_tx, event_rx) = enc.run(
-            self.config.width,
-            self.config.height,
-            self.config.frame_rate,
-            crate::Encoding::H264,
-            crate::EncodingOptions::H264(crate::H264EncodingOptions {
-                rate_control: RateControlMode::Bitrate(self.config.bitrate),
-            }),
-        ).await?;
+        let (control_tx, event_rx) = enc
+            .run(
+                self.config.width,
+                self.config.height,
+                self.config.frame_rate,
+                crate::Encoding::H264,
+                crate::EncodingOptions::H264(crate::H264EncodingOptions {
+                    rate_control: RateControlMode::Bitrate(self.config.bitrate),
+                }),
+            )
+            .await?;
 
         self.control_tx = Some(control_tx);
         self.event_rx = Some(event_rx);
@@ -218,22 +224,26 @@ impl Stage for OpenH264Encoder {
     }
 
     async fn process(&mut self, input: Self::Input) -> Result<Option<Self::Output>> {
-        let control_tx = self.control_tx.as_ref()
+        let control_tx = self
+            .control_tx
+            .as_ref()
             .ok_or_else(|| anyhow!("Encoder not initialized"))?;
 
-        control_tx.send(encoder::EncoderControl::Frame(
-            input.texture,
-            input.timestamp,
-            input.statistics,
-        )).await?;
+        control_tx
+            .send(encoder::EncoderControl::Frame(
+                input.texture,
+                input.timestamp,
+                input.statistics,
+            ))
+            .await?;
 
-        let event_rx = self.event_rx.as_mut()
+        let event_rx = self
+            .event_rx
+            .as_mut()
             .ok_or_else(|| anyhow!("Encoder not initialized"))?;
 
         match event_rx.try_recv() {
-            Ok(encoder::EncoderEvent::Data(buffer)) => {
-                Ok(Some(EncodedData { buffer }))
-            }
+            Ok(encoder::EncoderEvent::Data(buffer)) => Ok(Some(EncodedData { buffer })),
             Err(mpsc::error::TryRecvError::Empty) => Ok(None),
             Err(mpsc::error::TryRecvError::Disconnected) => {
                 Err(anyhow!("Encoder channel disconnected"))
@@ -247,10 +257,7 @@ impl Encoder for OpenH264Encoder {
         Encoding::H264
     }
 
-    fn set_bitrate(&mut self, _bitrate: u32) {
-    }
+    fn set_bitrate(&mut self, _bitrate: u32) {}
 
-    fn request_keyframe(&mut self) {
-    }
+    fn request_keyframe(&mut self) {}
 }
-

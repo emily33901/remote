@@ -2,8 +2,8 @@ use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
+use crate::lifecycle::{run_stage, AtomicLifecycleState, StageControlHandle, StageEvent};
 use crate::{Encoding, RateControlMode};
-use crate::lifecycle::{run_stage, StageEvent, StageControlHandle, AtomicLifecycleState};
 
 use super::types::*;
 
@@ -53,11 +53,9 @@ impl Default for RecvPipelineConfig {
 
 #[cfg(target_os = "windows")]
 use super::windows::{
-    DesktopDuplicationCapture, DesktopDuplicationConfig,
-    DxvaConverter, DxvaConverterConfig,
+    D3D11Presenter, D3D11PresenterConfig, DesktopDuplicationCapture, DesktopDuplicationConfig,
+    DxvaConverter, DxvaConverterConfig, MediaFoundationDecoder, MediaFoundationDecoderConfig,
     MediaFoundationEncoder, MediaFoundationEncoderConfig,
-    MediaFoundationDecoder, MediaFoundationDecoderConfig,
-    D3D11Presenter, D3D11PresenterConfig,
 };
 
 #[cfg(target_os = "windows")]

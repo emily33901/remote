@@ -174,12 +174,42 @@ impl NV12Renderer {
         };
 
         let vertices: [Vertex; 6] = [
-            Vertex { x: -1.0, y: -1.0, u: 0.0, v: 1.0 },
-            Vertex { x: -1.0, y: 1.0, u: 0.0, v: 0.0 },
-            Vertex { x: 1.0, y: 1.0, u: 1.0, v: 0.0 },
-            Vertex { x: 1.0, y: -1.0, u: 1.0, v: 1.0 },
-            Vertex { x: -1.0, y: -1.0, u: 0.0, v: 1.0 },
-            Vertex { x: 1.0, y: 1.0, u: 1.0, v: 0.0 },
+            Vertex {
+                x: -1.0,
+                y: -1.0,
+                u: 0.0,
+                v: 1.0,
+            },
+            Vertex {
+                x: -1.0,
+                y: 1.0,
+                u: 0.0,
+                v: 0.0,
+            },
+            Vertex {
+                x: 1.0,
+                y: 1.0,
+                u: 1.0,
+                v: 0.0,
+            },
+            Vertex {
+                x: 1.0,
+                y: -1.0,
+                u: 1.0,
+                v: 1.0,
+            },
+            Vertex {
+                x: -1.0,
+                y: -1.0,
+                u: 0.0,
+                v: 1.0,
+            },
+            Vertex {
+                x: 1.0,
+                y: 1.0,
+                u: 1.0,
+                v: 0.0,
+            },
         ];
 
         let vertex_buffer = unsafe {
@@ -224,7 +254,9 @@ impl NV12Renderer {
         }
 
         let holder = self.texture_holder.lock();
-        let holder = holder.as_ref().ok_or_else(|| anyhow!("Texture holder not initialized"))?;
+        let holder = holder
+            .as_ref()
+            .ok_or_else(|| anyhow!("Texture holder not initialized"))?;
 
         dx::copy_texture(&holder.texture, src_texture, None)?;
 
@@ -234,7 +266,10 @@ impl NV12Renderer {
             context.PSSetShader(&self.pixel_shader, None);
             context.PSSetShaderResources(
                 0,
-                Some(&[Some(holder.lum_view.clone()), Some(holder.chrom_view.clone())]),
+                Some(&[
+                    Some(holder.lum_view.clone()),
+                    Some(holder.chrom_view.clone()),
+                ]),
             );
             context.PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
 
@@ -411,21 +446,33 @@ impl Stage for D3D11Presenter {
         let src_texture: ID3D11Texture2D = (*input.texture).clone();
 
         let mut src_desc = Default::default();
-        unsafe { src_texture.GetDesc(&mut src_desc); }
+        unsafe {
+            src_texture.GetDesc(&mut src_desc);
+        }
 
         if src_desc.Width != self.current_width || src_desc.Height != self.current_height {
             self.resize_swapchain(src_desc.Width, src_desc.Height)?;
         }
 
-        let swapchain = self.swapchain.as_ref()
+        let swapchain = self
+            .swapchain
+            .as_ref()
             .ok_or_else(|| anyhow!("Swapchain not initialized"))?;
-        let context = self.context.as_ref()
+        let context = self
+            .context
+            .as_ref()
             .ok_or_else(|| anyhow!("Context not initialized"))?;
-        let render_target = self.render_target.as_ref()
+        let render_target = self
+            .render_target
+            .as_ref()
             .ok_or_else(|| anyhow!("Render target not initialized"))?;
-        let renderer = self.renderer.as_ref()
+        let renderer = self
+            .renderer
+            .as_ref()
             .ok_or_else(|| anyhow!("Renderer not initialized"))?;
-        let device = self.device.as_ref()
+        let device = self
+            .device
+            .as_ref()
             .ok_or_else(|| anyhow!("Device not initialized"))?;
 
         unsafe {

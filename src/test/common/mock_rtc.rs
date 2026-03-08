@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use async_trait::async_trait;
-use tokio::sync::{mpsc, Mutex};
-use rtc::{ChannelControl, ChannelEvent, ChannelOptions, PeerConnection};
 use anyhow::Result;
+use async_trait::async_trait;
+use rtc::{ChannelControl, ChannelEvent, ChannelOptions, PeerConnection};
+use tokio::sync::{Mutex, mpsc};
 
 pub struct MockPeerConnection {
     channels: Mutex<HashMap<String, MockChannel>>,
@@ -23,9 +23,11 @@ impl MockPeerConnection {
 
     pub async fn send_to_channel(&self, label: &str, data: Vec<u8>) {
         let channels = self.channels.lock().await;
-        if let Some(ch) = channels.get(label) {
-            let _ = ch.incoming_tx.send(ChannelEvent::Message(data)).await;
-        }
+        let ch = channels.get(label).expect("channel {label} does not exist");
+        ch.incoming_tx
+            .send(ChannelEvent::Message(data))
+            .await
+            .expect("failed to send");
     }
 
     pub async fn open_channel(&self, label: &str) {

@@ -1,11 +1,11 @@
-use std::sync::Arc;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use anyhow::Result;
 use tokio::sync::mpsc;
 
-use super::state::{LifecycleState, AtomicLifecycleState, LifecycleError};
-use super::stage::{Stage, StageControl, run_stage, RunningStage};
+use super::stage::{run_stage, RunningStage, Stage, StageControl};
+use super::state::{AtomicLifecycleState, LifecycleError, LifecycleState};
 
 pub type StageId = usize;
 
@@ -77,9 +77,7 @@ pub struct PipelineBuilder {
 
 impl PipelineBuilder {
     pub fn new() -> Self {
-        Self {
-            buffer_size: 1,
-        }
+        Self { buffer_size: 1 }
     }
 
     pub fn buffer_size(mut self, size: usize) -> Self {
@@ -126,21 +124,21 @@ impl Pipeline {
         self.state.load()
     }
 
-    pub async fn add_stage<S: Stage + 'static>(&mut self, stage: S) -> Result<(StageRef, RunningStage<S>)> {
+    pub async fn add_stage<S: Stage + 'static>(
+        &mut self,
+        stage: S,
+    ) -> Result<(StageRef, RunningStage<S>)> {
         let id = self.next_id;
         self.next_id += 1;
-        
+
         let name = stage.meta().name.clone();
         let state = Arc::new(AtomicLifecycleState::default());
-        
+
         self.stage_states.insert(id, state.clone());
-        
+
         let running = run_stage(stage, self.buffer_size).await?;
-        
-        Ok((
-            StageRef { id, name, state },
-            running,
-        ))
+
+        Ok((StageRef { id, name, state }, running))
     }
 
     pub fn connect(&mut self, from: &StageRef, to: &StageRef) {
@@ -168,28 +166,28 @@ impl Pipeline {
 
     pub async fn start(&self) -> Result<(), LifecycleError> {
         self.state.transition(LifecycleState::Starting)?;
-        
+
         self.state.transition(LifecycleState::Running)?;
         Ok(())
     }
 
     pub async fn stop(&self) -> Result<(), LifecycleError> {
         self.state.transition(LifecycleState::Stopping)?;
-        
+
         self.state.store(LifecycleState::Stopped);
         Ok(())
     }
 
     pub async fn pause(&self) -> Result<(), LifecycleError> {
         self.state.transition(LifecycleState::Pausing)?;
-        
+
         self.state.transition(LifecycleState::Paused)?;
         Ok(())
     }
 
     pub async fn resume(&self) -> Result<(), LifecycleError> {
         self.state.transition(LifecycleState::Resuming)?;
-        
+
         self.state.transition(LifecycleState::Running)?;
         Ok(())
     }

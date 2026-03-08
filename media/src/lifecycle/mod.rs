@@ -1,15 +1,14 @@
-mod state;
-mod stage;
 mod pipeline;
+mod stage;
 pub mod stages;
+mod state;
 
-pub use state::{LifecycleState, LifecycleError, AtomicLifecycleState};
-pub use stage::{
-    Stage, StageControl, StageEvent, StageMeta, StageError, 
-    RetryPolicy, ProcessResult, run_stage, RunningStage,
-    StageControlHandle, StageEventStream,
-};
 pub use pipeline::{Pipeline, PipelineBuilder, StageHandle, StageRef};
+pub use stage::{
+    run_stage, ProcessResult, RetryPolicy, RunningStage, Stage, StageControl, StageControlHandle,
+    StageError, StageEvent, StageEventStream, StageMeta,
+};
+pub use state::{AtomicLifecycleState, LifecycleError, LifecycleState};
 
 pub fn connect<O1, O2, F>(
     mut source: StageEventStream<O1>,

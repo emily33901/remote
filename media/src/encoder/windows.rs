@@ -1,6 +1,4 @@
-use std::{
-    time::{Instant, SystemTime},
-};
+use std::time::{Instant, SystemTime};
 
 use ::windows::{core::Interface, Win32::Media::MediaFoundation::*};
 use anyhow::{anyhow, Result};

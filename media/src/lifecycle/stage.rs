@@ -1,13 +1,13 @@
 use std::fmt::Debug;
-use std::time::Duration;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use tokio::sync::mpsc;
 use rand::Rng;
+use tokio::sync::mpsc;
 
-use super::state::{LifecycleState, AtomicLifecycleState, LifecycleError};
+use super::state::{AtomicLifecycleState, LifecycleError, LifecycleState};
 
 #[derive(Debug, Clone)]
 pub struct StageMeta {
@@ -26,8 +26,13 @@ impl StageMeta {
 
 #[derive(Debug, Clone)]
 pub enum StageError {
-    Transient { message: String, retry_after: Option<Duration> },
-    Fatal { message: String },
+    Transient {
+        message: String,
+        retry_after: Option<Duration>,
+    },
+    Fatal {
+        message: String,
+    },
 }
 
 impl StageError {
@@ -46,7 +51,9 @@ impl StageError {
     }
 
     pub fn fatal(message: impl Into<String>) -> Self {
-        Self::Fatal { message: message.into() }
+        Self::Fatal {
+            message: message.into(),
+        }
     }
 
     pub fn is_retryable(&self) -> bool {
@@ -64,7 +71,10 @@ impl StageError {
 impl std::fmt::Display for StageError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Transient { message, retry_after } => {
+            Self::Transient {
+                message,
+                retry_after,
+            } => {
                 if let Some(d) = retry_after {
                     write!(f, "Transient error: {} (retry after {:?})", message, d)
                 } else {
@@ -138,7 +148,7 @@ impl RetryPolicy {
     pub fn calculate_backoff(&self, attempt: u32) -> Duration {
         let multiplier = self.backoff_multiplier.powi(attempt as i32);
         let mut backoff = self.initial_backoff.mul_f32(multiplier);
-        
+
         if backoff > self.max_backoff {
             backoff = self.max_backoff;
         }
@@ -210,33 +220,33 @@ pub trait Stage: Send + Sync {
     type Output: Send + Sync + 'static;
 
     fn meta(&self) -> &StageMeta;
-    
+
     fn state(&self) -> LifecycleState {
         self.atomic_state().load()
     }
-    
+
     fn atomic_state(&self) -> Arc<AtomicLifecycleState>;
 
     async fn initialize(&mut self) -> Result<()>;
-    
+
     async fn process(&mut self, input: Self::Input) -> Result<Option<Self::Output>>;
-    
+
     async fn on_start(&mut self) -> Result<()> {
         Ok(())
     }
-    
+
     async fn on_stop(&mut self) -> Result<()> {
         Ok(())
     }
-    
+
     async fn on_pause(&mut self) -> Result<()> {
         Ok(())
     }
-    
+
     async fn on_resume(&mut self) -> Result<()> {
         Ok(())
     }
-    
+
     async fn on_flush(&mut self) -> Result<()> {
         Ok(())
     }
@@ -253,7 +263,7 @@ pub trait Stage: Send + Sync {
         let state = self.atomic_state();
         let name = self.meta().name.clone();
         state.transition(LifecycleState::Starting)?;
-        
+
         if let Err(e) = self.on_start().await {
             state.store(LifecycleState::Failed);
             return Err(LifecycleError::StageFailed {
@@ -261,7 +271,7 @@ pub trait Stage: Send + Sync {
                 message: e.to_string(),
             });
         }
-        
+
         state.transition(LifecycleState::Running)?;
         Ok(())
     }
@@ -270,7 +280,7 @@ pub trait Stage: Send + Sync {
         let state = self.atomic_state();
         let name = self.meta().name.clone();
         state.transition(LifecycleState::Stopping)?;
-        
+
         if let Err(e) = self.on_stop().await {
             state.store(LifecycleState::Failed);
             return Err(LifecycleError::StageFailed {
@@ -278,7 +288,7 @@ pub trait Stage: Send + Sync {
                 message: e.to_string(),
             });
         }
-        
+
         state.store(LifecycleState::Stopped);
         Ok(())
     }
@@ -287,7 +297,7 @@ pub trait Stage: Send + Sync {
         let state = self.atomic_state();
         let name = self.meta().name.clone();
         state.transition(LifecycleState::Pausing)?;
-        
+
         if let Err(e) = self.on_pause().await {
             state.store(LifecycleState::Failed);
             return Err(LifecycleError::StageFailed {
@@ -295,7 +305,7 @@ pub trait Stage: Send + Sync {
                 message: e.to_string(),
             });
         }
-        
+
         state.transition(LifecycleState::Paused)?;
         Ok(())
     }
@@ -304,7 +314,7 @@ pub trait Stage: Send + Sync {
         let state = self.atomic_state();
         let name = self.meta().name.clone();
         state.transition(LifecycleState::Resuming)?;
-        
+
         if let Err(e) = self.on_resume().await {
             state.store(LifecycleState::Failed);
             return Err(LifecycleError::StageFailed {
@@ -312,7 +322,7 @@ pub trait Stage: Send + Sync {
                 message: e.to_string(),
             });
         }
-        
+
         state.transition(LifecycleState::Running)?;
         Ok(())
     }
@@ -331,7 +341,7 @@ pub trait Stage: Send + Sync {
     async fn reset(&mut self) -> Result<(), LifecycleError> {
         let state = self.atomic_state();
         let name = self.meta().name.clone();
-        
+
         if !state.load().can_reset() {
             return Err(LifecycleError::InvalidTransition {
                 from: state.load(),
@@ -410,16 +420,28 @@ impl<S: Stage + 'static> RunningStage<S> {
         Ok(())
     }
 
-    pub fn split(self) -> (StageControlHandle<S::Input>, StageEventStream<S::Output>, Arc<AtomicLifecycleState>) {
+    pub fn split(
+        self,
+    ) -> (
+        StageControlHandle<S::Input>,
+        StageEventStream<S::Output>,
+        Arc<AtomicLifecycleState>,
+    ) {
         (
-            StageControlHandle { control_tx: self.control_tx },
-            StageEventStream { event_rx: self.event_rx },
+            StageControlHandle {
+                control_tx: self.control_tx,
+            },
+            StageEventStream {
+                event_rx: self.event_rx,
+            },
             self.state,
         )
     }
 
     pub fn control_handle(&self) -> StageControlHandle<S::Input> {
-        StageControlHandle { control_tx: self.control_tx.clone() }
+        StageControlHandle {
+            control_tx: self.control_tx.clone(),
+        }
     }
 }
 
@@ -491,29 +513,29 @@ pub async fn run_stage<S: Stage + 'static>(
     buffer_size: usize,
 ) -> Result<RunningStage<S>> {
     stage.initialize().await?;
-    
+
     let (control_tx, mut control_rx) = mpsc::channel::<StageControl<S::Input>>(buffer_size);
     let (event_tx, event_rx) = mpsc::channel::<StageEvent<S::Output>>(buffer_size);
-    
+
     let stage = Arc::new(tokio::sync::Mutex::new(stage));
     let state = Arc::new(AtomicLifecycleState::new(LifecycleState::Created));
-    
+
     let stage_clone = stage.clone();
     let _state_clone = state.clone();
     let event_tx_clone = event_tx.clone();
-    
+
     tokio::spawn(async move {
         let mut retry_count: u32 = 0;
-        
+
         loop {
             let control = match control_rx.recv().await {
                 Some(c) => c,
                 None => break,
             };
-            
+
             let mut stage_guard = stage_clone.lock().await;
             let retry_policy = stage_guard.retry_policy();
-            
+
             match control {
                 StageControl::Start => {
                     retry_count = 0;
@@ -526,58 +548,48 @@ pub async fn run_stage<S: Stage + 'static>(
                         }
                     }
                 }
-                StageControl::Stop => {
-                    match stage_guard.stop().await {
-                        Ok(()) => {
-                            let _ = event_tx_clone.send(StageEvent::Stopped).await;
-                            break;
-                        }
-                        Err(e) => {
-                            let _ = event_tx_clone.send(StageEvent::Error(e.to_string())).await;
-                        }
+                StageControl::Stop => match stage_guard.stop().await {
+                    Ok(()) => {
+                        let _ = event_tx_clone.send(StageEvent::Stopped).await;
+                        break;
                     }
-                }
-                StageControl::Pause => {
-                    match stage_guard.pause().await {
-                        Ok(()) => {
-                            let _ = event_tx_clone.send(StageEvent::Paused).await;
-                        }
-                        Err(e) => {
-                            let _ = event_tx_clone.send(StageEvent::Error(e.to_string())).await;
-                        }
+                    Err(e) => {
+                        let _ = event_tx_clone.send(StageEvent::Error(e.to_string())).await;
                     }
-                }
-                StageControl::Resume => {
-                    match stage_guard.resume().await {
-                        Ok(()) => {
-                            let _ = event_tx_clone.send(StageEvent::Resumed).await;
-                        }
-                        Err(e) => {
-                            let _ = event_tx_clone.send(StageEvent::Error(e.to_string())).await;
-                        }
+                },
+                StageControl::Pause => match stage_guard.pause().await {
+                    Ok(()) => {
+                        let _ = event_tx_clone.send(StageEvent::Paused).await;
                     }
-                }
-                StageControl::Flush => {
-                    match stage_guard.flush().await {
-                        Ok(()) => {
-                            let _ = event_tx_clone.send(StageEvent::Flushed).await;
-                        }
-                        Err(e) => {
-                            let _ = event_tx_clone.send(StageEvent::Error(e.to_string())).await;
-                        }
+                    Err(e) => {
+                        let _ = event_tx_clone.send(StageEvent::Error(e.to_string())).await;
                     }
-                }
-                StageControl::Reset => {
-                    match stage_guard.reset().await {
-                        Ok(()) => {
-                            retry_count = 0;
-                            let _ = event_tx_clone.send(StageEvent::Reset).await;
-                        }
-                        Err(e) => {
-                            let _ = event_tx_clone.send(StageEvent::Error(e.to_string())).await;
-                        }
+                },
+                StageControl::Resume => match stage_guard.resume().await {
+                    Ok(()) => {
+                        let _ = event_tx_clone.send(StageEvent::Resumed).await;
                     }
-                }
+                    Err(e) => {
+                        let _ = event_tx_clone.send(StageEvent::Error(e.to_string())).await;
+                    }
+                },
+                StageControl::Flush => match stage_guard.flush().await {
+                    Ok(()) => {
+                        let _ = event_tx_clone.send(StageEvent::Flushed).await;
+                    }
+                    Err(e) => {
+                        let _ = event_tx_clone.send(StageEvent::Error(e.to_string())).await;
+                    }
+                },
+                StageControl::Reset => match stage_guard.reset().await {
+                    Ok(()) => {
+                        retry_count = 0;
+                        let _ = event_tx_clone.send(StageEvent::Reset).await;
+                    }
+                    Err(e) => {
+                        let _ = event_tx_clone.send(StageEvent::Error(e.to_string())).await;
+                    }
+                },
                 StageControl::Input(input) => {
                     let current_state = stage_guard.state();
                     if current_state == LifecycleState::Running {
@@ -589,27 +601,32 @@ pub async fn run_stage<S: Stage + 'static>(
                             Ok(None) => {}
                             Err(e) => {
                                 let backoff = retry_policy.calculate_backoff(retry_count);
-                                
+
                                 if retry_policy.can_retry(retry_count) {
                                     retry_count += 1;
-                                    
-                                    let _ = event_tx_clone.send(StageEvent::Retrying {
-                                        attempt: retry_count,
-                                        backoff,
-                                    }).await;
-                                    
+
+                                    let _ = event_tx_clone
+                                        .send(StageEvent::Retrying {
+                                            attempt: retry_count,
+                                            backoff,
+                                        })
+                                        .await;
+
                                     drop(stage_guard);
                                     tokio::time::sleep(backoff).await;
                                     stage_guard = stage_clone.lock().await;
-                                    
+
                                     if stage_guard.state() == LifecycleState::Running {
                                         continue;
                                     }
                                 } else {
                                     stage_guard.atomic_state().store(LifecycleState::Failed);
-                                    let _ = event_tx_clone.send(StageEvent::FatalError(
-                                        format!("{} (exhausted {} retries)", e, retry_count)
-                                    )).await;
+                                    let _ = event_tx_clone
+                                        .send(StageEvent::FatalError(format!(
+                                            "{} (exhausted {} retries)",
+                                            e, retry_count
+                                        )))
+                                        .await;
                                 }
                             }
                         }
@@ -618,7 +635,7 @@ pub async fn run_stage<S: Stage + 'static>(
             }
         }
     });
-    
+
     Ok(RunningStage {
         stage,
         control_tx,

@@ -1,29 +1,27 @@
-use std::sync::Arc;
 use std::ops::Deref;
+use std::sync::Arc;
 
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use windows::{
     core::Interface,
-    Win32::{
-        Graphics::{
-            Direct3D11::{
-                ID3D11Device, ID3D11Texture2D, D3D11_BOX, D3D11_RESOURCE_MISC_FLAG,
-                D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX, D3D11_TEXTURE2D_DESC,
-            },
-            Dxgi::{
-                IDXGIAdapter, IDXGIDevice2, IDXGIKeyedMutex, IDXGIOutput1, IDXGIOutputDuplication,
-                IDXGIResource, DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_WAIT_TIMEOUT,
-                DXGI_OUTDUPL_FRAME_INFO,
-            },
+    Win32::Graphics::{
+        Direct3D11::{
+            ID3D11Device, ID3D11Texture2D, D3D11_BOX, D3D11_RESOURCE_MISC_FLAG,
+            D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX, D3D11_TEXTURE2D_DESC,
+        },
+        Dxgi::{
+            IDXGIAdapter, IDXGIDevice2, IDXGIKeyedMutex, IDXGIOutput1, IDXGIOutputDuplication,
+            IDXGIResource, DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_WAIT_TIMEOUT,
+            DXGI_OUTDUPL_FRAME_INFO,
         },
     },
 };
 
-use crate::lifecycle::{Stage, StageMeta, AtomicLifecycleState, LifecycleState};
+use crate::dx;
+use crate::lifecycle::{AtomicLifecycleState, LifecycleState, Stage, StageMeta};
 use crate::texture_pool::TexturePool;
 use crate::Timestamp;
-use crate::dx;
 
 use crate::pipeline::traits::Capture;
 use crate::pipeline::types::{CaptureFrame, PixelFormat};
@@ -81,13 +79,16 @@ impl Context {
     }
 
     fn acquire_frame(&self) -> Result<Option<CaptureFrame>> {
-        unsafe { let _ = self.duplicated.ReleaseFrame(); }
+        unsafe {
+            let _ = self.duplicated.ReleaseFrame();
+        }
 
         let mut frame_info = DXGI_OUTDUPL_FRAME_INFO::default();
         let mut frame_resource: Option<IDXGIResource> = None;
 
         let result = unsafe {
-            self.duplicated.AcquireNextFrame(1000, &mut frame_info, &mut frame_resource)
+            self.duplicated
+                .AcquireNextFrame(1000, &mut frame_info, &mut frame_resource)
         };
 
         match result {
@@ -96,8 +97,7 @@ impl Context {
                     return Ok(None);
                 }
 
-                let frame_resource = frame_resource
-                    .ok_or_else(|| anyhow!("No frame resource"))?;
+                let frame_resource = frame_resource.ok_or_else(|| anyhow!("No frame resource"))?;
                 let src_texture: ID3D11Texture2D = frame_resource.cast()?;
 
                 let dst_texture = self.texture_pool.acquire();
@@ -105,7 +105,10 @@ impl Context {
 
                 Ok(Some(CaptureFrame {
                     texture: dst_texture,
-                    timestamp: Timestamp::new_diff_instant(self.start_time, std::time::Instant::now()),
+                    timestamp: Timestamp::new_diff_instant(
+                        self.start_time,
+                        std::time::Instant::now(),
+                    ),
                 }))
             }
             Err(err) => {
@@ -133,7 +136,9 @@ impl Context {
             .contains(D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX)
         {
             let keyed: IDXGIKeyedMutex = dst.cast()?;
-            unsafe { keyed.AcquireSync(0, u32::MAX)?; }
+            unsafe {
+                keyed.AcquireSync(0, u32::MAX)?;
+            }
             Some(keyed)
         } else {
             None
@@ -149,18 +154,15 @@ impl Context {
         let context = unsafe { device.GetImmediateContext() }?;
 
         let region = D3D11_BOX {
-            left: 0, top: 0, front: 0,
+            left: 0,
+            top: 0,
+            front: 0,
             right: dst_desc.Width,
             bottom: dst_desc.Height,
             back: 1,
         };
 
-        unsafe {
-            context.CopySubresourceRegion(
-                dst.deref(), 0, 0, 0, 0,
-                src, 0, Some(&region),
-            )
-        };
+        unsafe { context.CopySubresourceRegion(dst.deref(), 0, 0, 0, 0, src, 0, Some(&region)) };
 
         Ok(())
     }
@@ -230,7 +232,9 @@ impl Stage for DesktopDuplicationCapture {
     }
 
     async fn process(&mut self, _input: Self::Input) -> Result<Option<Self::Output>> {
-        let context = self.context.as_ref()
+        let context = self
+            .context
+            .as_ref()
             .ok_or_else(|| anyhow!("Desktop duplication not initialized"))?;
 
         context.acquire_frame()

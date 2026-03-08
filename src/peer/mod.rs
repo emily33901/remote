@@ -7,7 +7,7 @@ pub use event::*;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::connection::{create_peer_connection, PeerConnectionControl, PeerConnectionEvent};
+use crate::connection::{PeerConnectionControl, PeerConnectionEvent, create_peer_connection};
 use crate::error::{Error, Result};
 use crate::protocol::StreamRequest;
 use crate::types::{ConnectionId, PeerId};
@@ -45,10 +45,9 @@ pub struct Peer {
 
 impl Peer {
     pub async fn new(config: PeerConfig) -> Result<(Self, mpsc::Receiver<PeerEvent>)> {
-        let (signal_control, mut signal_event) =
-            signal::client(&config.signal_server).await.map_err(|e| {
-                Error::ConnectionFailed(format!("Failed to connect to signaling: {e}"))
-            })?;
+        let (signal_control, mut signal_event) = signal::client(&config.signal_server)
+            .await
+            .map_err(|e| Error::ConnectionFailed(format!("Failed to connect to signaling: {e}")))?;
 
         let id = async {
             loop {
@@ -139,7 +138,9 @@ impl Peer {
                             tokio::spawn(async move {
                                 if let Ok(response) = response_rx.await {
                                     let _ = control_clone
-                                        .send(PeerConnectionControl::RequestStreamResponse(response))
+                                        .send(PeerConnectionControl::RequestStreamResponse(
+                                            response,
+                                        ))
                                         .await;
                                 }
                             });
@@ -209,7 +210,10 @@ impl Peer {
 
         self.spawn_connection_event_handler(peer_id.clone(), control, events);
 
-        self.connections.lock().await.insert(peer_id.clone(), ConnectionHandle { handle });
+        self.connections
+            .lock()
+            .await
+            .insert(peer_id.clone(), ConnectionHandle { handle });
 
         self.event_tx
             .send(PeerEvent::PeerConnected { peer_id })
@@ -221,7 +225,11 @@ impl Peer {
 
     pub async fn disconnect(&mut self, peer_id: &PeerId) -> Result<()> {
         if let Some(conn) = self.connections.lock().await.remove(peer_id) {
-            let _ = conn.handle.control.send(PeerConnectionControl::Disconnect).await;
+            let _ = conn
+                .handle
+                .control
+                .send(PeerConnectionControl::Disconnect)
+                .await;
             self.event_tx
                 .send(PeerEvent::PeerDisconnected {
                     peer_id: peer_id.clone(),
@@ -266,9 +274,15 @@ impl Peer {
                     tracing::warn!("received duplicate peer id");
                 }
                 SignallingEvent::ConectionRequest(peer_id, connection_id) => {
-                    pending_connections.lock().await.insert(connection_id.clone(), peer_id.clone());
+                    pending_connections
+                        .lock()
+                        .await
+                        .insert(connection_id.clone(), peer_id.clone());
                     let _ = event_tx
-                        .send(PeerEvent::ConnectionRequested { peer_id, connection_id })
+                        .send(PeerEvent::ConnectionRequested {
+                            peer_id,
+                            connection_id,
+                        })
                         .await;
                 }
                 SignallingEvent::ConnectionAccepted(peer_id, _connection_id) => {
@@ -292,18 +306,26 @@ impl Peer {
                     let event_tx_clone = event_tx.clone();
                     let peer_id_clone = peer_id.clone();
                     tokio::spawn(async move {
-                        tracing::info!("Signalling connection event handler started for peer {}", peer_id_clone);
+                        tracing::info!(
+                            "Signalling connection event handler started for peer {}",
+                            peer_id_clone
+                        );
                         while let Some(event) = events.recv().await {
                             match event {
                                 PeerConnectionEvent::StreamRequest(request) => {
-                                    tracing::info!("StreamRequest received for peer {} (from signalling)", peer_id_clone);
+                                    tracing::info!(
+                                        "StreamRequest received for peer {} (from signalling)",
+                                        peer_id_clone
+                                    );
                                     let (response_tx, response_rx) = oneshot::channel();
 
                                     let control_clone = control.clone();
                                     tokio::spawn(async move {
                                         if let Ok(response) = response_rx.await {
                                             let _ = control_clone
-                                                .send(PeerConnectionControl::RequestStreamResponse(response))
+                                                .send(PeerConnectionControl::RequestStreamResponse(
+                                                    response,
+                                                ))
                                                 .await;
                                         }
                                     });
@@ -321,7 +343,10 @@ impl Peer {
                                     }
                                 }
                                 PeerConnectionEvent::StreamResponse(response) => {
-                                    tracing::info!("StreamResponse received for peer {} (from signalling)", peer_id_clone);
+                                    tracing::info!(
+                                        "StreamResponse received for peer {} (from signalling)",
+                                        peer_id_clone
+                                    );
                                     if event_tx_clone
                                         .send(PeerEvent::StreamResponse {
                                             peer_id: peer_id_clone.clone(),
@@ -342,10 +367,10 @@ impl Peer {
                         anyhow::Ok(())
                     });
 
-                    connections.lock().await.insert(
-                        peer_id.clone(),
-                        ConnectionHandle { handle },
-                    );
+                    connections
+                        .lock()
+                        .await
+                        .insert(peer_id.clone(), ConnectionHandle { handle });
 
                     let _ = event_tx.send(PeerEvent::PeerConnected { peer_id }).await;
                 }

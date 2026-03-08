@@ -27,9 +27,12 @@ pub async fn create_peer_connection(
     let (control_tx, mut control_rx) = mpsc::channel(CHANNEL_LIMIT);
     let (event_tx, event_rx) = mpsc::channel(CHANNEL_LIMIT);
 
-    let (logic_tx, mut logic_rx) = channels::logic_channel(peer_connection.as_ref(), controlling).await?;
-    let (audio_tx, mut audio_rx) = channels::audio_channel(peer_connection.as_ref(), controlling).await?;
-    let (video_tx, mut video_rx) = channels::video_channel(peer_connection.as_ref(), controlling).await?;
+    let (logic_tx, mut logic_rx) =
+        channels::logic_channel(peer_connection.as_ref(), controlling).await?;
+    let (audio_tx, mut audio_rx) =
+        channels::audio_channel(peer_connection.as_ref(), controlling).await?;
+    let (video_tx, mut video_rx) =
+        channels::video_channel(peer_connection.as_ref(), controlling).await?;
 
     tokio::spawn({
         let rtc_control = rtc_control.clone();
@@ -44,7 +47,9 @@ pub async fn create_peer_connection(
                         let _ = rtc_control.send(RtcPeerControl::Answer(answer)).await;
                     }
                     PeerConnectionControl::IceCandidate(candidate) => {
-                        let _ = rtc_control.send(RtcPeerControl::IceCandidate(candidate)).await;
+                        let _ = rtc_control
+                            .send(RtcPeerControl::IceCandidate(candidate))
+                            .await;
                     }
                     PeerConnectionControl::Audio(audio) => {
                         let _ = audio_tx.send(channels::AudioControl::Audio(audio)).await;
@@ -57,8 +62,13 @@ pub async fn create_peer_connection(
                         let _ = logic_tx.send(LogicMessage::StreamRequest(request)).await;
                     }
                     PeerConnectionControl::RequestStreamResponse(response) => {
-                        tracing::info!("Sending StreamRequestResponse over logic channel: {:?}", response);
-                        let _ = logic_tx.send(LogicMessage::StreamRequestResponse(response)).await;
+                        tracing::info!(
+                            "Sending StreamRequestResponse over logic channel: {:?}",
+                            response
+                        );
+                        let _ = logic_tx
+                            .send(LogicMessage::StreamRequestResponse(response))
+                            .await;
                     }
                     PeerConnectionControl::Disconnect => {
                         break;
@@ -104,11 +114,18 @@ pub async fn create_peer_connection(
                 match message {
                     LogicMessage::StreamRequest(request) => {
                         tracing::info!("Received StreamRequest from logic channel: {:?}", request);
-                        let _ = event_tx.send(PeerConnectionEvent::StreamRequest(request)).await;
+                        let _ = event_tx
+                            .send(PeerConnectionEvent::StreamRequest(request))
+                            .await;
                     }
                     LogicMessage::StreamRequestResponse(response) => {
-                        tracing::info!("Received StreamRequestResponse from logic channel: {:?}", response);
-                        let _ = event_tx.send(PeerConnectionEvent::StreamResponse(response)).await;
+                        tracing::info!(
+                            "Received StreamRequestResponse from logic channel: {:?}",
+                            response
+                        );
+                        let _ = event_tx
+                            .send(PeerConnectionEvent::StreamResponse(response))
+                            .await;
                     }
                     LogicMessage::StreamKeyframeRequest => {
                         tracing::warn!("ignoring keyframe request");

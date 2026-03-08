@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use anyhow::Result;
+use async_trait::async_trait;
 
 use crate::lifecycle::stage::{Stage, StageMeta};
 use crate::lifecycle::state::AtomicLifecycleState;
-use crate::{VideoBuffer, Statistics};
 use crate::texture_pool::Texture;
 use crate::Timestamp;
+use crate::{Statistics, VideoBuffer};
 
 pub struct DecoderConfig {
     pub width: u32,

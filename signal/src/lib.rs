@@ -174,7 +174,9 @@ async fn handle_incoming_message_inner(
                                 return;
                             };
                             let Some(_requestee) = peers.get(&peer_id) else {
-                                tracing::debug!("while accepting connection, requestee disappeared {peer_id}");
+                                tracing::debug!(
+                                    "while accepting connection, requestee disappeared {peer_id}"
+                                );
                                 return;
                             };
 
@@ -190,7 +192,9 @@ async fn handle_incoming_message_inner(
                                 .await
                                 .is_err()
                             {
-                                tracing::debug!("failed to send connection accepted to requester {our_peer_id}");
+                                tracing::debug!(
+                                    "failed to send connection accepted to requester {our_peer_id}"
+                                );
                             }
                         }
                     }
@@ -346,12 +350,13 @@ pub async fn server(address: &str) -> Result<()> {
 
             peers.lock().await.insert(peer_id.clone(), tx.clone());
 
-            if tx.send(ServerToPeerMessage {
-                job_id: 0,
-                inner: ServerToPeer::Id(peer_id.clone()),
-            })
-            .await
-            .is_err()
+            if tx
+                .send(ServerToPeerMessage {
+                    job_id: 0,
+                    inner: ServerToPeer::Id(peer_id.clone()),
+                })
+                .await
+                .is_err()
             {
                 tracing::debug!("failed to send peer id");
                 return anyhow::Ok(());
